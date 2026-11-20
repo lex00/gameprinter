@@ -491,11 +491,14 @@ impl Watch {
         }
     }
 
-    fn shown_now(&self, model: &Model) -> Shown {
+    fn shown_now(&mut self, model: &Model) -> Shown {
+        // The world the model's picture draws (its sprites a frame late on
+        // a board), so the boxes are those of the picture.
+        let lagged = self.probe.shown_world(model);
+        let w = lagged.as_ref().unwrap_or(model.world());
         let art = self.probe.art();
-        let scene = self.probe.scene(model);
+        let scene = self.probe.scene_of(model, w);
         let spec = model.spec();
-        let w = model.world();
         let [cx, cy] = scene.camera;
         let mut bodies = Vec::new();
         for (i, d) in scene.bodies.iter().enumerate() {
@@ -604,7 +607,8 @@ impl Screens<OriginalRuntime, Model> for Watch {
         original: &OriginalRuntime,
         model: &Model,
     ) -> Result<Option<(Frame, Frame)>, String> {
-        self.shown.push_back(self.shown_now(model));
+        let now = self.shown_now(model);
+        self.shown.push_back(now);
         let shots = self.probe.shots(original, model)?;
         if self.shown.len() <= self.lag {
             return Ok(shots);

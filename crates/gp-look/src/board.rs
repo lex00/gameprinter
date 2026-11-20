@@ -1247,6 +1247,50 @@ pub struct Companion {
     spec: Spec,
     present: gp_present::Present,
     art: BoardArt,
+    /// The board's one-frame sprite lag ([`SpriteLag`]), over the frames
+    /// the page hands over in turn.
+    lag: std::sync::Mutex<SpriteLag>,
+}
+
+/// The MCR board's one-frame sprite lag (issue #42): the game copies its
+/// objects into sprite RAM as a frame starts, before it moves them, so the
+/// board's picture of a frame shows the objects as they stood a frame
+/// before, while its background is the frame's own. A model's state is
+/// the game's, so its picture is drawn from a world whose bodies are the
+/// frame before's and the rest this frame's; the rules never see it.
+///
+/// Kept by whoever draws the frames in turn. Each frame is told by the
+/// world's `frame`: the next frame moves the lag on, the same frame again
+/// draws the same (a page drawing a frame both bare and in a theme), and
+/// any other (a jump, a loaded state, the first frame) draws the frame's
+/// own bodies, there being no frame before.
+#[derive(Debug, Default)]
+pub struct SpriteLag {
+    /// The last frame seen, its bodies and which of them it showed.
+    now: Option<(u64, Vec<gp_sim::world::Body>, Vec<bool>)>,
+    /// The frame before it, the same.
+    before: Option<(u64, Vec<gp_sim::world::Body>, Vec<bool>)>,
+}
+
+impl SpriteLag {
+    /// The world and shown bodies to draw `w`'s frame with: `w` with the
+    /// frame before's bodies and their `shown`, or None to draw `w` and
+    /// `shown` as they are (no frame before).
+    pub fn lagged(&mut self, w: &World, shown: &[bool]) -> Option<(World, Vec<bool>)> {
+        let seen = self.now.as_ref().map(|n| n.0);
+        if seen != Some(w.frame) {
+            self.before = if seen.is_some_and(|f| f + 1 == w.frame) {
+                self.now.take()
+            } else {
+                None
+            };
+            self.now = Some((w.frame, w.bodies.clone(), shown.to_vec()));
+        }
+        let (_, bodies, shown) = self.before.as_ref()?;
+        let mut l = w.clone();
+        l.bodies.clone_from(bodies);
+        Some((l, shown.clone()))
+    }
 }
 
 impl Companion {
@@ -1259,17 +1303,34 @@ impl Companion {
         let model = b.parse_model()?;
         let spec = gp_interp::compile::compile(&model, &b.assets)?;
         let present = gp_present::text::read(present_text)?;
-        Ok(BoardArt::load_with(&model, &spec, read)?.map(|art| Self { spec, present, art }))
+        Ok(BoardArt::load_with(&model, &spec, read)?.map(|art| Self {
+            spec,
+            present,
+            art,
+            lag: std::sync::Mutex::new(SpriteLag::default()),
+        }))
+    }
+
+    /// The world and shown bodies the frame whose canonical state is
+    /// `state` is drawn with: its sprites a frame late ([`SpriteLag`]).
+    fn lagged(&self, state: &[u8], shown: &[bool]) -> Result<(World, Vec<bool>), String> {
+        let w = World::from_canonical(&self.spec, state)?;
+        let mut lag = self
+            .lag
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        Ok(lag.lagged(&w, shown).unwrap_or_else(|| (w, shown.to_vec())))
     }
 
     /// The board's picture of the frame whose canonical state is `state`
     /// (`gp_sim::World::canonical`), the bodies `shown` by body (the game's
-    /// scene: those it draws this frame). None on a level without board
-    /// art.
+    /// scene: those it draws this frame), its sprites those of the frame
+    /// before when that was the last handed over ([`SpriteLag`]). None on
+    /// a level without board art.
     pub fn frame(&self, state: &[u8], shown: &[bool]) -> Result<Option<Picture>, String> {
-        let w = World::from_canonical(&self.spec, state)?;
+        let (w, shown) = self.lagged(state, shown)?;
         let scene = gp_present::Animator::new().scene(&self.present, &self.spec, &w);
-        Ok(self.art.draw(&w, shown, &scene.rank))
+        Ok(self.art.draw(&w, &shown, &scene.rank))
     }
 
     /// The board's art, for its names and themes.
@@ -1292,9 +1353,9 @@ impl Companion {
         state: &[u8],
         shown: &[bool],
     ) -> Result<Option<Themed>, String> {
-        let w = World::from_canonical(&self.spec, state)?;
+        let (w, shown) = self.lagged(state, shown)?;
         let scene = gp_present::Animator::new().scene(&self.present, &self.spec, &w);
-        Ok(self.art.themed(theme, &w, shown, &scene.rank))
+        Ok(self.art.themed(theme, &w, &shown, &scene.rank))
     }
 }
 
@@ -2089,6 +2150,60 @@ y = 191
         }
         let marked = c.frame(&w.canonical(), &shown).unwrap().unwrap();
         assert!(marked.pens == want.pens && marked.drawn == want.drawn);
+    }
+
+    /// The board's sprite lag (issue #42): over frames handed over in
+    /// turn, a frame's sprites are those of the frame before, drawn the
+    /// same however often the frame is asked for; a jump draws the frame's
+    /// own, and so does a frame with no frame before.
+    #[test]
+    fn the_companion_draws_each_frames_sprites_as_they_were_a_frame_before() {
+        let dir = tempfile::tempdir().unwrap();
+        lift(dir.path());
+        let model = Model::parse(MODEL).unwrap();
+        let lifted = gp_interp::Lifted::read_dir(dir.path(), &model).unwrap();
+        let spec = gp_interp::compile::compile(&model, &lifted).unwrap();
+        let bundle = gp_interp::lifted::Bundle::new(&model, lifted).to_bytes();
+        let present = crate::present::art(&model, &spec, dir.path())
+            .unwrap()
+            .present_text();
+        let read = |n: &str| std::fs::read(dir.path().join(n)).map_err(|e| e.to_string());
+        let c = Companion::open(&bundle, &present, &read).unwrap().unwrap();
+        let art = BoardArt::load(&model, &spec, dir.path()).unwrap().unwrap();
+        let mut w = World::power_on(&spec);
+        w.bodies.push(gp_sim::world::Body {
+            x: gp_sim::Fx::from_int(53),
+            y: gp_sim::Fx::from_int(191),
+            alive: true,
+            ext: [0, 0x0203, 0, 0],
+            ..Default::default()
+        });
+        let at = |w: &World, x: i64, frame: u64| {
+            let mut w = w.clone();
+            w.frame = frame;
+            w.bodies[0].x = gp_sim::Fx::from_int(x);
+            w
+        };
+        let own = |w: &World| art.draw(w, &[true], &[u32::MAX]).unwrap();
+        let (f10, f11, f40) = (at(&w, 53, 10), at(&w, 93, 11), at(&w, 133, 40));
+        // No frame before: the frame's own.
+        let got = c.frame(&f10.canonical(), &[true]).unwrap().unwrap();
+        assert_eq!(got.drawn, own(&f10).drawn);
+        // The next frame: the body where it stood a frame before, twice.
+        for _ in 0..2 {
+            let got = c.frame(&f11.canonical(), &[true]).unwrap().unwrap();
+            assert_eq!(got.drawn, own(&f10).drawn);
+            assert!(got.pens == own(&f10).pens);
+        }
+        assert_ne!(own(&f10).drawn, own(&f11).drawn);
+        // A jump: the frame's own again.
+        let got = c.frame(&f40.canonical(), &[true]).unwrap().unwrap();
+        assert_eq!(got.drawn, own(&f40).drawn);
+        // A body the game didn't show a frame before isn't drawn now.
+        let mut lag = SpriteLag::default();
+        assert!(lag.lagged(&f10, &[false]).is_none());
+        let (lw, shown) = lag.lagged(&f11, &[true]).unwrap();
+        assert_eq!((lw.bodies[0].x, shown), (f10.bodies[0].x, vec![false]));
     }
 
     /// The same made-up scene drawn twice: once with its positions the

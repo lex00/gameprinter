@@ -1555,6 +1555,8 @@ impl Shown {
 struct BoardVideo {
     art: std::sync::Arc<crate::screen::Art>,
     anim: gp_present::Animator,
+    /// The board's one-frame sprite lag over the frames drawn.
+    lag: gp_look::board::SpriteLag,
 }
 
 impl BoardVideo {
@@ -1562,6 +1564,7 @@ impl BoardVideo {
         Self {
             art,
             anim: gp_present::Animator::new(),
+            lag: gp_look::board::SpriteLag::default(),
         }
     }
 
@@ -1580,9 +1583,9 @@ impl BoardVideo {
     }
 
     /// The model's picture now, its visible part cut or filled with black
-    /// to `size`.
-    fn frame(&self, rt: &crate::theme_run::Run, size: [u32; 2]) -> Rgba {
-        let f = crate::screen::model_frame(&self.art, &self.anim, rt.model());
+    /// to `size`; its sprites a frame late, as the board's.
+    fn frame(&mut self, rt: &crate::theme_run::Run, size: [u32; 2]) -> Rgba {
+        let f = crate::screen::model_frame_lagged(&self.art, &self.anim, rt.model(), &mut self.lag);
         frame_rgba(&f, size)
     }
 }

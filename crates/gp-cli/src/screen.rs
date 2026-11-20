@@ -380,14 +380,10 @@ impl Shows for crate::tape::Original {
     }
 }
 
-/// The model's scene as a runtime draws it by default: with the console's
-/// sprite limit when the model has one (`gp_present::view::limit`), so
-/// the sprites the original drops on a crowded line are dropped here too.
-pub(crate) fn model_scene(art: &Art, anim: &Animator, m: &Model) -> gp_present::Scene {
-    world_scene(art, anim, m.spec(), m.world())
-}
-
-/// [`model_scene`] of a world and its spec, for a caller with no runtime.
+/// The scene of a world and its spec as a runtime draws it by default:
+/// with the console's sprite limit when the model has one
+/// (`gp_present::view::limit`), so the sprites the original drops on a
+/// crowded line are dropped here too.
 fn world_scene(
     art: &Art,
     anim: &Animator,
@@ -409,6 +405,19 @@ fn world_scene(
 /// board art is the board's own picture ([`board_frame`]).
 pub(crate) fn model_frame(art: &Art, anim: &Animator, m: &Model) -> Frame {
     world_frame(art, anim, m.spec(), m.world())
+}
+
+/// [`model_frame`] of a model played frame by frame: on a level with board
+/// art its sprites are a frame late, as the board's are
+/// ([`gp_look::board::SpriteLag`], kept in `lag`).
+pub(crate) fn model_frame_lagged(
+    art: &Art,
+    anim: &Animator,
+    m: &Model,
+    lag: &mut gp_look::board::SpriteLag,
+) -> Frame {
+    let w = art.lagged(m.world(), lag);
+    world_frame(art, anim, m.spec(), w.as_ref().unwrap_or(m.world()))
 }
 
 /// [`model_frame`] of a world and its spec, for a caller with no runtime
@@ -442,6 +451,18 @@ pub(crate) fn world_frame(
 }
 
 impl Art {
+    /// The world the board draws `w`'s frame from, its bodies the frame
+    /// before's ([`gp_look::board::SpriteLag`]); None to draw `w` itself
+    /// (no board art, or no frame before in `lag`).
+    pub(crate) fn lagged(
+        &self,
+        w: &gp_sim::World,
+        lag: &mut gp_look::board::SpriteLag,
+    ) -> Option<gp_sim::World> {
+        self.board_art.as_ref()?;
+        lag.lagged(w, &[]).map(|(w, _)| w)
+    }
+
     /// The boxes of the bodies' other board sprites (`board_sprite.extra`)
     /// on a frame of the world, each with its body's index, in the board
     /// picture's pixels; none off a level with board art.
@@ -552,6 +573,8 @@ pub(crate) struct Probe {
     opts: Options,
     /// The model's last pictures, newest last, for the original's lag.
     back: std::collections::VecDeque<Frame>,
+    /// The board's one-frame sprite lag over the model's frames.
+    sprite_lag: gp_look::board::SpriteLag,
     /// The original's frame from which its pictures are drawn: the frame
     /// before the first compared one. Before it the emulator runs without
     /// drawing, which is faster.
@@ -618,8 +641,10 @@ pub(crate) fn nes_options() -> Options {
 
 /// The screen measure's options for a platform. An arcade board's picture
 /// is drawn as its VBLANK starts, where its frame ends, from the RAM as it
-/// stands then, so it isn't behind the RAM: no lag. Exact colors, no
-/// pixels allowed, as for the NES.
+/// stands then, so it isn't behind the RAM: no lag. (Its sprites are a
+/// frame late, the program's own copy into sprite RAM; the model's are
+/// drawn so too, [`Probe`]'s sprite lag.) Exact colors, no pixels allowed,
+/// as for the NES.
 pub(crate) fn options_for(platform: crate::original::Platform) -> Options {
     match platform {
         crate::original::Platform::Nes => nes_options(),
@@ -635,6 +660,7 @@ impl Probe {
             anim: Animator::new(),
             opts,
             back: std::collections::VecDeque::new(),
+            sprite_lag: gp_look::board::SpriteLag::default(),
             video_from: 0,
         }
     }
@@ -644,10 +670,17 @@ impl Probe {
         &self.art
     }
 
-    /// The model's scene as its animation stands: what its next picture
-    /// draws.
-    pub(crate) fn scene(&self, model: &Model) -> gp_present::Scene {
-        model_scene(&self.art, &self.anim, model)
+    /// The world the model's next picture draws: on a level with board
+    /// art, its bodies a frame late ([`Art::lagged`]); None for the
+    /// model's own.
+    pub(crate) fn shown_world(&mut self, model: &Model) -> Option<gp_sim::World> {
+        self.art.lagged(model.world(), &mut self.sprite_lag)
+    }
+
+    /// The scene of `w` (the model's world or [`Probe::shown_world`]) as
+    /// its animation stands: what its next picture draws.
+    pub(crate) fn scene_of(&self, model: &Model, w: &gp_sim::World) -> gp_present::Scene {
+        world_scene(&self.art, &self.anim, model.spec(), w)
     }
 }
 
@@ -680,8 +713,12 @@ impl<O: Shows> Screens<O, Model> for Probe {
         let o = original.shown();
         // The model's picture `lag` compared frames ago; none at the start
         // of a run, where the original shows a frame before it.
-        self.back
-            .push_back(model_frame(&self.art, &self.anim, model));
+        self.back.push_back(model_frame_lagged(
+            &self.art,
+            &self.anim,
+            model,
+            &mut self.sprite_lag,
+        ));
         if self.back.len() <= usize::from(self.opts.lag) {
             if let Some(k) = self.keep.as_mut() {
                 k(None);
