@@ -29,9 +29,11 @@
       </label>
       <button type="button" id="record" title="R: record what you play on THE ORIGINAL as a clip for the outlined quest-log row; press again to send it to your agent">RECORD</button>
       <span id="rec-to" title="The quest-log row a recording goes to: RECORD INTO THIS ROW on another row changes it"></span>
+      <button type="button" id="follow-on" class="on" title="While your agent refines a clip, the screens show it (the original beside the model at the frames it fits) whenever you aren't playing or recording">FOLLOW THE WORK: ON</button>
     </div>
   </header>
   <main>
+    <p id="follow" class="idle" aria-live="polite"></p>
     <div id="screens" class="side">
       <figure id="fig-a"><figcaption id="cap-a">THE ORIGINAL</figcaption><canvas id="a" width="256" height="240"></canvas></figure>
       <figure id="fig-b"><figcaption id="cap-b">THE MODEL</figcaption><canvas id="b" width="256" height="240"></canvas></figure>

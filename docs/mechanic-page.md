@@ -435,6 +435,26 @@ themselves. The tool waits up to 4 s for an open page to show the ask and
 returns the report with a sentence. A page opened after an ask no page
 showed yet, within 10 minutes, shows it.
 
+The screen follows the agent's work. While `gp model refine --lockstep`
+runs on the game, it writes what it works on to
+`$GP_HOME/work/serve/GAME/screen-work.json` (`gp_mcp::screen::work`): the
+corpus clip, its start and length, the original's frames of the window it
+fits and its last line in words. `api/screen` gives it as `work`, live for
+two minutes after the last write and not once the refine ended, and
+`api/screen/work-clip?id=ID` gives the clip's play from power-on. The page
+then shows that clip on both screens, the original beside the model,
+looping the window's frames and moving with each new window; the NOW panel
+under the screens reads REFINING with the clip and frames. The person
+comes first: a recording is never cut off; a game button (R records at
+once) goes back to playing; it follows again only after 20 s with no
+press; a clip the person opened stays until they go back to playing, one
+stepped while following is held, and one the agent asked for with
+`screen_show` holds a minute. A line over the screens says which it is
+doing (FOLLOWING YOUR AGENT, YOU ARE PLAYING with the seconds left,
+RECORDING, SHOWING YOUR CHOICE, FOLLOW IS OFF), and FOLLOW THE WORK in the
+header turns it off and on (kept in the browser). The report says
+`work_clip` and `follow`.
+
 The screen is the developer's loop, the working copy as it is: a file of
 the theme shown changes (`api/screen` gives each theme's newest file
 time), and within two seconds the model's page is loaded again in it at
@@ -481,4 +501,5 @@ minute later.
 | `GET /screen.html`, `/screen.js`, `/screen.css` | [The screen](#the-screen) |
 | `GET /api/screen`, `POST /api/screen` | The agent's last ask for the screen, what the page shows and each theme's newest file time; the page's report of what it shows |
 | `GET /api/screen/clip?n=N&mechanic=M` | A clip's start and length, for the screen to play it |
+| `GET /api/screen/work-clip?id=ID` | A corpus clip's play from power-on, its start and length, for the screen to follow a refine on it |
 | `GET /api/paths/SHA` | A stored path's log, for PLAY FROM HERE |

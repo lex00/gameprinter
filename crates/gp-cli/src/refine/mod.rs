@@ -486,6 +486,50 @@ fn progress(clip: &str, p: &Value, as_json: bool) {
     eprintln!("{clip}: {line}");
 }
 
+/// What the screen page follows while a clip is refined
+/// (`gp_mcp::screen::work`): the clip, its start and length, and from a
+/// window event the original's frames it fits; a round's or a target's
+/// words as `says`.
+fn work_of(c: &ClipRun, p: &Value) -> Value {
+    let mut v = json!({
+        "clip": c.id,
+        "start": c.start,
+        "frames": (c.inputs.len() as u64).saturating_sub(c.start),
+    });
+    if let Some(w) = p.get("window") {
+        v["from"] = w["original_from"].clone();
+        v["to"] = w["original_to"].clone();
+    }
+    let says = p["target"]["says"]
+        .as_str()
+        .or_else(|| p["impact"]["says"].as_str())
+        .map(str::to_owned)
+        .or_else(|| {
+            p.get("round").map(|r| {
+                format!(
+                    "round {}: {} {} -> {}",
+                    r["round"],
+                    r["param"].as_str().unwrap_or(""),
+                    r["old"].as_str().unwrap_or(""),
+                    r["new"].as_str().unwrap_or("")
+                )
+            })
+        });
+    if let Some(s) = says {
+        v["says"] = json!(s);
+    }
+    v
+}
+
+/// Writes the work for the screen page of the game whose package folder is
+/// `game`. The page is only a viewer: a failed write is not the refine's.
+fn screen_work(paths: &Paths, game: &Path, v: &Value) {
+    let Some(name) = game.file_name().and_then(|n| n.to_str()) else {
+        return;
+    };
+    let _ = gp_mcp::screen::work(&paths.home, name, v);
+}
+
 /// `gp model refine GAME --lockstep`.
 pub(crate) fn run(a: &RefineArgs, paths: &Paths) -> Result<Outcome> {
     if !a.lockstep {
@@ -703,6 +747,10 @@ pub(crate) fn run(a: &RefineArgs, paths: &Paths) -> Result<Outcome> {
             solve: None,
         };
         let evidence = format!("clip {}", c.id);
+        let clip_work = |p: &Value| {
+            screen_work(paths, &game, &work_of(c, p));
+        };
+        clip_work(&json!({}));
         let out = lockstep::run_scoped(
             &lockstep::LockstepArgs {
                 dir: &dir,
@@ -717,13 +765,23 @@ pub(crate) fn run(a: &RefineArgs, paths: &Paths) -> Result<Outcome> {
                 from: Some(c.start),
             },
             &scope,
-            &mut |p| progress(&c.id, p, a.progress_json),
-        )?;
+            &mut |p| {
+                clip_work(p);
+                progress(&c.id, p, a.progress_json);
+            },
+        );
+        if out.is_err() {
+            screen_work(paths, &game, &json!({"clip": c.id, "ended": true}));
+        }
+        let out = out?;
         lines.push(format!("{}:", c.id));
         lines.extend(out.text.lines().map(|l| format!("  {l}")));
         let mut j = out.json;
         j["clip"] = json!(c.id);
         runs.push(j);
+    }
+    if let Some(c) = runs.last().and_then(|r| r["clip"].as_str()) {
+        screen_work(paths, &game, &json!({"clip": c, "ended": true}));
     }
     let after = standings_now()?;
     let exact_after = after.iter().filter(|s| s.exact()).count();

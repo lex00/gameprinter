@@ -87,6 +87,46 @@ pub fn shown_of(home: &Path, game: &str) -> Result<Value, String> {
     Ok(read(&dir(home, game)?.join("screen-shown.json")))
 }
 
+/// How long the work file counts as the agent working after its last
+/// write: a refine writes on every window and trial, far more often.
+pub const WORK_FRESH_MS: u64 = 120_000;
+
+/// What the agent's work is on now (`screen-work.json`): the corpus clip
+/// a refine works on, its start on the play from power-on, its length,
+/// the original's frames of the window it is fitting and its last line in
+/// words. The page follows it while the person isn't playing. Each write
+/// keeps the clip's last window when the new event has none.
+pub fn work(home: &Path, game: &str, on: &Value) -> Result<(), String> {
+    let f = dir(home, game)?.join("screen-work.json");
+    let old = read(&f);
+    let mut v = match on {
+        Value::Object(m) => Value::Object(m.clone()),
+        _ => return Err("the work is an object".into()),
+    };
+    if old["clip"] == v["clip"] {
+        for k in ["from", "to"] {
+            if v.get(k).is_none() && !old[k].is_null() {
+                v[k] = old[k].clone();
+            }
+        }
+    }
+    v["at_ms"] = json!(now_ms());
+    write(&f, &v)
+}
+
+/// The work as last written, with `live` true while it is fresh and not
+/// ended; null when nothing was written.
+pub fn work_of(home: &Path, game: &str) -> Result<Value, String> {
+    let mut v = read(&dir(home, game)?.join("screen-work.json"));
+    if v.is_object() {
+        let fresh = v["at_ms"]
+            .as_u64()
+            .is_some_and(|t| now_ms().saturating_sub(t) < WORK_FRESH_MS);
+        v["live"] = json!(fresh && v["ended"] != json!(true));
+    }
+    Ok(v)
+}
+
 /// What the page shows now, as the page reports it (the server's route
 /// for it): kept with the time it came.
 pub fn report(home: &Path, game: &str, shown: &Value) -> Result<Value, String> {
@@ -273,7 +313,13 @@ fn said_of(s: &Value) -> String {
             s["mechanic"].as_str().unwrap_or("?"),
             s["frame"].as_u64().unwrap_or(0)
         ),
-        None => "live play".to_owned(),
+        None => match s["work_clip"].as_str() {
+            Some(c) => format!(
+                "the clip your refine works on, {c}, at frame {}",
+                s["frame"].as_u64().unwrap_or(0)
+            ),
+            None => "live play".to_owned(),
+        },
     };
     let view = match s["view"].as_str() {
         Some("top") => format!(
@@ -417,5 +463,51 @@ mod tests {
             "The screen shows clip 1 of move at frame 9, the model over the original at 50%, in the theme last-call (the person's choice)."
         );
         assert!(report(h.path(), "tapper", &json!([1])).is_err());
+    }
+
+    /// The work file keeps the clip's window through events with none, is
+    /// live while fresh, and isn't once ended.
+    #[test]
+    fn the_work_keeps_its_window_and_ends() {
+        let h = home();
+        assert_eq!(work_of(h.path(), "tapper").unwrap(), Value::Null);
+        work(
+            h.path(),
+            "tapper",
+            &json!({"clip": "serve-1", "start": 100, "frames": 300, "from": 140, "to": 200}),
+        )
+        .unwrap();
+        work(
+            h.path(),
+            "tapper",
+            &json!({"clip": "serve-1", "start": 100, "frames": 300, "says": "round 1"}),
+        )
+        .unwrap();
+        let v = work_of(h.path(), "tapper").unwrap();
+        assert_eq!(
+            (v["from"].clone(), v["to"].clone()),
+            (json!(140), json!(200))
+        );
+        assert_eq!(v["live"], true);
+        // Another clip starts with no window.
+        work(
+            h.path(),
+            "tapper",
+            &json!({"clip": "pour-2", "start": 9, "frames": 50}),
+        )
+        .unwrap();
+        assert!(work_of(h.path(), "tapper").unwrap()["from"].is_null());
+        work(
+            h.path(),
+            "tapper",
+            &json!({"clip": "pour-2", "ended": true}),
+        )
+        .unwrap();
+        assert_eq!(work_of(h.path(), "tapper").unwrap()["live"], false);
+        let said = said_of(&json!({"work_clip": "pour-2", "frame": 3}));
+        assert!(
+            said.contains("your refine works on, pour-2, at frame 3"),
+            "{said}"
+        );
     }
 }

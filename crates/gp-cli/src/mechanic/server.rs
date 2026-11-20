@@ -870,6 +870,7 @@ fn handle(s: &Server, req: &Request) -> Result<Response> {
             }
         }
         ("GET" | "HEAD", "/api/screen/clip") => screen_clip(s, req),
+        ("GET" | "HEAD", "/api/screen/work-clip") => screen_work_clip(s, req),
         ("GET" | "HEAD", "/shell.js") => page("shell.js", "text/javascript; charset=utf-8"),
         // The status line: where the port stands and the next step.
         ("GET" | "HEAD", "/next.js") => page("next.js", "text/javascript; charset=utf-8"),
@@ -1632,13 +1633,41 @@ fn screen_state(s: &Server) -> Result<Response> {
     let home = &s.paths.home;
     let ask = gp_mcp::screen::ask_of(home, &s.game).map_err(anyhow::Error::msg)?;
     let shown = gp_mcp::screen::shown_of(home, &s.game).map_err(anyhow::Error::msg)?;
+    let work = gp_mcp::screen::work_of(home, &s.game).map_err(anyhow::Error::msg)?;
     let themes: serde_json::Map<String, Value> = super::live::theme_times(&s.paths, &s.game)
         .into_iter()
         .map(|(id, t)| (id, json!(t)))
         .collect();
     Ok(Response::json(
-        &json!({"ask": ask, "shown": shown, "themes": themes}),
+        &json!({"ask": ask, "shown": shown, "work": work, "themes": themes}),
     ))
+}
+
+/// `GET /api/screen/work-clip?id=ID`: a corpus clip of the game, as the
+/// screen plays it while it follows a refine: its play from power-on, the
+/// frame it starts at and its length.
+fn screen_work_clip(s: &Server, req: &Request) -> Result<Response> {
+    let Some(id) = req.param("id") else {
+        return Ok(Response::error(400, "id is the corpus clip's"));
+    };
+    let Some(rb) = &s.rebuild else {
+        return Ok(Response::error(404, "no games checkout: no corpus"));
+    };
+    let Ok(c) = crate::clip_score::corpus_clip(&rb.game, id) else {
+        return Ok(Response::error(404, "no such corpus clip"));
+    };
+    let (log, start) = match c.log() {
+        Ok(l) => l,
+        Err(e) => return Ok(Response::error(404, &format!("{e:#}"))),
+    };
+    let frames = log.frames.len().saturating_sub(start);
+    Ok(Response::json(&json!({
+        "id": id,
+        "name": c.recipe.name,
+        "start": start,
+        "frames": frames,
+        "log": log.to_text(),
+    })))
 }
 
 /// `GET /api/screen/clip?n=N&mechanic=M`: where a clip starts on its play

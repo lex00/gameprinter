@@ -476,22 +476,41 @@ async function openClip(n, mechanic, f) {
   const r = await fetch(`api/clips/${n}.log?mechanic=${encodeURIComponent(meta.mechanic)}`);
   if (!r.ok) throw new Error(`clip ${n}: ${r.status}`);
   const log = await r.text();
+  await showClipLog({ key, n, mechanic: meta.mechanic, work: null, name: `CLIP ${n} OF ${meta.mechanic.toUpperCase()}`, says: `clip ${n} of ${meta.mechanic}`, note: meta.note ?? "", start: meta.start, frames: meta.frames, log }, f);
+}
+
+/** Shows the corpus clip a refine works on (api/screen/work-clip), looping
+ * the window's frames [lo, hi] from the clip's start. */
+async function openWorkClip(id, lo, hi) {
+  const meta = await api(`api/screen/work-clip?id=${encodeURIComponent(id)}`);
+  if (mode === "clip" && clip) backToClipless();
+  await showClipLog({ key: `work/${id}`, n: null, mechanic: null, work: id, name: `THE CLIP YOUR AGENT REFINES: ${id.toUpperCase()}`, says: `corpus clip ${id}`, note: meta.name ?? "", start: meta.start, frames: meta.frames, log: meta.log }, lo);
+  if (clip?.work === id) { clip.loop = [lo, Math.max(lo, hi)]; playClip(true); }
+}
+
+/** A clip's play from power-on on both screens, from `c.start` for
+ * `c.frames`, stood at `f`. */
+async function showClipLog(c, f) {
+  const { log } = c;
   const { head, frames } = splitLog(log);
   const columns = /^columns /m.test(head);
-  const start = meta.start ?? 0;
-  const length = Math.max(1, Math.min(meta.frames ?? frames.length - start, frames.length - start));
+  const start = c.start ?? 0;
+  const length = Math.max(1, Math.min(c.frames ?? frames.length - start, frames.length - start));
   const pads = frames.slice(start, start + length).map((l) => padOf(l, columns));
   mode = "clip";
   model.on = false;
   model.say = "THE MODEL IS STARTING";
-  note(`Loading clip ${n} of ${meta.mechanic}.`, 60000);
+  const { n, mechanic } = c;
+  note(`Loading ${c.says}.`, 60000);
   player.replay(1, rom, log);
   for (let at = player.frame(1); at < start;) {
     player.runTo(1, Math.min(start, at + 600));
     if (player.frame(1) === at) break;
     at = player.frame(1);
-    line(`Loading clip ${n} of ${meta.mechanic}: ${Math.round((100 * at) / Math.max(1, start))}% of the way to its start.`);
+    line(`Loading ${c.says}: ${Math.round((100 * at) / Math.max(1, start))}% of the way to its start.`);
     await new Promise((res) => setTimeout(res, 0));
+    // The person went back to playing while it loaded.
+    if (mode !== "clip") return;
   }
   const snaps = new Map([[0, player.save(1)]]);
   const polled = [], upTo = [];
@@ -500,13 +519,14 @@ async function openClip(n, mechanic, f) {
     upTo.push(polled.length);
     if ((i + 1) % SNAP_EVERY === 0) snaps.set(i + 1, player.save(1));
   }
-  clip = { key, n, mechanic: meta.mechanic, note: meta.note ?? "", start, frames: length, log, pads, polled, upTo, snaps, f: 0, pos: length, playing: false, path: null };
+  clip = { key: c.key, n, mechanic, work: c.work, loop: null, note: c.note, start, frames: length, log, pads, polled, upTo, snaps, f: 0, pos: length, playing: false, path: null };
   $("clip-scrub").max = String(length - 1);
-  $("clip-name").textContent = `CLIP ${n} OF ${meta.mechanic.toUpperCase()}`;
+  $("clip-name").textContent = c.name;
   $("clipbar").hidden = false;
   $("record").disabled = true;
   seekClip(f ?? 0, true);
-  note(`Clip ${n} of ${meta.mechanic}${clip.note ? `: ${clip.note}` : ""}.`, 6000);
+  const says = c.says[0].toUpperCase() + c.says.slice(1);
+  note(`${says}${clip.note ? `: ${clip.note}` : ""}.`, 6000);
   await loadModel();
 }
 
@@ -547,6 +567,7 @@ function backToClipless() {
 
 /** Back to playing the game live, where it was. */
 function backToLive() {
+  lastPlay = performance.now();
   if (mode === "live") return;
   mode = "live";
   clip = null;
@@ -555,6 +576,118 @@ function backToLive() {
   model.say = "THE MODEL IS STARTING";
   void loadModel("Playing the game live. The model follows your presses.");
   report();
+}
+
+// Following the work ---------------------------------------------------
+//
+// While a refine runs (gp model refine writes screen-work.json; api/screen
+// gives it as `work`), the screens show the clip it works on, the original
+// beside the model, looping the frames of the window it fits. The person
+// comes first: a recording is never cut off, a game button while it
+// follows goes back to playing, and it follows again only after
+// QUIET_MS with no press. A clip the person opened stays until they go
+// back to playing; one the agent asked for with screen_show holds for
+// AGENT_HOLD_MS. FOLLOW THE WORK turns it off and on.
+
+const QUIET_MS = 20000;
+const AGENT_HOLD_MS = 60000;
+let lastPlay = -QUIET_MS; // the person's last game button
+let agentHeldUntil = 0;
+const follow = { on: true, work: null, opening: false };
+try { follow.on = localStorage.getItem("gp-screen-follow") !== "off"; } catch (e) { /* on */ }
+
+/** The window's frames from the clip's start: [lo, hi]. */
+function workRange(w) {
+  const last = Math.max(0, (w.frames ?? 1) - 1);
+  const at = (x, d) => (typeof x === "number" ? Math.max(0, Math.min(last, x - (w.start ?? 0))) : d);
+  const lo = at(w.from, 0);
+  return [lo, Math.max(lo, at(w.to, last))];
+}
+
+/** Why the screen isn't following the work now, or null when it may. */
+function holdBy() {
+  if (!follow.on) return "off";
+  if (recording || sending) return "recording";
+  if (mode === "live" && performance.now() - lastPlay < QUIET_MS) return "playing";
+  if (mode === "clip" && clip?.work && show.by === "person") return "looking";
+  if (mode === "clip" && clip && !clip.work) {
+    if (show.by === "person") return "your clip";
+    if (performance.now() < agentHeldUntil) return "agent's clip";
+  }
+  return null;
+}
+
+/** The work from api/screen: open its clip, or move to its new window. */
+async function followWork(w) {
+  follow.work = w && w.live ? w : null;
+  drawFollow();
+  drawNowWork();
+  const wk = follow.work;
+  if (!wk || !wk.clip || follow.opening || holdBy()) return;
+  const [lo, hi] = workRange(wk);
+  if (mode === "clip" && clip?.work === wk.clip) {
+    if (!clip.loop || clip.loop[0] !== lo || clip.loop[1] !== hi) {
+      clip.loop = [lo, hi];
+      seekClip(lo, true);
+      playClip(true);
+    }
+    return;
+  }
+  follow.opening = true;
+  try {
+    show.by = "work";
+    await openWorkClip(wk.clip, lo, hi);
+    drawClips();
+    report();
+  } catch (e) {
+    note(`Couldn't show the clip your agent refines (${wk.clip}): ${e.message ?? e}`, 8000);
+    if (mode === "clip" && !clip) backToLive();
+  } finally {
+    follow.opening = false;
+  }
+}
+
+/** The line over the screens: which of the two the screen is doing, the
+ * work or the person, and how it changes. */
+function drawFollow() {
+  const b = $("follow");
+  const wk = follow.work;
+  const held = holdBy();
+  let text, cls;
+  if (mode === "clip" && clip?.work) {
+    const [lo, hi] = clip.loop ?? [0, clip.frames - 1];
+    cls = "following";
+    text = `FOLLOWING YOUR AGENT: ${clip.work}, frames ${lo} to ${hi}${wk?.says ? `. ${wk.says}` : wk ? "" : ". The refine has ended"}.${held === "looking" ? " Held where you stepped it." : ""} A game button goes back to playing.`;
+  } else if (held === "recording") {
+    cls = "you"; text = "RECORDING: the screen stays with you until you send it.";
+  } else if (held === "playing") {
+    const s = Math.ceil((QUIET_MS - (performance.now() - lastPlay)) / 1000);
+    cls = "you"; text = wk ? `YOU ARE PLAYING. Your agent refines ${wk.clip}: the screen follows it after ${s} s with no press.` : "YOU ARE PLAYING.";
+  } else if (held === "your clip" || held === "agent's clip") {
+    cls = "you"; text = `SHOWING ${held === "your clip" ? "YOUR CHOICE" : "WHAT YOUR AGENT ASKED"}${wk ? `. Your agent refines ${wk.clip}: BACK TO PLAYING, then ${QUIET_MS / 1000} s with no press, follows it` : ""}.`;
+  } else if (held === "off") {
+    cls = "off"; text = wk ? `FOLLOW IS OFF. Your agent refines ${wk.clip}.` : "FOLLOW IS OFF.";
+  } else {
+    cls = "idle"; text = wk ? `Opening ${wk.clip}, the clip your agent refines.` : "NO REFINE RUNNING: the screen is yours. It follows your agent's next refine when you aren't playing.";
+  }
+  if (b.textContent !== text) b.textContent = text;
+  b.className = cls;
+  const t = $("follow-on");
+  t.textContent = follow.on ? "FOLLOW THE WORK: ON" : "FOLLOW THE WORK: OFF";
+  t.classList.toggle("on", follow.on);
+}
+
+function setFollow(on) {
+  follow.on = on;
+  try { localStorage.setItem("gp-screen-follow", on ? "on" : "off"); } catch (e) { /* not kept */ }
+  if (!on && mode === "clip" && clip?.work) backToLive();
+  drawFollow();
+}
+
+/** A game button while the screen follows the work: back to playing. */
+function personPressed() {
+  lastPlay = performance.now();
+  if (mode === "clip" && clip?.work) { show.by = "person"; backToLive(); drawClips(); }
 }
 
 // Recording ------------------------------------------------------------
@@ -1148,11 +1281,22 @@ async function playFrom(m) {
 function drawNowWork() {
   const box = $("now-work");
   const working = rows.filter((r) => r.status === "agent working");
-  const key = JSON.stringify([working.map((r) => [r.mechanic, r.worker, r.note]), session?.mechanic, session?.busy]);
+  const wk = follow.work;
+  const key = JSON.stringify([working.map((r) => [r.mechanic, r.worker, r.note]), session?.mechanic, session?.busy, wk && [wk.clip, wk.from, wk.to, wk.says]]);
   if (box.dataset.key === key) return;
   box.dataset.key = key;
   box.textContent = "";
+  // A refine running: the clip and the frames it fits, which the screens
+  // follow (FOLLOW THE WORK).
+  if (wk) {
+    const line = el("div", "now-item");
+    const [lo, hi] = workRange(wk);
+    line.append(el("span", "now-label", "REFINING"), el("span", "now-row", `${wk.clip}, frames ${lo} to ${hi}`));
+    if (wk.says) line.append(el("span", "now-status", wk.says));
+    box.append(line);
+  }
   if (!working.length) {
+    if (wk) return;
     box.append(el("span", "now-idle", "NOBODY IS WORKING ON AN ITEM NOW"));
     return;
   }
@@ -1360,6 +1504,7 @@ function report() {
   const v = {
     applied, by: show.by, mode, view: show.view, opacity: show.opacity, pictures: show.pictures,
     clip: clip?.n ?? null, mechanic: clip?.mechanic ?? null, frame: clip ? clip.f : null,
+    work_clip: clip?.work ?? null, follow: follow.on,
     playing: clip ? clip.playing : mode === "live", recording: !!recording, error: askError,
     model: model.on ? "showing" : "starting",
   };
@@ -1376,7 +1521,7 @@ async function applyAsk(a) {
   show.by = "agent";
   try {
     if ("clip" in a && a.clip === null) backToLive();
-    else if (typeof a.clip === "number") await openClip(a.clip, a.mechanic, a.frame ?? 0);
+    else if (typeof a.clip === "number") { agentHeldUntil = performance.now() + AGENT_HOLD_MS; await openClip(a.clip, a.mechanic, a.frame ?? 0); }
     else if (typeof a.frame === "number" && clip) seekClip(a.frame, true);
   } catch (e) {
     console.error(e);
@@ -1403,6 +1548,7 @@ async function poll() {
     themeTimes = s.themes ?? {};
     const a = s.ask;
     if (a && typeof a.seq === "number" && a.seq > applied) await applyAsk(a);
+    void followWork(s.work);
     const t = themeTimes[show.pictures];
     if (show.pictures !== "game" && t !== undefined) {
       if (themeSeen === null) themeSeen = t;
@@ -1463,13 +1609,19 @@ function frame(now) {
         if (model.on && model.free) model.queue.push(padNow());
       } else if (mode === "live") {
         const pad = padNow();
+        if (pad) lastPlay = now;
         // The model takes the frames the original read the pad on; while
         // it starts they wait in the queue.
         if (player.step(0, pad)) model.queue.push(pad);
       } else if (clip?.playing) {
-        seekClip(clip.f + 1 >= clip.frames ? 0 : clip.f + 1, true);
+        // A followed refine's window loops; any other clip loops whole.
+        const [lo, hi] = clip.loop ?? [0, clip.frames - 1];
+        seekClip(clip.f + 1 > hi || clip.f < lo ? lo : clip.f + 1, true);
       }
     }
+    // A controller's button while the screen follows the work.
+    if (mode === "clip" && clip?.work && (gamepadBits(firstPad()) || (LAYOUT.keys2.length && gamepadBits(secondPad())))) personPressed();
+    if (mode === "live" && show.view === "solo" && padNow()) lastPlay = now;
     if (mode === "live") {
       if (model.on && model.queue.length) {
         modelPost({ gp: "push", text: "gp-frames 1\n" + model.queue.map(framesLine).join("\n") + "\n" });
@@ -1502,12 +1654,25 @@ window.addEventListener("keydown", (e) => {
   if (e.ctrlKey || e.metaKey || e.altKey) return;
   if (e.code === "KeyR" && !e.repeat) {
     e.preventDefault();
+    // Following the work, R takes the screen back and records.
+    if (mode === "clip" && clip?.work) personPressed();
     if (mode !== "live") return;
     if (recording) void stopRecording(true); else startRecording();
     return;
   }
+  // Following the work, a game button other than the clip's own keys
+  // (Esc, Space, Enter, Left, Right) goes back to playing.
+  const clipKeys = ["Escape", "Space", "Enter", "ArrowLeft", "ArrowRight"];
+  if (mode === "clip" && clip?.work && !clipKeys.includes(e.code) && (LAYOUT.keys.flat().includes(e.code) || LAYOUT.keys2.flat().includes(e.code))) {
+    e.preventDefault();
+    personPressed();
+    down.add(e.code);
+    return;
+  }
   if (mode === "clip") {
-    if (e.code === "Escape") { e.preventDefault(); backToLive(); }
+    // Stepping or pausing a followed clip: the person is looking at it.
+    if (clip?.work && e.code !== "Escape") show.by = "person";
+    if (e.code === "Escape") { e.preventDefault(); show.by = "person"; backToLive(); drawClips(); }
     else if (e.code === "Space" || e.code === "Enter") { e.preventDefault(); if (!e.repeat) playClip(!clip?.playing); }
     else if (e.code === "ArrowLeft" || e.code === "ArrowRight") { e.preventDefault(); playClip(false); seekClip((clip?.f ?? 0) + (e.code === "ArrowLeft" ? -1 : 1)); }
     return;
@@ -1533,6 +1698,7 @@ function wire() {
   $("clip-scrub").addEventListener("input", (e) => { playClip(false); seekClip(Number(e.target.value), true); });
   $("clip-scrub").addEventListener("change", (e) => { e.target.blur(); show.by = "person"; report(); });
   $("clip-live").addEventListener("click", (e) => { e.currentTarget.blur(); show.by = "person"; backToLive(); drawClips(); });
+  $("follow-on").addEventListener("click", (e) => { e.currentTarget.blur(); setFollow(!follow.on); report(); });
   $("tell").addEventListener("submit", (e) => void tell(e));
   $("tell-row").addEventListener("click", (e) => { e.currentTarget.blur(); void newRow(); });
   holdWhilePressed($("queue"));
@@ -1603,6 +1769,7 @@ async function main() {
   const first = await api("api/screen").catch(() => null);
   themeTimes = first?.themes ?? {};
   themeSeen = themeTimes[show.pictures] ?? null;
+  drawFollow();
   const a = first?.ask;
   requestAnimationFrame(frame);
   if (a && typeof a.seq === "number") {
