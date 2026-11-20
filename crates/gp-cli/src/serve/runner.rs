@@ -254,7 +254,20 @@ fn run_yeses(ctx: &Arc<Ctx>) {
         };
         let gp = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("gp"));
         let games = ctx.games.clone();
-        let tools = ctx.repo.clone();
+        // The person's own gameprinter checkout: the one the build tree is
+        // a worktree of (its git's common folder's parent), on its branch.
+        let tools = Command::new("git")
+            .args(["rev-parse", "--path-format=absolute", "--git-common-dir"])
+            .current_dir(&ctx.repo)
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .and_then(|o| {
+                PathBuf::from(String::from_utf8_lossy(&o.stdout).trim())
+                    .parent()
+                    .map(Path::to_path_buf)
+            })
+            .unwrap_or_else(|| ctx.repo.clone());
         let home = home.clone();
         std::thread::spawn(move || {
             // One yes at a time: two gates at once would share the gate's
@@ -278,14 +291,14 @@ fn run_yeses(ctx: &Arc<Ctx>) {
             );
             // The tool's own commands (gp tool gate) act on gameprinter's
             // checkout, found from the current folder; the rest on the games.
-            let dir = if a["command"]
+            let tool = a["command"]
                 .as_str()
-                .is_some_and(|c| c.starts_with("tool "))
-            {
-                &tools
-            } else {
-                &games
-            };
+                .is_some_and(|c| c.starts_with("tool "));
+            let dir = if tool { &tools } else { &games };
+            if tool && !args.iter().any(|x| x == "--onto") {
+                args.push("--onto".into());
+                args.push("main".into());
+            }
             let out = Command::new(&gp)
                 .args(&args)
                 .current_dir(dir)
@@ -312,7 +325,8 @@ fn run_yeses(ctx: &Arc<Ctx>) {
                             .collect();
                     }
                     let keep = lines.len().saturating_sub(6);
-                    let lines = lines.split_off(keep);
+                    let mut lines = lines.split_off(keep);
+                    lines.push(format!("(ran in {})", dir.display()));
                     let state = if !o.status.success() || v["verdict"] == json!("FAIL") {
                         "failed"
                     } else if v["landed"].is_string() {
