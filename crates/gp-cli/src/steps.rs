@@ -157,11 +157,42 @@ pub(crate) fn row_steps(paths: &gp_evidence::Paths, games: Option<&Path>) -> Vec
                 continue;
             };
             let status = r["status"].as_str().unwrap_or("");
-            if !matches!(status, "next" | "agent working") {
+            // The person's turn is the last in the row's talk: they answered
+            // or asked, so the row is the agent's whatever its status says.
+            let talk = std::fs::read_to_string(
+                paths
+                    .home
+                    .join("mechanics")
+                    .join(g)
+                    .join(row)
+                    .join("talk.ndjson"),
+            )
+            .unwrap_or_default();
+            let last: Option<Value> = talk
+                .lines()
+                .rev()
+                .find(|l| !l.trim().is_empty())
+                .and_then(|l| serde_json::from_str(l).ok());
+            let answered =
+                last.as_ref().is_some_and(|t| t["by"] == json!("player")) && status != "done";
+            if !answered && !matches!(status, "next" | "agent working") {
                 continue;
             }
+            let turns = talk.lines().filter(|l| !l.trim().is_empty()).count();
             let cli = ROW_CLI.replace("GAME", g).replace("ROW", row);
             let note = r["note"].as_str().unwrap_or("");
+            let note = if answered {
+                format!(
+                    "The person answered in the row's talk: \"{}\". Act on it now. {note}",
+                    crate::next::cut(
+                        last.as_ref().and_then(|t| t["text"].as_str()).unwrap_or(""),
+                        300
+                    )
+                )
+            } else {
+                note.to_owned()
+            };
+            let note = note.as_str();
             let says = if note.is_empty() {
                 format!("Work on {row}.")
             } else {
@@ -184,7 +215,7 @@ pub(crate) fn row_steps(paths: &gp_evidence::Paths, games: Option<&Path>) -> Vec
             commands.push("*".into());
             // The note is in the key: a row reopened with new words is a new
             // step, which the runner starts again.
-            let key = json!({"journey": "quest log", "game": g, "row": row, "status": status, "note": note});
+            let key = json!({"journey": "quest log", "game": g, "row": row, "status": status, "note": note, "turns": turns});
             let h = blake3::hash(key.to_string().as_bytes()).to_hex();
             out.push(json!({
                 "id": format!("s{}", &h[..12]),
