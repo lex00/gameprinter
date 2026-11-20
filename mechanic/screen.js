@@ -1068,6 +1068,7 @@ const ASK_DONE_SHOWS_MS = 60 * 1000;
 const asksOpen = new Set();
 let asksDrawn = "";
 let asksShown = 0; // the yes cards in YOUR TURN now
+let asksNow = []; // those cards, as /api/asks last gave them
 async function refreshAsks() {
   let list = [];
   const now = Date.now();
@@ -1078,6 +1079,8 @@ async function refreshAsks() {
       : a.state === "open" || a.state === "yes");
   } catch (e) { /* the next look */ }
   asksShown = list.length;
+  asksNow = list;
+  drawNowWork();
   // The runner's turn: what it runs now, then the yeses in the order they
   // were said, which it runs one at a time.
   const turn = [
@@ -1277,7 +1280,11 @@ async function playFrom(m) {
 // At the top of the page: the quest-log items being worked on (status
 // "agent working"), by whom, with the open row's status line (its busy
 // text), and the loop's switches: the runner, its workers, whether
-// gp_run needs a step, and a halt.
+// gp_run needs a step, and a halt. With no worker running and no step
+// able to start, it says why in plain words: THE LOOP IS WAITING ON YOU
+// (with each card and row asking the person, a click away), THE LOOP IS
+// STOPPED: THE RUNNER IS OFF, THE LOOP IS HALTED, or THE LOOP HAS
+// NOTHING TO DO.
 
 /** "12 s ago", "4 min ago", "3 h ago", "2 days ago" from ms since the epoch. */
 function ago(ms) {
@@ -1297,6 +1304,60 @@ function workerOn(r) {
     && ((r.worker && w.worker === r.worker) || (w.step?.touches ?? []).includes(`row:${game}/${r.mechanic}`))) ?? null;
 }
 
+/** Whether the loop is still: no live worker, no yes'd card running or
+ * waiting for the runner, and no open step the runner could start. Then
+ * the words for NOW (head, why) and what waits on the person, each with
+ * a click to it: the open cards and this game's rows asking them, and
+ * the steps that are theirs. null while anything moves or before the
+ * first /api/steps. */
+function loopIdle() {
+  const v = loopNow;
+  if (!v) return null;
+  if ((v.workers ?? []).some((w) => LIVE.includes(w.state))) return null;
+  if (asksNow.some((a) => a.ran?.state === "running" || (!a.ran && a.state === "yes"))) return null;
+  const run = v.settings?.runner ?? {};
+  const open = v.open ?? [];
+  const theirs = open.filter((s) => s.who !== "person");
+  if (!v.halted && run.on && theirs.length) return null;
+  const waits = [];
+  for (const a of asksNow.filter((x) => !x.ran && x.state === "open")) {
+    const what = a.game ? `CARD: ${a.game.toUpperCase()} ${a.command ?? ""}` : `CARD: ${a.command ?? "a yes"}`;
+    waits.push({ label: what.trim(), title: `${a.says ?? ""}\nClick to open the card`, go: () => {
+      asksOpen.add(a.id);
+      asksDrawn = "";
+      void refreshAsks();
+      $("your-turn")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    } });
+  }
+  for (const r of rows.filter((x) => x.status === "asking you" && x.mechanic)) {
+    waits.push({ label: r.mechanic.toUpperCase(), title: `${r.note ?? ""}\nClick to open this item`, go: () => {
+      void pickRow(r.mechanic);
+      $("your-turn")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    } });
+  }
+  const game = session?.game ?? "";
+  for (const s of open.filter((x) => x.who === "person" && (!game || (x.touches ?? []).some((t) => t.startsWith(`row:${game}/`))))) {
+    const row = (s.touches ?? []).find((t) => t.startsWith("row:"))?.split("/").slice(1).join("/") ?? null;
+    if (row && waits.some((x) => x.label === row.toUpperCase())) continue;
+    waits.push({ label: row ? row.toUpperCase() : `STEP ${s.id}`, title: `${s.says ?? ""}${row ? "\nClick to open this item" : ""}`, go: () => {
+      if (row) void pickRow(row);
+      $("your-turn")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    } });
+  }
+  const n = theirs.length;
+  const steps = `${n} step${n === 1 ? "" : "s"}`;
+  if (v.halted) {
+    return { kind: "halted", head: "THE LOOP IS HALTED", why: `No step starts until a change to the tool answers your WRONG: ${v.halted.says ?? ""}`.trim(), waits };
+  }
+  if (!run.on && n) {
+    return { kind: "off", head: "THE LOOP IS STOPPED: THE RUNNER IS OFF", why: `${steps} wait${n === 1 ? "s" : ""} for an agent, and no worker starts while the runner is off.`, waits };
+  }
+  if (waits.length) {
+    return { kind: "you", head: "THE LOOP IS WAITING ON YOU", why: `No worker runs and no step can start until you answer${waits.length > 1 ? " one of these" : " this"}:`, waits };
+  }
+  return { kind: "nothing", head: "THE LOOP HAS NOTHING TO DO", why: "No worker runs, no step is open and nothing waits on you.", waits };
+}
+
 function drawNowWork() {
   const box = $("now-work");
   const working = rows.filter((r) => r.status === "agent working");
@@ -1312,7 +1373,9 @@ function drawNowWork() {
       : `NO AGENT IS RUNNING FOR IT${loopNow && !loopNow.settings?.runner?.on ? ": THE RUNNER IS OFF" : ""}`;
     return { r, w: !!w, there, last };
   });
-  const key = JSON.stringify([lines.map((l) => [l.r.mechanic, l.r.worker, l.r.note, l.there, l.last]), session?.mechanic, session?.busy, wk && [wk.clip, wk.from, wk.to, wk.says]]);
+  const idle = loopIdle();
+  const key = JSON.stringify([lines.map((l) => [l.r.mechanic, l.r.worker, l.r.note, l.there, l.last]), session?.mechanic, session?.busy, wk && [wk.clip, wk.from, wk.to, wk.says],
+    idle && [idle.head, idle.why, idle.waits.map((x) => x.label)]]);
   if (box.dataset.key === key) return;
   box.dataset.key = key;
   box.textContent = "";
@@ -1325,8 +1388,23 @@ function drawNowWork() {
     if (wk.says) line.append(el("span", "now-status", wk.says));
     box.append(line);
   }
+  // No worker runs and no step can start: say so, and why, so a quiet
+  // loop never looks like one that stopped by itself.
+  if (idle && !wk) {
+    const line = el("div", `now-item now-stopped now-stopped-${idle.kind}`);
+    line.append(el("span", "now-label", idle.head));
+    if (idle.why) line.append(el("span", "now-who", idle.why));
+    for (const x of idle.waits) {
+      const b = el("button", "now-row now-wait", x.label);
+      b.type = "button";
+      b.title = x.title;
+      b.addEventListener("click", (e) => { e.currentTarget.blur(); x.go(); });
+      line.append(b);
+    }
+    box.append(line);
+  }
   if (!working.length) {
-    if (wk) return;
+    if (wk || idle) return;
     box.append(el("span", "now-idle", "NOBODY IS WORKING ON AN ITEM NOW"));
     return;
   }

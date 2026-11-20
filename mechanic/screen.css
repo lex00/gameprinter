@@ -169,6 +169,14 @@ form.comment .comment-text { flex: 1; min-width: 0; font: 13px var(--mono); back
 #now .now-status { flex-basis: 100%; }
 #now .now-item.now-absent { border-style: dashed; border-color: var(--muted); }
 #now .now-absent .now-label, #now .now-absent .now-who { color: var(--rec); }
+/* The loop is still: who it waits on, or that it has nothing to do. */
+#now .now-item.now-stopped { border-style: dashed; }
+#now .now-stopped .now-label { font-size: 14px; }
+#now .now-stopped-off, #now .now-stopped-halted { border-color: var(--rec); }
+#now .now-stopped-off .now-label, #now .now-stopped-halted .now-label { color: var(--rec); }
+#now .now-stopped-nothing { border-color: var(--muted); }
+#now .now-stopped-nothing .now-label { color: var(--muted); }
+#now .now-wait { font-size: 12px; }
 #now .now-idle { color: var(--muted); font: bold 12px var(--mono); }
 #now-loop { font: bold 12px var(--mono); color: var(--muted); }
 #now-loop.halted { color: var(--rec); }
