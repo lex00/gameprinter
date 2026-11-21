@@ -71,6 +71,7 @@ mod gaps_arcade;
 mod gate;
 mod gate_append;
 mod gate_copy;
+mod gate_hold;
 mod gate_queue;
 mod harvest;
 mod hints;

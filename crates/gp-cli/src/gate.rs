@@ -1519,12 +1519,17 @@ pub(crate) fn run(a: &GateArgs, paths: &Paths) -> Result<Outcome> {
     // One gate at a time on a home: they share the worktree. A gate that
     // may share a batch takes a ticket first, so the gate holding the lock
     // can take its patch in (gate_queue).
-    let lock = fs::File::create(home.join("gate.lock"))?;
+    let lock = crate::gate_hold::open_lock(&home)?;
+    let what = if a.dry_run {
+        "model gate dry run"
+    } else {
+        "model gate"
+    };
     let mut copy = None;
     let mut ticket = None;
     // An --import's commit message, unless -m gives one.
     let mut import_msg = None;
-    let (repo, rel, onto, tree, patch_file) = if private {
+    let (repo, rel, onto, tree, patch_file, _hold) = if private {
         if a.patch.is_some() {
             bail!(
                 "{} has no git of its own: the gate takes your edits from the folder, so leave out --patch",
@@ -1532,11 +1537,19 @@ pub(crate) fn run(a: &GateArgs, paths: &Paths) -> Result<Outcome> {
             );
         }
         lock.lock()?;
+        let hold = crate::gate_hold::Hold::take(&home, what, None, a.dry_run);
         match crate::gate_copy::open(&game, &home, &gp, a.message.as_deref())? {
             crate::gate_copy::Opened::Done(outcome) => return Ok(outcome),
             crate::gate_copy::Opened::Gate { repo, tree, diff } => {
                 copy = Some(game.clone());
-                (repo, PathBuf::from("game"), "main".to_owned(), tree, diff)
+                (
+                    repo,
+                    PathBuf::from("game"),
+                    "main".to_owned(),
+                    tree,
+                    diff,
+                    hold,
+                )
             }
         }
     } else {
@@ -1589,7 +1602,8 @@ pub(crate) fn run(a: &GateArgs, paths: &Paths) -> Result<Outcome> {
         {
             return Ok(o);
         }
-        (repo, rel, onto, tree, file)
+        let hold = crate::gate_hold::Hold::take(&home, what, None, a.dry_run);
+        (repo, rel, onto, tree, file, hold)
     };
 
     let kit = home.join("kit");

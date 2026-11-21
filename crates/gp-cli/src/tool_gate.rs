@@ -371,7 +371,7 @@ fn run_killable(
             Ok(None) => {}
             Err(e) => return Err(format!("waiting for {what}: {e}")),
         }
-        if stop.load(Ordering::SeqCst) {
+        if stop.load(Ordering::SeqCst) || crate::gate_hold::stopping() {
             kill_group(pid, &mut child);
             break None;
         }
@@ -380,6 +380,9 @@ fn run_killable(
     let read = |p: &Path| String::from_utf8_lossy(&fs::read(p).unwrap_or_default()).into_owned();
     let (stdout, stderr) = (read(&out), read(&err));
     match status {
+        None if crate::gate_hold::stopping() => {
+            Err(format!("{what} stopped: {}", crate::gate_hold::why()))
+        }
         None => Err(format!("{what} stopped: another lane failed")),
         Some(st) if st.success() => Ok((stdout, stderr)),
         Some(_) => Err(tail_text(what, &format!("{stdout}\n{stderr}"))),
@@ -890,7 +893,7 @@ pub(crate) fn run(a: &ToolGateArgs, paths: &Paths) -> Result<Outcome> {
     let repo = PathBuf::from(git(&cwd, &["rev-parse", "--show-toplevel"])?);
     let onto = gate::onto_branch(a.onto.as_deref(), &repo, false)?;
     let home = gate::gate_home(a.home.as_deref())?;
-    let lock = fs::File::create(home.join("gate.lock"))?;
+    let lock = crate::gate_hold::open_lock(&home)?;
     // A gate that lands takes a ticket first, so the tool gate holding the
     // lock can take its patch into its batch (gate_queue), as model gates do.
     let ticket = if a.dry_run {
@@ -921,6 +924,18 @@ pub(crate) fn run(a: &ToolGateArgs, paths: &Paths) -> Result<Outcome> {
         return Ok(o);
     }
     let tool = home.join("tool");
+    // Who holds the lock, and the watch that gives it up when this run's
+    // caller is gone (a dry run) or it logs no step for a while (gate_hold).
+    let _hold = crate::gate_hold::Hold::take(
+        &home,
+        if a.dry_run {
+            "tool gate dry run"
+        } else {
+            "tool gate"
+        },
+        Some(&tool.join("steps.jsonl")),
+        a.dry_run,
+    );
     fs::create_dir_all(&tool)?;
     let patch_bytes = fs::read(&a.patch).with_context(|| a.patch.display().to_string())?;
     let patch_hash = blake3::hash(&patch_bytes).to_hex()[..12].to_owned();

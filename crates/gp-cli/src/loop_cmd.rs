@@ -706,6 +706,16 @@ fn checks(paths: &gp_evidence::Paths, games_dir: Option<&std::path::Path>) -> Va
         Some(Err(l)) => bad(&mut lines, &mut problems, l),
         None => {}
     }
+    // The gate's lock: who holds it, and a holder that logs no step or
+    // names no pid (gate-lock-orphan) is a problem.
+    if let Some(g) = crate::gate::gate_home(None).ok().as_deref()
+        && let Some(l) = crate::gate_hold::health_line(g, now)
+    {
+        match l {
+            Ok(l) => ok(&mut lines, l),
+            Err(l) => bad(&mut lines, &mut problems, l),
+        }
+    }
     // Each game's scoreboard, as gp serve last measured it.
     if let Some(d) = games.as_deref() {
         for g in crate::next::games_in(d) {

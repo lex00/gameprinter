@@ -85,6 +85,10 @@ Tool gates batch the same way, with each other only (their tickets' run is `tool
 
 The loop's runner starts every yes'd `model gate` and `tool gate` card at once (any other yes still runs one at a time), so cards the person said yes to together land in one gate run.
 
+### The lock
+
+The gate holding a home's `gate.lock` writes `gate.holder.json` beside it: its pid, its parent's pid, when it took the lock, what it is (`tool gate`, `tool gate dry run`, `model gate`, `model gate dry run`) and the steps file it logs to (the tool gate's `tool/steps.jsonl`; the model gate has none). While it holds the lock it watches itself. A dry run whose parent pid changed (the worker or MCP server that started it ended) stops, since no one reads its verdict; a landing run doesn't, because the runner starts landings to outlive gp serve. A tool gate that has logged no step for 30 minutes stops (`GP_GATE_IDLE_S` sets the limit in seconds; a normal run's longest gap is about 15). Stopping ends the lanes' process groups, so the gate ends with a FAIL that says why; one that hasn't ended 30 s later exits, which frees the lock. `gp loop health` prints who holds the lock, and says PROBLEM naming the pid when the holder logged no step for 30 minutes (a model gate: held over 2 hours), or when the lock is held by a gate of an older gp that wrote no holder file.
+
 ### Guards the old gate had that the game gate doesn't
 
 The old `scripts/check/guard.py` ran these on the old one-repo gate. Each is accounted for:
