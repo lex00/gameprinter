@@ -623,13 +623,19 @@ fn settle_row_by_card(
                 crate::next::cut(why.trim_end_matches('.'), 300)
             ),
         ),
+        // No card is left on the page for these, so the row doesn't wait on
+        // the person: the loop takes it up again (ask-only-about-looks).
         "no" => (
-            "asking you",
-            format!("You said NO to its card ({what}). What should change?"),
+            "next",
+            format!(
+                "You said NO to its card ({what}). The loop takes it up again; say on the row what should change."
+            ),
         ),
         _ => (
-            "asking you",
-            format!("Its card ran out unanswered ({what}). Should it land?"),
+            "next",
+            format!(
+                "Its card ran out unanswered ({what}). The loop takes it up again and raises a new card."
+            ),
         ),
     };
     // A row with a target closes on its measure, not on the landing: it
@@ -1122,8 +1128,9 @@ fn report_on_row(setup: &Setup, rec: &Value) {
 
 /// A row its worker left marked `agent working` when it ended: no agent is
 /// on it any more, so it takes its status from the worker's report:
-/// `asking you` with the report's questions when it asks the person
-/// something, else `next` with what the report says is left. A row the
+/// `next` with what the report says is left, and the report's questions
+/// with them for the next worker to decide (only a look, with its clip on
+/// the row, asks the person, and a worker sets that itself). A row the
 /// worker moved itself (done, asking you, ...) stays as it is.
 fn settle_row(home: &Path, game: &str, row: &str, report: &str) -> anyhow::Result<()> {
     if !crate::mechanic::session::name_ok(game) {
@@ -1137,10 +1144,17 @@ fn settle_row(home: &Path, game: &str, row: &str, report: &str) -> anyhow::Resul
     else {
         return Ok(());
     };
-    let (status, note) = match asks_of(report) {
-        Some(a) => ("asking you", a),
-        None => ("next", left_of(report)),
+    // Only a look asks the owner, and a look comes with the clip the worker
+    // put on the row itself (gp mechanic queue --clip): a question left in
+    // a report is the next worker's to decide (owner, ask-only-about-looks).
+    let note = match asks_of(report) {
+        Some(a) => format!(
+            "The last worker asked: {a} It isn't the person's to answer: the next worker picks, says why in the note, and goes on. {}",
+            left_of(report)
+        ),
+        None => left_of(report),
     };
+    let status = "next";
     let Some(o) = r.as_object_mut() else {
         return Ok(());
     };
@@ -1290,7 +1304,7 @@ pub(crate) fn brief(setup: &Setup, step: &Value, wt: &Path, branch: &str, before
             format!("When you ask the person to judge something they can see, give the row the clip that shows it: gp_run mechanic queue with game {game}, mechanic {row}, status \"asking you\", the question as note, clip N (or ROW/N, or a corpus clip's id), frames A-B and look THEME (the theme it is about, or game). The row and its card then have LOOK AT IT, which sets it up on their screens, the original beside the model. When they say yes to a look in the game's own pictures, lock it: gp_run mechanic approve with game {game} and mechanic {row} (the clip must be in the corpus), and the model gate then fails a change that draws it further from the original."),
             format!("Land a change with git diff > a patch file in your worktree, then gp_run model gate with game {game}, patch FILE, message \"{game}: WHAT CHANGES. Expect: WHAT THE PERSON SEES. Checked: HOW\" and dry_run first; then the same without dry_run puts a card on the person's page and the loop runs it on their YES. Don't wait for it: say in your report that the card is up, and stop. Never run a gate from your shell, and never land onto your own branch."),
             format!("A row with a target (the TARGET line of mechanic show, a measure on the scoreboard) closes itself when gp serve's scoreboard measures it there; you don't set it done, and --status done is refused before. Without one, give it one as you start: gp_run mechanic queue with game {game}, mechanic {row}, target \"LINE sprites at least N of M\" (a line of {game}/scoreboard.toml), or measure_needed \"WHAT WOULD MEASURE IT\" when no line can."),
-            format!("When an item with no target is done: {gp} mechanic queue {game} {row} --status done --note \"WHAT LANDED\". A row with a target whose change is on a card: --status \"in line\"; the YES lands it and the measure closes it. When it needs the person: --status \"asking you\" with the question in --note."),
+            format!("When an item with no target is done: {gp} mechanic queue {game} {row} --status done --note \"WHAT LANDED\". A row with a target whose change is on a card: --status \"in line\"; the YES lands it and the measure closes it. Only a look asks the person: --status \"asking you\" with a clip and frames for them to watch (above), or a card for their YES. The person has handed you every other choice (the tools, the routing, how to do the work): pick, say why in the note, and go on; a question in your report doesn't reach them."),
             format!("A problem you find that isn't this item's becomes a row of its own, with no card: gp_run mechanic propose with game {game}, mechanic NEW-ROW, what \"WHAT IS WRONG\", from \"WHERE YOU SAW IT\" and its test in the same call (goal \"RAM TEST\", do, stop), which goes in triage.toml so the triage tries it first. Don't fix it in this step."),
         ]);
     }
@@ -1766,11 +1780,26 @@ mod tests {
         )
         .unwrap();
         let a = row("a");
-        assert_eq!(a["status"], "asking you");
-        assert_eq!(
-            a["note"],
-            "Should I model the initials screen? Or leave it?"
+        assert_eq!(a["status"], "next");
+        assert!(
+            a["note"].as_str().unwrap().starts_with(
+                "The last worker asked: Should I model the initials screen? Or leave it? It isn't the person's"
+            ),
+            "{a}"
         );
+        // A report ending in the tool-log question leaves its row at next.
+        let tq = home.join("mechanics/g/queue.json");
+        let mut q = crate::mechanic::session::read_queue(&tq);
+        q.push(json!({"mechanic": "t", "status": "agent working"}));
+        crate::mechanic::session::write_queue(&tq, &q).unwrap();
+        settle_row(
+            home,
+            "g",
+            "t",
+            "Did the patch.\nShould this row move to the tool's quest log?",
+        )
+        .unwrap();
+        assert_eq!(row("t")["status"], "next");
         assert_eq!(a["asked"], "go");
         assert!(a.get("worker").is_none());
         settle_row(
@@ -1862,10 +1891,10 @@ mod tests {
         assert_eq!(row("a")["status"], "done");
         assert_eq!(row("a")["note"], "Landed on your YES: the glass froths.");
         assert!(row("a").get("clip").is_none());
-        assert_eq!(row("b")["status"], "asking you");
+        assert_eq!(row("b")["status"], "next");
         assert_eq!(
             row("b")["note"],
-            "You said NO to its card (the glass froths). What should change?"
+            "You said NO to its card (the glass froths). The loop takes it up again; say on the row what should change."
         );
         // A done row whose note no longer talks of a card stays done.
         assert_eq!(row("c")["status"], "done");

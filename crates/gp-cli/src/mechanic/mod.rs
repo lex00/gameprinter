@@ -1122,7 +1122,7 @@ pub(crate) fn run(cmd: &MechanicCmd, paths: &Paths) -> Result<Outcome> {
             };
             if *no_target && std::env::var("GP_STEP").is_ok_and(|s| !s.is_empty()) {
                 bail!(
-                    "a worker doesn't take a row's target off: the measure closes the row. Ask the person on the row (--status \"asking you\") if the target is wrong"
+                    "a worker doesn't take a row's target off: the measure closes the row. If the target is wrong, set a better one (--target) and say why in --note"
                 );
             }
             let games = crate::roms_cmd::games_dir(None);
@@ -1154,6 +1154,7 @@ pub(crate) fn run(cmd: &MechanicCmd, paths: &Paths) -> Result<Outcome> {
                     no_target: *no_target,
                     measure_needed: measure_needed.as_deref(),
                     games: games.as_deref(),
+                    under_step: std::env::var("GP_STEP").is_ok_and(|s| !s.is_empty()),
                 },
             )
         }
@@ -1362,6 +1363,25 @@ struct RowChange<'a> {
     measure_needed: Option<&'a str>,
     /// The games checkout, for the game's scoreboard.
     games: Option<&'a std::path::Path>,
+    /// Run as a loop step's (GP_STEP): a row asks the person only about a
+    /// look (worker_ask_refused).
+    under_step: bool,
+}
+
+/// Why a worker may not leave row `r` asking the person, or None: only a
+/// look asks the owner (a clip on the row for them to watch, or a card for
+/// their YES, which the page shows on its own). A question about tools,
+/// routing or how to do the work is the worker's to decide (owner,
+/// ask-only-about-looks).
+pub(crate) fn worker_ask_refused(r: &Value) -> Option<String> {
+    if r["status"] != json!("asking you") || r.get("clip").is_some() {
+        return None;
+    }
+    let note = r["note"].as_str().unwrap_or("");
+    if note.to_lowercase().contains("card") || note.contains("YES") {
+        return None;
+    }
+    Some("a worker asks the person only about a look: give the row the clip that shows it (--clip N --frames A-B --look THEME), or put the change on a card and say so in --note. A question about the tools, the routing or how to do the work is yours: pick, say why in --note, and go on (--status next, or carry on in this step)".to_owned())
 }
 
 /// A row's clip, as the screen page reads it: `{"n": N}` (with
@@ -1558,6 +1578,11 @@ fn queue(paths: &Paths, game: &str, mechanic: Option<&str>, c: &RowChange) -> Re
             .iter()
             .find(|r| r["mechanic"] == json!(m))
             .expect("just changed");
+        if c.under_step
+            && let Some(why) = worker_ask_refused(r)
+        {
+            bail!("{m}: {why}");
+        }
         if r["status"] == json!("asking you") && r.get("clip").is_none() {
             hint = Some(format!(
                 "{m} asks the person without a clip: when they are to judge something they can see, give the row the clip that shows it (--clip N --frames A-B --look THEME), and the page sets it up on the screens"
@@ -1803,6 +1828,7 @@ mod tests {
             no_target: false,
             measure_needed: None,
             games: None,
+            under_step: false,
         };
         assert!(
             queue(&p, "test-hop", Some("hop"), &plain)
@@ -1903,6 +1929,7 @@ mod tests {
             no_target: false,
             measure_needed: None,
             games: Some(games.path()),
+            under_step: false,
         };
         // A line the board lacks, and words that aren't a measure.
         for t in ["level 9 sprites at least 1", "make the mugs nicer"] {
@@ -2082,6 +2109,7 @@ mod tests {
             no_target: false,
             measure_needed: None,
             games: None,
+            under_step: false,
         };
         let asking = RowChange {
             status: Some("asking you"),
@@ -2094,6 +2122,22 @@ mod tests {
             "{}",
             o.json
         );
+        // Under a step, only a look asks the person: a clip or a card.
+        let tools_q = json!({"status": "asking you", "note": "Should this row move to the tool's quest log?"});
+        assert!(worker_ask_refused(&tools_q).is_some());
+        for ok in [
+            json!({"status": "asking you", "note": "Does the mug look right?", "clip": {"n": 1}}),
+            json!({"status": "asking you", "note": "Its card is on your page: press YES"}),
+            json!({"status": "next", "note": "Picked the tool's log?"}),
+        ] {
+            assert_eq!(worker_ask_refused(&ok), None, "{ok}");
+        }
+        let by_worker = RowChange {
+            note: Some("Should this row move to the tool's quest log?"),
+            under_step: true,
+            ..asking
+        };
+        assert!(queue(&p, "test-hop", Some("tool-q"), &by_worker).is_err());
         let cl = row_clip("1", Some("10-20"), Some("game")).unwrap();
         let with_clip = RowChange {
             clip: Some(&cl),
