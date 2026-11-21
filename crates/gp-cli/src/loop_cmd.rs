@@ -363,6 +363,33 @@ fn clean_outcome(
     )
 }
 
+/// A card that failed in the last hour, as gp loop health's problem, unless
+/// its row took it back (the runner set the row next with why, or a newer
+/// card of the row has it): then the loop takes it up again and nothing is
+/// wrong with the loop.
+fn failed_card_problem(a: &Value, now: u64) -> Option<String> {
+    if a["ran"]["state"] != json!("failed")
+        || a["row_took_it"].as_bool() == Some(true)
+        || now.saturating_sub(a["ran"]["done_ms"].as_u64().unwrap_or(0)) >= 3_600_000
+    {
+        return None;
+    }
+    let why = a["ran"]["lines"]
+        .as_array()
+        .and_then(|l| {
+            l.iter()
+                .rev()
+                .filter_map(Value::as_str)
+                .find(|l| !l.starts_with("(ran in"))
+        })
+        .unwrap_or("");
+    Some(format!(
+        "Card {} failed in the last hour: {}",
+        a["id"].as_str().unwrap_or(""),
+        crate::next::cut(why, 160)
+    ))
+}
+
 /// The loop's health (`gp loop health`): each check's line, OK or PROBLEM
 /// with how to fix it, and the count of problems. A problem the check
 /// before printed too, a minute or more ago, is filed as a tools row of the
@@ -554,28 +581,8 @@ fn checks(paths: &gp_evidence::Paths, games_dir: Option<&std::path::Path>) -> Va
                 ),
             );
         }
-        if a["ran"]["state"] == json!("failed")
-            && now.saturating_sub(a["ran"]["done_ms"].as_u64().unwrap_or(0)) < 3_600_000
-        {
-            let why = a["ran"]["lines"]
-                .as_array()
-                .and_then(|l| {
-                    l.iter()
-                        .rev()
-                        .filter_map(Value::as_str)
-                        .find(|l| !l.starts_with("(ran in"))
-                })
-                .unwrap_or("")
-                .to_owned();
-            bad(
-                &mut lines,
-                &mut problems,
-                format!(
-                    "Card {} failed in the last hour: {}",
-                    a["id"].as_str().unwrap_or(""),
-                    crate::next::cut(&why, 160)
-                ),
-            );
+        if let Some(p) = failed_card_problem(&a, now) {
+            bad(&mut lines, &mut problems, p);
         }
         if gp_mcp::asks::is_open(&a, now) {
             waiting += 1;
@@ -668,4 +675,38 @@ fn checks(paths: &gp_evidence::Paths, games_dir: Option<&std::path::Path>) -> Va
         lines.push("IDLE     No worker at work and nothing waits on the person: the quest log has no open item".into());
     }
     json!({"lines": lines, "problems": problems})
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_failed_card_its_row_took_is_no_problem() {
+        let now = 10_000_000;
+        let lines = json!([
+            "FAIL (patch): a three-way merge conflicts in x.rs",
+            "(ran in /g)"
+        ]);
+        let failed =
+            json!({"id": "c1", "ran": {"state": "failed", "done_ms": now - 1000, "lines": lines}});
+        assert_eq!(
+            failed_card_problem(&failed, now).as_deref(),
+            Some(
+                "Card c1 failed in the last hour: FAIL (patch): a three-way merge conflicts in x.rs"
+            )
+        );
+        // Its row went back to next with why: the loop has it again.
+        let mut took = failed.clone();
+        took["row_took_it"] = json!(true);
+        assert_eq!(failed_card_problem(&took, now), None);
+        // Only settled (no row to take it) is still a problem.
+        let mut settled = failed.clone();
+        settled["row_settled"] = json!(true);
+        assert!(failed_card_problem(&settled, now).is_some());
+        // Over an hour ago, or landed, isn't.
+        assert_eq!(failed_card_problem(&failed, now + 3_600_000), None);
+        let landed = json!({"id": "c2", "ran": {"state": "landed", "done_ms": now}});
+        assert_eq!(failed_card_problem(&landed, now), None);
+    }
 }

@@ -517,6 +517,15 @@ fn settle_card_rows(home: &Path) {
         };
         if let Ok(true) = moved {
             let _ = gp_mcp::asks::mark(home, id, "row_settled", json!(true));
+            // Its row has it now (or a newer card of the row does): a failed
+            // card is the loop's again, not a problem for gp loop health.
+            let f = home.join("mechanics").join(game).join("queue.json");
+            if crate::mechanic::session::read_queue(&f)
+                .iter()
+                .any(|r| r["mechanic"] == json!(row))
+            {
+                let _ = gp_mcp::asks::mark(home, id, "row_took_it", json!(true));
+            }
         }
     }
 }
@@ -1772,6 +1781,15 @@ mod tests {
         assert_eq!(row("f")["status"], "in line");
         assert_eq!(
             gp_mcp::asks::read(home, "ask-5").unwrap()["row_settled"],
+            true
+        );
+        // A failed card its row took is no longer gp loop health's problem.
+        assert_eq!(
+            gp_mcp::asks::read(home, "ask-5").unwrap()["row_took_it"],
+            true
+        );
+        assert_eq!(
+            gp_mcp::asks::read(home, "ask-3").unwrap()["row_took_it"],
             true
         );
         // The rows the cards moved carry when they changed.
