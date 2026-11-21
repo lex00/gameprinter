@@ -369,19 +369,33 @@ impl Session {
             .open(self.dir.join("talk.ndjson"))?;
         writeln!(f, "{v}")?;
         // The queue follows whose turn it is: the person's turn makes the
-        // mechanic "agent working", the agent's "asking you". Done stays done.
+        // mechanic "agent working", the agent's "asking you" only when the
+        // row has a look for them (a clip, or a card): an answer with
+        // nothing to look at leaves the status for the worker, or the
+        // runner at its end, to set (ask-only-about-looks; a row left
+        // asking with nothing to see was set right by hand). Done stays
+        // done.
         let qf = self.dir.with_file_name("queue.json");
         let mut q = read_queue(&qf);
         let me = self.mechanic();
         if let Some(r) = q.iter_mut().find(|r| r["mechanic"] == json!(me))
             && r["status"] != json!("done")
         {
-            r["status"] = json!(if v["by"] == json!("player") {
-                "agent working"
+            let st = if v["by"] == json!("player") {
+                Some("agent working")
             } else {
-                "asking you"
-            });
-            write_queue(&qf, &q)?;
+                let mut asked = r.clone();
+                asked["status"] = json!("asking you");
+                super::worker_ask_refused(&asked)
+                    .is_none()
+                    .then_some("asking you")
+            };
+            if let Some(st) = st
+                && r["status"] != json!(st)
+            {
+                r["status"] = json!(st);
+                write_queue(&qf, &q)?;
+            }
         }
         Ok(n)
     }
@@ -706,7 +720,9 @@ mod tests {
     }
 
     /// The quest log row follows whose turn it is, and a row marked done
-    /// stays done.
+    /// stays done. The agent's turn asks the person only with a look on the
+    /// row (a clip, or a card): an answer with nothing to see leaves the row
+    /// as it is.
     #[test]
     fn the_quest_log_follows_the_turns() {
         let d = tempfile::tempdir().unwrap();
@@ -723,7 +739,21 @@ mod tests {
         .unwrap();
         s.turn(json!({"by": "player", "text": "a walk"})).unwrap();
         assert_eq!(read_queue(&qf)[0]["status"], "agent working");
+        s.turn(json!({"by": "agent", "text": "Got your yes; it waits on a tools fix."}))
+            .unwrap();
+        assert_eq!(read_queue(&qf)[0]["status"], "agent working");
+        let mut q = read_queue(&qf);
+        q[0]["clip"] = json!({"n": 1});
+        write_queue(&qf, &q).unwrap();
         s.turn(json!({"by": "agent", "text": "and back?"})).unwrap();
+        assert_eq!(read_queue(&qf)[0]["status"], "asking you");
+        let mut q = read_queue(&qf);
+        q[0]["status"] = json!("agent working");
+        q[0].as_object_mut().unwrap().remove("clip");
+        q[0]["note"] = json!("Its card is on your page: press YES");
+        write_queue(&qf, &q).unwrap();
+        s.turn(json!({"by": "agent", "text": "the card is up"}))
+            .unwrap();
         assert_eq!(read_queue(&qf)[0]["status"], "asking you");
         let j = Session::create(&p, "test-hop", "jump", None, "ab").unwrap();
         j.turn(json!({"by": "player", "text": "again"})).unwrap();
