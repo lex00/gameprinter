@@ -62,6 +62,7 @@ pub(crate) mod scores;
 pub(crate) mod server;
 pub(crate) mod session;
 mod triage;
+pub(crate) mod waits;
 pub(crate) mod watch;
 pub(crate) mod watch_page;
 
@@ -458,7 +459,7 @@ pub enum MechanicCmd {
         mechanic: Option<String>,
         /// List the archive of finished rows: their notes, facts, session
         /// and landed commit, newest closed first.
-        #[arg(long, conflicts_with_all = ["status", "known", "reads", "opens", "out_of_scope", "in_scope", "repo", "clip", "no_clip", "target", "no_target", "measure_needed"])]
+        #[arg(long, conflicts_with_all = ["status", "known", "reads", "opens", "out_of_scope", "in_scope", "repo", "clip", "no_clip", "target", "no_target", "measure_needed", "waits_on", "no_wait"])]
         archived: bool,
         #[arg(long, requires = "mechanic", value_parser = ["done", "asking you", "agent working", "in line", "next"])]
         status: Option<String>,
@@ -527,6 +528,21 @@ pub enum MechanicCmd {
         /// the scoreboard lacks, a clip still to record).
         #[arg(long, value_name = "WORDS", requires = "mechanic")]
         measure_needed: Option<String>,
+        /// Park the row on another: ROW of this game, or GAME/ROW. Given
+        /// with --status "in line"; gp serve's runner moves the row to next
+        /// with the landing named once that row lands a card or is done
+        /// (or sets it done when its target is met). Another status ends
+        /// the wait.
+        #[arg(
+            long,
+            value_name = "ROW",
+            requires = "status",
+            conflicts_with = "no_wait"
+        )]
+        waits_on: Option<String>,
+        /// End the row's wait without changing its status.
+        #[arg(long, requires = "mechanic")]
+        no_wait: bool,
     },
     /// A sweep of one mechanic: a grid of clips from one spot, each played
     /// on the original and on a rebuilt model in lockstep. `jump` (the
@@ -1130,6 +1146,8 @@ pub(crate) fn run(cmd: &MechanicCmd, paths: &Paths) -> Result<Outcome> {
             target,
             no_target,
             measure_needed,
+            waits_on,
+            no_wait,
             archived,
         } => {
             if *archived {
@@ -1177,6 +1195,8 @@ pub(crate) fn run(cmd: &MechanicCmd, paths: &Paths) -> Result<Outcome> {
                     target: target.as_deref(),
                     no_target: *no_target,
                     measure_needed: measure_needed.as_deref(),
+                    waits_on: waits_on.as_deref(),
+                    no_wait: *no_wait,
                     games: games.as_deref(),
                     under_step: std::env::var("GP_STEP").is_ok_and(|s| !s.is_empty()),
                 },
@@ -1387,6 +1407,9 @@ struct RowChange<'a> {
     no_target: bool,
     /// What would measure a row with no target.
     measure_needed: Option<&'a str>,
+    /// The row it is parked on (ROW or GAME/ROW; crate::mechanic::waits).
+    waits_on: Option<&'a str>,
+    no_wait: bool,
     /// The games checkout, for the game's scoreboard.
     games: Option<&'a std::path::Path>,
     /// Run as a loop step's (GP_STEP): a row asks the person only about a
@@ -1490,6 +1513,23 @@ fn queue(paths: &Paths, game: &str, mechanic: Option<&str>, c: &RowChange) -> Re
     if let Some(t) = c.target {
         crate::scoreboard::check_target(board.as_ref(), game, t).map_err(anyhow::Error::msg)?;
     }
+    // A wait names a row there is, not the row itself, and parks it.
+    let wait = match (c.waits_on, mechanic) {
+        (Some(w), Some(m)) => {
+            if c.status != Some("in line") {
+                bail!("--waits-on parks the row: give it --status \"in line\"");
+            }
+            let (wg, wr) = waits::parse(game, w)?;
+            if wg == game && wr == m {
+                bail!("{m} can't wait on itself");
+            }
+            if !waits::exists(&paths.home, &wg, &wr) {
+                bail!("--waits-on {w}: {wg} has no row {wr} in its quest log or its archive");
+            }
+            Some(format!("{wg}/{wr}"))
+        }
+        _ => None,
+    };
     if let Some(m) = mechanic
         && (c.status.is_some()
             || !c.known.is_empty()
@@ -1502,7 +1542,8 @@ fn queue(paths: &Paths, game: &str, mechanic: Option<&str>, c: &RowChange) -> Re
             || c.in_scope
             || c.target.is_some()
             || c.no_target
-            || c.measure_needed.is_some())
+            || c.measure_needed.is_some()
+            || c.no_wait)
     {
         if !name_ok(m) {
             bail!("a mechanic name is lower-case letters, digits and dashes: {m}");
@@ -1578,6 +1619,20 @@ fn queue(paths: &Paths, game: &str, mechanic: Option<&str>, c: &RowChange) -> Re
             }
             if let Some(w) = c.measure_needed {
                 o.insert("measure_needed".into(), json!(w.trim()));
+            }
+            // A status set without a wait ends the row's wait.
+            match &wait {
+                Some(w) => {
+                    if o.get("waits_on") != Some(&json!(w)) {
+                        o.insert("waits_since".into(), json!(gp_mcp::asks::now_ms()));
+                    }
+                    o.insert("waits_on".into(), json!(w));
+                }
+                None if c.status.is_some() || c.no_wait => {
+                    o.remove("waits_on");
+                    o.remove("waits_since");
+                }
+                None => {}
             }
         }
         // A row with a target is done only when the measure gets there: a
@@ -1657,6 +1712,11 @@ fn queue(paths: &Paths, game: &str, mechanic: Option<&str>, c: &RowChange) -> Re
             }
             if let Some(cl) = r.get("clip") {
                 l.push_str(&format!("\n    to judge on: {}", clip_words(cl)));
+            }
+            let parked = r["status"] == json!("in line");
+            if let Some(w) = r["waits_on"].as_str().filter(|_| parked) {
+                let when = "the loop takes it up when that lands or is done";
+                l.push_str(&format!("\n    waits on: {w} ({when})"));
             }
             if let Some(t) = r["target_says"].as_str() {
                 l.push_str(&format!("\n    target: {t}"));
@@ -1881,6 +1941,8 @@ mod tests {
             target: None,
             no_target: false,
             measure_needed: None,
+            waits_on: None,
+            no_wait: false,
             games: None,
             under_step: false,
         };
@@ -1940,6 +2002,78 @@ mod tests {
         assert!(read_queue(&f)[0].get("asked").is_none());
     }
 
+    /// --waits-on parks a row in line on a row there is, as a field the
+    /// runner wakes it by; another status, or --no-wait, ends the wait.
+    #[test]
+    fn a_row_waits_on_another_by_its_name() {
+        let d = tempfile::tempdir().unwrap();
+        let p = paths(d.path());
+        let none: &[String] = &[];
+        let plain = RowChange {
+            status: None,
+            note: None,
+            worker: None,
+            known: none,
+            reads: none,
+            opens: none,
+            out_of_scope: None,
+            in_scope: false,
+            repo: None,
+            clip: None,
+            no_clip: false,
+            target: None,
+            no_target: false,
+            measure_needed: None,
+            waits_on: None,
+            no_wait: false,
+            games: None,
+            under_step: false,
+        };
+        let fix = RowChange {
+            status: Some("next"),
+            ..plain
+        };
+        let set = |m: &str, c: &RowChange| queue(&p, "test-hop", Some(m), c);
+        set("fix", &fix).unwrap();
+        let park = |on: &'static str| RowChange {
+            status: Some("in line"),
+            note: Some("the fix first"),
+            waits_on: Some(on),
+            ..plain
+        };
+        // A row there isn't, the row itself, and a wait that doesn't park.
+        assert!(set("pic", &park("nothing")).is_err());
+        assert!(set("fix", &park("fix")).is_err());
+        let not_parked = RowChange {
+            status: Some("next"),
+            waits_on: Some("fix"),
+            ..plain
+        };
+        assert!(set("pic", &not_parked).is_err());
+        let o = set("pic", &park("fix")).unwrap();
+        assert!(o.text.contains("waits on: test-hop/fix"), "{}", o.text);
+        let f = queue_file(&p, "test-hop").unwrap();
+        let pic = || {
+            read_queue(&f)
+                .into_iter()
+                .find(|r| r["mechanic"] == "pic")
+                .unwrap()
+        };
+        assert_eq!(pic()["waits_on"], "test-hop/fix");
+        assert!(pic()["waits_since"].is_u64());
+        let no_wait = RowChange {
+            no_wait: true,
+            ..plain
+        };
+        set("pic", &no_wait).unwrap();
+        assert!(pic().get("waits_on").is_none());
+        assert!(pic().get("waits_since").is_none());
+        assert_eq!(pic()["status"], "in line");
+        set("pic", &park("fix")).unwrap();
+        set("pic", &fix).unwrap();
+        assert!(pic().get("waits_on").is_none());
+    }
+
     /// A row's target is a measure on a scoreboard line: a target the
     /// board can't measure is refused, done is refused while the measure
     /// is short, and the board's measure closes the row once it gets there;
@@ -1982,6 +2116,8 @@ mod tests {
             target: None,
             no_target: false,
             measure_needed: None,
+            waits_on: None,
+            no_wait: false,
             games: Some(games.path()),
             under_step: false,
         };
@@ -2162,6 +2298,8 @@ mod tests {
             target: None,
             no_target: false,
             measure_needed: None,
+            waits_on: None,
+            no_wait: false,
             games: None,
             under_step: false,
         };

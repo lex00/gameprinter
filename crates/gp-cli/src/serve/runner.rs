@@ -371,6 +371,10 @@ pub(crate) fn start(ctx: Arc<Ctx>) {
             // page shows the work going on.
             if Instant::now() >= archive_at {
                 archive_at = Instant::now() + ARCHIVE_EVERY;
+                // Rows parked on another row go on once it lands (owner,
+                // waits-wake-on-landing), before that row is archived.
+                let now = gp_mcp::asks::now_ms();
+                wake_waiting(&ctx.paths.home, Some(ctx.games.as_path()), now);
                 archive_finished(&ctx.paths.home, gp_mcp::asks::now_ms());
             }
             // The person's yeses run even while gp serve moves onto a newly
@@ -739,8 +743,39 @@ fn settle_row_by_card(
     Ok(true)
 }
 
-/// How often the runner archives finished rows.
+/// How often the runner archives finished rows, and wakes the rows whose
+/// wait is over.
 const ARCHIVE_EVERY: Duration = Duration::from_secs(60);
+
+/// Moves each row parked in line on another row to next once that row's
+/// card landed, or it is done or archived (crate::mechanic::waits), with
+/// the landing named; a row with its own card still open or unsettled
+/// waits for it.
+fn wake_waiting(home: &Path, games: Option<&Path>, now: u64) -> Vec<(String, String)> {
+    let recent = gp_mcp::asks::OPEN_FOR_MS + CARD_SETTLES_FOR_MS;
+    let mut cards = crate::mechanic::waits::Cards::default();
+    let mut newest: BTreeMap<(String, String), u64> = BTreeMap::new();
+    for a in gp_mcp::asks::all(home)
+        .into_iter()
+        .filter(|a| now.saturating_sub(a["made_ms"].as_u64().unwrap_or(0)) < recent)
+    {
+        let Some(row) = ask_row(home, &a) else {
+            continue;
+        };
+        if a["row_settled"] != json!(true) {
+            cards.busy.insert(row.clone());
+        }
+        let made = a["made_ms"].as_u64().unwrap_or(0);
+        if a["ran"]["state"] == json!("landed") && newest.get(&row).is_none_or(|m| made > *m) {
+            newest.insert(row.clone(), made);
+            let commit = crate::mechanic::archive::commit_of(&a["ran"]["lines"]);
+            let done = &a["ran"]["done_ms"];
+            let l = json!({"what": card_what(&a), "commit": commit, "done_ms": done});
+            cards.landed.insert(row, l);
+        }
+    }
+    crate::mechanic::waits::wake(home, games, &cards)
+}
 
 /// Moves each game's rows done for an hour, with no live worker and no
 /// card still open or unsettled, from its quest log to its archive
@@ -1825,7 +1860,7 @@ pub(crate) fn brief(setup: &Setup, step: &Value, wt: &Path, branch: &str, before
             format!("When you ask the person to judge something they can see, give the row the clip that shows it: gp_run mechanic queue with game {game}, mechanic {row}, status \"asking you\", the question as note, clip N (or ROW/N, or a corpus clip's id), frames A-B and look THEME (the theme it is about, or game). The row and its card then have LOOK AT IT, which sets it up on their screens, the original beside the model, and a look in the game's own pictures (look game) has CONFIRM: their CONFIRM, or a plain yes typed, is locked by gp serve's runner with no worker. When they say yes to such a look in other words, lock it: gp_run mechanic approve with game {game} and mechanic {row} (the clip must be in the corpus), and the model gate then fails a change that draws it further from the original."),
             format!("Land a change with git diff > a patch file in your worktree, then gp_run model gate with game {game}, patch FILE, message \"{game}: WHAT CHANGES. Expect: WHAT THE PERSON SEES. Checked: HOW\", clip N (or ROW/N, or a corpus clip's id), frames A-B and look THEME (or game) for the clip that shows the change, and dry_run first; then the same without dry_run puts a card with LOOK AT IT on the person's page and the loop runs it on their YES. Don't wait for it: say in your report that the card is up, and stop. Never run a gate from your shell, and never land onto your own branch."),
             format!("A row with a target (the TARGET line of mechanic show, a measure on the scoreboard) closes itself when gp serve's scoreboard measures it there; you don't set it done, and --status done is refused before. Without one, give it one as you start: gp_run mechanic queue with game {game}, mechanic {row}, target \"LINE sprites at least N of M\" (a line of {game}/scoreboard.toml), or measure_needed \"WHAT WOULD MEASURE IT\" when no line can."),
-            format!("When an item with no target is done: {gp} mechanic queue {game} {row} --status done --note \"WHAT LANDED\". A row with a target whose change is on a card: --status \"in line\"; the YES lands it and the measure closes it. Only a look asks the person: --status \"asking you\" with a clip and frames for them to watch (above), or a card for their YES. The person has handed you every other choice (the tools, the routing, how to do the work): pick, say why in the note, and go on; a question in your report doesn't reach them."),
+            format!("When an item with no target is done: {gp} mechanic queue {game} {row} --status done --note \"WHAT LANDED\". A row with a target whose change is on a card: --status \"in line\"; the YES lands it and the measure closes it. A row that can't go on until another row lands: --status \"in line\" --waits-on ROW (GAME/ROW for another game's), never a note alone; the runner moves it to next with the landing named once that row lands or is done. Only a look asks the person: --status \"asking you\" with a clip and frames for them to watch (above), or a card for their YES. The person has handed you every other choice (the tools, the routing, how to do the work): pick, say why in the note, and go on; a question in your report doesn't reach them."),
             format!("A problem you find that isn't this item's becomes a row of its own, with no card: gp_run mechanic propose with game {game}, mechanic NEW-ROW, what \"WHAT IS WRONG\", from \"WHERE YOU SAW IT\" and its test in the same call (goal \"RAM TEST\", do, stop), which goes in triage.toml so the triage tries it first. Don't fix it in this step."),
         ]);
     }
@@ -2871,6 +2906,71 @@ mod tests {
         assert_eq!(a[0]["landed"]["card"], "ask-1");
         assert_eq!(a[0]["landed"]["what"], "the glass froths");
         assert_eq!(a[0]["closed_ms"], json!(old));
+    }
+
+    /// The owner's case (waits-wake-on-landing): a row parked in line on a
+    /// row whose card then landed goes to next with the landing's commit
+    /// and what landed, while a row with its own card up stays parked.
+    #[test]
+    fn a_row_waiting_on_a_landed_row_goes_to_next() {
+        let t = tempfile::tempdir().unwrap();
+        let home = t.path();
+        let now = gp_mcp::asks::now_ms();
+        let f = home.join("mechanics/g/queue.json");
+        fs::create_dir_all(f.parent().unwrap()).unwrap();
+        fs::write(
+            &f,
+            json!([
+                {"mechanic": "plugin", "status": "in line", "target": "x own at least 1"},
+                {"mechanic": "site", "status": "in line", "note": "the plugin first", "waits_on": "g/plugin", "waits_since": now - 60_000},
+                {"mechanic": "mine", "status": "in line", "note": "Waits for plugin to land; card up"},
+            ])
+            .to_string(),
+        )
+        .unwrap();
+        let asks = gp_mcp::asks::dir(home);
+        fs::create_dir_all(&asks).unwrap();
+        fs::create_dir_all(loop_state::workers_dir(home)).unwrap();
+        let card = |n: u64, row: &str, a: Value| {
+            let id = format!("s{n:012x}");
+            let w =
+                json!({"step": {"id": id, "touches": [format!("row:g/{row}")]}, "state": "done"});
+            fs::write(file(home, &id), w.to_string()).unwrap();
+            let mut base = json!({"id": format!("ask-{n}"), "made_ms": now - 30_000, "step": id, "game": "g",
+                "command": "tool gate", "argv": ["--message", "the plugin. Expect: it installs"]});
+            for (k, v) in a.as_object().unwrap() {
+                base[k] = v.clone();
+            }
+            fs::write(asks.join(format!("ask-{n}.json")), base.to_string()).unwrap();
+        };
+        card(
+            1,
+            "plugin",
+            json!({"state": "used", "row_settled": true,
+                "ran": {"state": "landed", "done_ms": now - 10_000, "lines": ["PASS: landed f28c0973 on main"]}}),
+        );
+        card(2, "mine", json!({"state": "open"}));
+        assert_eq!(
+            wake_waiting(home, None, now),
+            vec![("g".to_owned(), "site".to_owned())]
+        );
+        let q = crate::mechanic::session::read_queue(&f);
+        let row = |n: &str| {
+            q.iter()
+                .find(|r| r["mechanic"] == json!(n))
+                .unwrap()
+                .clone()
+        };
+        let site = row("site");
+        assert_eq!(site["status"], "next");
+        let note = site["note"].as_str().unwrap();
+        assert!(
+            note.contains("plugin landed (f28c0973): the plugin"),
+            "{note}"
+        );
+        assert!(site.get("waits_on").is_none());
+        assert_eq!(row("mine")["status"], "in line");
+        assert_eq!(row("plugin")["status"], "in line");
     }
 
     /// A clip the gate held out waits on its session's row with why: a
