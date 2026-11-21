@@ -331,6 +331,14 @@ pub(crate) fn start(ctx: Arc<Ctx>) {
             for p in crate::builds::ended_loop_builds(&home, &running_ids()) {
                 let _ = fs::remove_dir_all(p);
             }
+            // The score caches still in use, the gate's among them, lose
+            // their files older than a day every hour; else they grow
+            // with no limit (loop-clean-gate-score-cache: 47 GB).
+            let gate = crate::gate::gate_home(None).ok();
+            loop {
+                crate::builds::clear_old_caches(&home, gate.as_deref());
+                std::thread::sleep(Duration::from_secs(60 * 60));
+            }
         });
     }
     std::thread::spawn(move || {

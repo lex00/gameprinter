@@ -38,7 +38,9 @@ pub enum LoopCmd {
     /// Clear the build folders the loop left: each ended worker's cargo
     /// target ($GP_HOME/work/target/loop-STEP, or under $GP_TARGET_DIR)
     /// and the folders of $GP_HOME/work/regenerate no run touched in six
-    /// hours, and print what each freed. A live worker's build is kept.
+    /// hours, and of those still in use (the gate's home's too) the score
+    /// cache files older than a day, and print what each freed. A live
+    /// worker's build is kept.
     /// gp serve's runner removes a worker's build itself when its step
     /// ends; this is for what is left (gp loop health says PROBLEM under
     /// 20 GB free).
@@ -269,10 +271,19 @@ pub(crate) fn run(cmd: &LoopCmd, paths: &gp_evidence::Paths) -> Result<Outcome> 
                 None
             };
             let g = gate_home.as_deref();
+            // The gate's score cache is cleared with or without --gate: a
+            // gate runs on without it, only scoring its clips again.
+            let cache = match &gate_home {
+                Some(h) => Some(h.clone()),
+                None => crate::gate::gate_home(None).ok(),
+            };
             let (done, skipped) = if *dry_run {
-                (crate::builds::clearable(home, &none, g), Vec::new())
+                (
+                    crate::builds::clearable(home, &none, g, cache.as_deref()),
+                    Vec::new(),
+                )
             } else {
-                crate::builds::clean(home, &none, g)
+                crate::builds::clean(home, &none, g, cache.as_deref())
             };
             Ok(clean_outcome(home, *dry_run, &done, &skipped))
         }
@@ -361,11 +372,11 @@ pub(crate) fn run(cmd: &LoopCmd, paths: &gp_evidence::Paths) -> Result<Outcome> 
 fn clean_outcome(
     home: &std::path::Path,
     dry_run: bool,
-    done: &[(std::path::PathBuf, u64)],
+    done: &[crate::builds::Clear],
     skipped: &[String],
 ) -> Outcome {
     let gb = crate::builds::gb;
-    let total: u64 = done.iter().map(|(_, n)| n).sum();
+    let total: u64 = done.iter().map(|c| c.bytes).sum();
     let head = if done.is_empty() {
         "Nothing to clear.".to_owned()
     } else if dry_run {
@@ -374,8 +385,17 @@ fn clean_outcome(
         format!("Cleared {} in {} folders:", gb(total), done.len())
     };
     let mut lines = vec![head];
-    for (p, n) in done {
-        lines.push(format!("  {} {}", gb(*n), p.display()));
+    for c in done {
+        lines.push(format!(
+            "  {} {}{}",
+            gb(c.bytes),
+            c.path.display(),
+            if c.old_files {
+                " (its files older than a day)"
+            } else {
+                ""
+            }
+        ));
     }
     for s in skipped {
         lines.push(format!("  skipped {s}"));
@@ -385,7 +405,7 @@ fn clean_outcome(
     }
     let cleared: Vec<Value> = done
         .iter()
-        .map(|(p, n)| json!({"path": p, "bytes": n}))
+        .map(|c| json!({"path": c.path, "bytes": c.bytes, "old_files": c.old_files}))
         .collect();
     Outcome::ok(
         json!({"dry_run": dry_run, "cleared": cleared, "bytes": total, "skipped": skipped}),
