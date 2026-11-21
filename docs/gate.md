@@ -81,6 +81,10 @@ A batch commits each patch in the gate's worktree before the package scan and th
 
 When the branch's tip moves while a gate runs, the gate runs again on the new tip, up to five times in all, merging the patches onto it as above.
 
+Tool gates batch the same way, with each other only (their tickets' run is `tool gate`). The gate holding the lock waits 3 s if it found the lock free, so the gates started with it can take their tickets, then takes up to seven waiting tool patches on the same repo and branch. Each is applied and committed on the tip in turn; one that doesn't apply beside the others, or that the hook refuses, is left out and gates itself after. The rest are built and checked once (`just check` and the tests) and land together, each its own commit, with one publish. A batch that fails gives every other patch back to its own gate and gates this gate's patch alone, so a bad patch costs the others one more run, never their landing.
+
+The loop's runner starts every yes'd `model gate` and `tool gate` card at once (any other yes still runs one at a time), so cards the person said yes to together land in one gate run.
+
 ### Guards the old gate had that the game gate doesn't
 
 The old `scripts/check/guard.py` ran these on the old one-repo gate. Each is accounted for:
@@ -97,7 +101,7 @@ The old `scripts/check/guard.py` ran these on the old one-repo gate. Each is acc
 | originals | The tool gate's `just check` (`just originals`: Badge In, Signal Failure, Swing State) |
 | budgets | Not in a gate: gp-metrics and `gp metrics check` are here, but no gate runs them |
 
-The check levels (`just check-change`, `just check-batch`, scripts/check/level.py) and the flaky quarantine (flaky.txt, nightly.txt) are not brought back: they chose which tests a gate try ran to save time in the old gate's batches of tool patches. The tool gate runs all of `just check` and the whole test suite for every patch, and a quarantine list would let a patch skip tests, which the tool gate exists to stop.
+The check levels (`just check-change`, `just check-batch`, scripts/check/level.py) and the flaky quarantine (flaky.txt, nightly.txt) are not brought back: they chose which tests a gate try ran to save time in the old gate's batches of tool patches. The tool gate runs all of `just check` and the whole test suite for every patch it lands (alone or in its batch), and a quarantine list would let a patch skip tests, which the tool gate exists to stop.
 
 Run it from a checkout of `games` (your worktree is fine). A patch may change only that game's folder.
 

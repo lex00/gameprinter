@@ -1,4 +1,5 @@
-//! The game gate's queue (docs/gate.md, "Batches"). Gates on one home run
+//! The gates' queue (docs/gate.md, "Batches"): the game gate's, and the
+//! tool gate's, whose tickets batch only with each other. Gates on one home run
 //! one at a time, holding `gate.lock`. A gate that waits leaves a ticket in
 //! the home's `queue/`: what it asks and a copy of its patch. The gate whose
 //! turn comes takes the waiting tickets that agree with it on the repo, the
@@ -176,6 +177,12 @@ impl Ticket {
         out
     }
 
+    /// Gives back the claimed ticket `name` with no outcome: its own gate
+    /// runs its patch itself when its turn comes.
+    pub(crate) fn release(&self, name: &str) {
+        let _ = fs::remove_file(side(&self.queue, name, "claim"));
+    }
+
     /// Writes `o` as the outcome of the claimed ticket `name`.
     pub(crate) fn answer(&self, name: &str, o: &Outcome) {
         let v = json!({"json": o.json, "text": o.text, "exit": o.exit});
@@ -265,5 +272,13 @@ mod tests {
         drop(same);
         assert!(!side(&q, &name, "json").exists() && !side(&q, &name, "patch").exists());
         drop((game, branch, run));
+
+        // A claim given back can be taken again.
+        let again = Ticket::enter(home, req(home, "mosshop", "main", "gate"), &patch).unwrap();
+        let taken = me.claim();
+        assert_eq!(taken.len(), 1);
+        me.release(&taken[0].0);
+        assert_eq!(me.claim().len(), 1);
+        drop(again);
     }
 }

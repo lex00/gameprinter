@@ -719,12 +719,77 @@ fn test_runs(slow: &[String]) -> Vec<(String, Vec<String>)> {
 /// The tree's patch, or why it was refused: the commit a passing try made.
 /// After the build, `just check` and the tests run at once as lanes
 /// ([`run_lanes`]); the first failure stops the other.
+/// One patch of a tool gate's batch: its own, or a waiting tool gate's it
+/// took in (`gate_queue`, with the ticket's name).
+struct Item {
+    patch: Patch,
+    message: String,
+    shown: String,
+    ticket: Option<String>,
+}
+
+/// Applies `item` on the tree and commits it: the patch's own checks
+/// (it applies, changes something, not the hook) and the hook.
+fn apply_one(
+    c: &Cx,
+    item: &Item,
+    lines: &mut Vec<String>,
+    merged_cli: &mut bool,
+) -> Result<std::result::Result<(), Failed>> {
+    let tree = &c.tree;
+    let fail = |why: String, phase| Ok(Err(Failed { why, phase }));
+    let merged = match c.steps.time(
+        "apply",
+        || gate::apply_how(tree, &item.patch.diff, true),
+        Result::is_ok,
+    ) {
+        Ok(how) => how,
+        Err(why) => return fail(why, "patch"),
+    };
+    if let Some(how) = &merged {
+        *merged_cli |= how.contains("CLI.md written again");
+        lines.push(how.clone());
+    }
+    let files = git(tree, &["diff", "--cached", "--name-only", "HEAD"])?;
+    if files.is_empty() {
+        return fail("the patch changes nothing".into(), "patch");
+    }
+    if let Some(f) = files
+        .lines()
+        .find(|f| f.starts_with(".githooks/") || f.starts_with("scripts/romguard/"))
+    {
+        return fail(
+            format!("the patch changes {f}, the ROM-blocking hook, which only the person edits"),
+            "patch",
+        );
+    }
+    let gate_gp = std::env::current_exe()?;
+    if let Err(why) = c
+        .steps
+        .time("hook", || gate::hook(tree, &gate_gp), Result::is_ok)
+    {
+        return fail(format!("the ROM-blocking hook refuses it: {why}"), "hook");
+    }
+    if let Err(e) = c.steps.time(
+        "commit",
+        || gate::commit(tree, &item.message, &item.patch, &gate_gp),
+        Result::is_ok,
+    ) {
+        return fail(format!("{e:#}"), "commit");
+    }
+    Ok(Ok(()))
+}
+
+/// One try of a batch on `tip`: each patch is applied and committed in
+/// turn, then the batch is built and checked once. In a batch of more than
+/// one, a patch that doesn't apply (or the hook refuses) is left out into
+/// `dropped` and the rest go on; alone, it fails the try.
 fn trial(
     c: &Cx,
-    a: &ToolGateArgs,
-    patch: &Patch,
+    items: &[Item],
     tip: &str,
     lines: &mut Vec<String>,
+    dropped: &mut Vec<(usize, Failed)>,
 ) -> Result<std::result::Result<(String, bool), Failed>> {
     macro_rules! refuse {
         ($why:expr, $phase:expr) => {
@@ -735,41 +800,25 @@ fn trial(
         };
     }
     let tree = &c.tree;
-    let merged = match c.steps.time(
-        "apply",
-        || gate::apply_how(tree, &patch.diff, true),
-        Result::is_ok,
-    ) {
-        Ok(how) => how,
-        Err(why) => refuse!(why, "patch"),
-    };
-    if let Some(how) = &merged {
-        lines.push(how.clone());
+    let mut merged_cli = false;
+    for (k, item) in items.iter().enumerate() {
+        if let Err(f) = apply_one(c, item, lines, &mut merged_cli)? {
+            if items.len() == 1 {
+                return Ok(Err(f));
+            }
+            lines.push(format!(
+                "{} is left out of the batch: {}",
+                item.shown, f.why
+            ));
+            gate::clean(tree);
+            dropped.push((k, f));
+        }
     }
-    let files = git(tree, &["diff", "--cached", "--name-only", tip])?;
-    if files.is_empty() {
-        refuse!("the patch changes nothing".into(), "patch");
+    if dropped.len() == items.len() {
+        refuse!("no patch of the batch applies".into(), "patch");
     }
-    if let Some(f) = files
-        .lines()
-        .find(|f| f.starts_with(".githooks/") || f.starts_with("scripts/romguard/"))
-    {
-        refuse!(
-            format!("the patch changes {f}, the ROM-blocking hook, which only the person edits"),
-            "patch"
-        );
-    }
+    let files = git(tree, &["diff", "--name-only", tip, "HEAD"])?;
     let gate_gp = std::env::current_exe()?;
-    if let Err(why) = c
-        .steps
-        .time("hook", || gate::hook(tree, &gate_gp), Result::is_ok)
-    {
-        refuse!(format!("the ROM-blocking hook refuses it: {why}"), "hook");
-    }
-    let msg = a
-        .message
-        .clone()
-        .unwrap_or_else(|| "A patch, by gp tool gate".into());
     // Words alone (Markdown, the site's pages): the prose lint, then land.
     // Nothing is built, so nothing is tested twice and nothing is published.
     if docs_only(&files) {
@@ -785,13 +834,6 @@ fn trial(
         ) {
             refuse!(why, "prose");
         }
-        if let Err(e) = c.steps.time(
-            "commit",
-            || gate::commit(tree, &msg, patch, &gate_gp),
-            Result::is_ok,
-        ) {
-            refuse!(format!("{e:#}"), "commit");
-        }
         return Ok(Ok((git(tree, &["rev-parse", "HEAD"])?, true)));
     }
     if let Err(why) = c.steps.time("fmt", || fmt(c), Result::is_ok) {
@@ -800,13 +842,22 @@ fn trial(
     if let Err(why) = c.steps.time("build", || build(c), Result::is_ok) {
         refuse!(why, "build");
     }
-    // A merge that took the tip's CLI.md: written again by the merged gp.
-    if merged
-        .as_deref()
-        .is_some_and(|m| m.contains("CLI.md written again"))
-    {
+    // A merge that took the tip's CLI.md: written again by the merged gp,
+    // into the last commit.
+    if merged_cli {
         match gate::regenerate(tree, &built_gp(c)) {
-            Ok(true) => lines.push("CLI.md written again by the merged gp".into()),
+            Ok(true) => {
+                let mut amend = Command::new("git");
+                amend
+                    .arg("-C")
+                    .arg(tree)
+                    .args(["commit", "-q", "--amend", "--no-edit"])
+                    .env("GP", &gate_gp);
+                if let Err(why) = run_step(&mut amend, "git commit --amend") {
+                    refuse!(why, "commit");
+                }
+                lines.push("CLI.md written again by the merged gp".into());
+            }
             Ok(false) => {}
             Err(e) => refuse!(format!("{e:#}"), "build"),
         }
@@ -818,13 +869,6 @@ fn trial(
     match run_lanes(c, lanes) {
         Ok(l) => lines.extend(l),
         Err(f) => return Ok(Err(f)),
-    }
-    if let Err(e) = c.steps.time(
-        "commit",
-        || gate::commit(tree, &msg, patch, &gate_gp),
-        Result::is_ok,
-    ) {
-        refuse!(format!("{e:#}"), "commit");
     }
     Ok(Ok((git(tree, &["rev-parse", "HEAD"])?, false)))
 }
@@ -847,7 +891,35 @@ pub(crate) fn run(a: &ToolGateArgs, paths: &Paths) -> Result<Outcome> {
     let onto = gate::onto_branch(a.onto.as_deref(), &repo, false)?;
     let home = gate::gate_home(a.home.as_deref())?;
     let lock = fs::File::create(home.join("gate.lock"))?;
-    lock.lock()?;
+    // A gate that lands takes a ticket first, so the tool gate holding the
+    // lock can take its patch into its batch (gate_queue), as model gates do.
+    let ticket = if a.dry_run {
+        None
+    } else {
+        let common = git(
+            &repo,
+            &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+        )?;
+        let req = crate::gate_queue::Request {
+            patch: PathBuf::new(),
+            shown: a.patch.display().to_string(),
+            message: a.message.clone(),
+            repo: PathBuf::from(common),
+            game: String::new(),
+            onto: onto.clone(),
+            run: TOOL_RUN.into(),
+            removes: Vec::new(),
+            replaces: Vec::new(),
+        };
+        Some(crate::gate_queue::Ticket::enter(&home, req, &a.patch)?)
+    };
+    let waited = lock.try_lock().is_err();
+    if waited {
+        lock.lock()?;
+    }
+    if let Some(o) = ticket.as_ref().and_then(|t| t.result()) {
+        return Ok(o);
+    }
     let tool = home.join("tool");
     fs::create_dir_all(&tool)?;
     let patch_bytes = fs::read(&a.patch).with_context(|| a.patch.display().to_string())?;
@@ -873,7 +945,43 @@ pub(crate) fn run(a: &ToolGateArgs, paths: &Paths) -> Result<Outcome> {
         steps: Steps::new(tool.join("steps.jsonl"), &patch_hash),
         tools: TOOLS,
     };
-    let o = tries(&c, a, &patch);
+    // The yeses the runner starts together reach the lock within a moment of
+    // each other: a gate that found it free waits that moment before it
+    // takes the waiting ones in.
+    if ticket.is_some() && !waited {
+        std::thread::sleep(BATCH_SETTLE);
+    }
+    let mut items = vec![Item {
+        patch,
+        message: own_message(a),
+        shown: a.patch.display().to_string(),
+        ticket: None,
+    }];
+    if let Some(t) = &ticket {
+        for (k, (name, r)) in t.claim().into_iter().enumerate() {
+            match gate::read_patch(&r.patch, &tool.join("batch").join((k + 1).to_string()))? {
+                Ok(p) => items.push(Item {
+                    patch: p,
+                    message: r
+                        .message
+                        .unwrap_or_else(|| "A patch, by gp tool gate".into()),
+                    shown: r.shown,
+                    ticket: Some(name),
+                }),
+                Err(why) => t.answer(
+                    &name,
+                    &fail(
+                        Failed {
+                            why,
+                            phase: "patch",
+                        },
+                        Vec::new(),
+                    ),
+                ),
+            }
+        }
+    }
+    let o = batch(&c, a, ticket.as_ref(), items);
     c.steps.record(
         "gate",
         c.steps.t0.elapsed().as_secs_f64(),
@@ -882,10 +990,115 @@ pub(crate) fn run(a: &ToolGateArgs, paths: &Paths) -> Result<Outcome> {
     o
 }
 
-/// The gate's tries on the branch tip, each from a fresh tree, until one
-/// lands, fails, or the tip has moved [`TIP_TRIES`] times.
+/// The run name of a tool gate's ticket: tool gates batch only together.
+const TOOL_RUN: &str = "tool gate";
+/// How long a gate that found the lock free waits for the gates started
+/// with it to take their tickets.
+const BATCH_SETTLE: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// Gates `items` (this gate's own first) as one batch. When it lands, each
+/// patch it took in is answered with the landing, and one it left out is
+/// given back to gate itself; when it fails, each is given back and this
+/// gate's own patch is gated alone, so one bad patch never costs the rest.
+fn batch(
+    c: &Cx,
+    a: &ToolGateArgs,
+    ticket: Option<&crate::gate_queue::Ticket>,
+    items: Vec<Item>,
+) -> Result<Outcome> {
+    let alone = |items: &[Item]| tries_of(c, a.dry_run, &items[..1]).map(|(o, _)| o);
+    let Some(t) = ticket.filter(|_| items.len() > 1) else {
+        return alone(&items);
+    };
+    let (o, dropped) = match tries_of(c, a.dry_run, &items) {
+        Ok(r) => r,
+        Err(e) => {
+            for i in &items[1..] {
+                t.release(i.ticket.as_deref().unwrap_or(""));
+            }
+            return Err(e);
+        }
+    };
+    let left_out = |k: usize| dropped.iter().any(|(d, _)| *d == k);
+    for (k, i) in items.iter().enumerate().skip(1) {
+        let name = i.ticket.as_deref().unwrap_or("");
+        if o.exit == 0 && !left_out(k) {
+            t.answer(name, &o);
+        } else {
+            t.release(name);
+        }
+    }
+    if o.exit == 0 && !left_out(0) {
+        return Ok(o);
+    }
+    let mut again = alone(&items)?;
+    let why = if o.exit == 0 {
+        "it was left out of the batch that landed".to_owned()
+    } else {
+        format!(
+            "the batch of {} failed ({}), so each patch is gated alone",
+            items.len(),
+            o.json["why"].as_str().unwrap_or("no reason given")
+        )
+    };
+    if let Some(l) = again.json["lines"].as_array_mut() {
+        l.insert(0, json!(why));
+    }
+    again.text = format!("{why}\n{}", again.text);
+    Ok(again)
+}
+
+/// The gate's tries of its one patch.
+#[cfg(test)]
 fn tries(c: &Cx, a: &ToolGateArgs, patch: &Patch) -> Result<Outcome> {
+    let item = Item {
+        patch: Patch {
+            diff: patch.diff.clone(),
+            message: patch.message.clone(),
+            author: patch.author.clone(),
+            date: patch.date.clone(),
+        },
+        message: own_message(a),
+        shown: a.patch.display().to_string(),
+        ticket: None,
+    };
+    Ok(tries_of(c, a.dry_run, std::slice::from_ref(&item))?.0)
+}
+
+fn own_message(a: &ToolGateArgs) -> String {
+    a.message
+        .clone()
+        .unwrap_or_else(|| "A patch, by gp tool gate".into())
+}
+
+/// The gate's tries of a batch on the branch tip, each from a fresh tree,
+/// until one lands, fails, or the tip has moved [`TIP_TRIES`] times: the
+/// outcome, and the patches the landing try left out (by their place in
+/// `items`).
+fn tries_of(c: &Cx, dry_run: bool, items: &[Item]) -> Result<(Outcome, Vec<(usize, Failed)>)> {
+    let mut dropped = Vec::new();
+    let o = tries_in(c, dry_run, items, &mut dropped)?;
+    Ok((o, dropped))
+}
+
+fn tries_in(
+    c: &Cx,
+    dry_run: bool,
+    items: &[Item],
+    dropped: &mut Vec<(usize, Failed)>,
+) -> Result<Outcome> {
     let mut lines = Vec::new();
+    if items.len() > 1 {
+        lines.push(format!(
+            "a batch of {}: {}",
+            items.len(),
+            items
+                .iter()
+                .map(|i| i.shown.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
     let mut failed = None;
     let missing = missing_tools(c);
     if !missing.is_empty() {
@@ -905,9 +1118,10 @@ fn tries(c: &Cx, a: &ToolGateArgs, patch: &Patch) -> Result<Outcome> {
             || gate::checkout(&c.repo, &c.tree, &tip),
             Result::is_ok,
         )?;
+        dropped.clear();
         let tried = c.steps.time(
             "try",
-            || trial(c, a, patch, &tip, &mut lines),
+            || trial(c, items, &tip, &mut lines, dropped),
             |r| matches!(r, Ok(Ok(_))),
         )?;
         match tried {
@@ -917,7 +1131,7 @@ fn tries(c: &Cx, a: &ToolGateArgs, patch: &Patch) -> Result<Outcome> {
                 break;
             }
             Ok((commit, words_only)) => {
-                if a.dry_run {
+                if dry_run {
                     lines.push("--dry-run: PASS, nothing lands".into());
                     return Ok(Outcome::ok(
                         json!({"verdict": "PASS", "commit": commit, "tip": tip, "lines": lines}),
@@ -1500,6 +1714,112 @@ date +%s > '{times}/just.end'
             "{}",
             o.text
         );
+    }
+
+    /// A patch of the rig as a batch item, its diff kept under `name`.
+    fn item_of(c: &Cx, file: &str, text: &str, name: &str) -> Item {
+        let p = patch_of(c, file, text);
+        let kept = c.repo.parent().unwrap().join(name);
+        fs::rename(&p.diff, &kept).unwrap();
+        Item {
+            patch: Patch {
+                diff: kept,
+                message: None,
+                ..p
+            },
+            message: format!("{name} by the batch"),
+            shown: name.into(),
+            ticket: None,
+        }
+    }
+
+    /// A batch lands each patch as a commit of its own after one build
+    /// and one run of the checks; a patch that doesn't apply beside the
+    /// others is left out and the rest land.
+    #[test]
+    fn a_batch_lands_its_patches_in_one_run_and_leaves_out_one_that_doesnt_apply() {
+        let dir = tempfile::tempdir().unwrap();
+        let c = gate_rig(dir.path());
+        let tip = git(&c.repo, &["rev-parse", "main"]).unwrap();
+        let items = [
+            item_of(&c, "tool.txt", "the tool, said again\n", "a.patch"),
+            item_of(&c, "README.md", "the tool, read me\n", "b.patch"),
+            item_of(&c, "tool.txt", "the tool, said otherwise\n", "c.patch"),
+        ];
+        let (o, dropped) = tries_of(&c, false, &items).unwrap();
+        assert_eq!(o.json["verdict"], "PASS", "{}", o.text);
+        assert_eq!(dropped.iter().map(|(k, _)| *k).collect::<Vec<_>>(), [2]);
+        assert!(o.text.contains("c.patch is left out"), "{}", o.text);
+        let log = git(&c.repo, &["log", "--format=%s", &format!("{tip}..main")]).unwrap();
+        assert_eq!(log, "b.patch by the batch\na.patch by the batch");
+        let tests = fs::read_to_string(tests_target(&c).join("cargo-test-seen")).unwrap();
+        let builds = tests.lines().filter(|l| l.contains("--no-run")).count();
+        assert_eq!(builds, 1, "one build of the tests for the batch: {tests}");
+    }
+
+    /// A batch that lands answers the gate it took in with its landing; one
+    /// that fails gives the other gate's patch back to gate itself and
+    /// lands this gate's own alone.
+    #[test]
+    fn a_failed_batch_gives_the_others_back_and_lands_its_own_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let c = gate_rig(dir.path());
+        let queue_home = dir.path().join("gate-home");
+        fs::create_dir_all(&queue_home).unwrap();
+        let req = |shown: &str| crate::gate_queue::Request {
+            patch: PathBuf::new(),
+            shown: shown.into(),
+            message: None,
+            repo: c.repo.join(".git"),
+            game: String::new(),
+            onto: "main".into(),
+            run: TOOL_RUN.into(),
+            removes: Vec::new(),
+            replaces: Vec::new(),
+        };
+        let a = |p: &Item| ToolGateArgs {
+            patch: p.patch.diff.clone(),
+            message: Some(p.message.clone()),
+            onto: Some("main".into()),
+            home: None,
+            dry_run: false,
+        };
+        let round = |own: Item, other: Item| {
+            let me =
+                crate::gate_queue::Ticket::enter(&queue_home, req("own"), &own.patch.diff).unwrap();
+            let them =
+                crate::gate_queue::Ticket::enter(&queue_home, req("other"), &other.patch.diff)
+                    .unwrap();
+            let (name, _) = me.claim().pop().unwrap();
+            let args = a(&own);
+            let other = Item {
+                ticket: Some(name),
+                ..other
+            };
+            let o = batch(&c, &args, Some(&me), vec![own, other]).unwrap();
+            (o, them.result())
+        };
+
+        let tip = git(&c.repo, &["rev-parse", "main"]).unwrap();
+        let (o, theirs) = round(
+            item_of(&c, "tool.txt", "the tool, said again\n", "a.patch"),
+            item_of(&c, "README.md", "the tool, read me\n", "b.patch"),
+        );
+        assert_eq!(o.json["verdict"], "PASS", "{}", o.text);
+        assert_eq!(theirs.unwrap().json["commit"], o.json["commit"]);
+        let log = git(&c.repo, &["log", "--format=%s", &format!("{tip}..main")]).unwrap();
+        assert_eq!(log.lines().count(), 2, "{log}");
+
+        let tip = git(&c.repo, &["rev-parse", "main"]).unwrap();
+        let (o, theirs) = round(
+            item_of(&c, "README.md", "the tool, read me again\n", "c.patch"),
+            item_of(&c, "tool.txt", "a failing test\n", "d.patch"),
+        );
+        assert_eq!(o.json["verdict"], "PASS", "{}", o.text);
+        assert!(o.text.contains("the batch of 2 failed"), "{}", o.text);
+        assert!(theirs.is_none(), "the other gate gates its patch itself");
+        let log = git(&c.repo, &["log", "--format=%s", &format!("{tip}..main")]).unwrap();
+        assert_eq!(log, "c.patch by the batch");
     }
 
     /// A slow test is the `fn` above its switch line; a mention of the

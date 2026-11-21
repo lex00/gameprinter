@@ -371,9 +371,13 @@ fn run_yeses(ctx: &Arc<Ctx>) {
                 }
             }
             let _ran = Ran(id.clone());
-            // One yes at a time: two gates at once would share the gate's
-            // own tree.
-            let _one = ONE.lock().unwrap_or_else(|e| e.into_inner());
+            // Gates all start at once (owner, yeses-land-together): they
+            // hold gate.lock in turn and the one holding it takes the
+            // waiting ones of its kind into its batch (gate_queue), so
+            // several yeses land in one run of the checks. Any other yes
+            // runs one at a time.
+            let _one = (!is_gate(a["command"].as_str().unwrap_or("")))
+                .then(|| ONE.lock().unwrap_or_else(|e| e.into_inner()));
             let mut args: Vec<String> = vec!["--json".into()];
             args.extend(
                 a["command"]
@@ -441,6 +445,12 @@ fn run_yeses(ctx: &Arc<Ctx>) {
             let _ = gp_mcp::asks::set_ran(&home, &id, state, &lines);
         });
     }
+}
+
+/// A yes's command that is a gate, which batches with the gates waiting
+/// beside it: `model gate` and `tool gate`.
+fn is_gate(command: &str) -> bool {
+    matches!(command, "model gate" | "tool gate")
 }
 
 /// The quest-log row a card is for: its step's (`row:GAME/ROW`), read from
