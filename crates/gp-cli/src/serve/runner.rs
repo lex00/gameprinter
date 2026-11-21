@@ -1084,8 +1084,18 @@ fn approve_and_gate(
     let clip = v["clip"].as_str().unwrap_or("").to_owned();
     let frames = v["frames"].clone();
     let n = v["frames_locked"].as_u64().unwrap_or(0);
-    let _ = crate::gate::git(wt, &["add", "-A"]);
-    let diff = match crate::gate::git(wt, &["diff", "--cached", "--binary"]) {
+    // Only the game's folder: git-lfs writes its hooks (post-checkout and
+    // the like) into the new worktree's .githooks, which the model gate
+    // refuses as outside the game.
+    let folder = crate::labels::game_folder(wt, game)
+        .and_then(|d| {
+            d.strip_prefix(wt)
+                .ok()
+                .map(|p| p.to_string_lossy().into_owned())
+        })
+        .unwrap_or_else(|| game.to_owned());
+    let _ = crate::gate::git(wt, &["add", "-A", "--", &folder]);
+    let diff = match crate::gate::git(wt, &["diff", "--cached", "--binary", "--", &folder]) {
         Ok(d) => d,
         Err(e) => return Locked::No(format!("{e:#}")),
     };
