@@ -228,13 +228,18 @@ fn every_listed_tool_is_dispatched() {
 fn screen_show_asks_and_reads_back() {
     let work = tempfile::tempdir().unwrap();
     let c = config(work.path());
-    let r = tools::call(&c, "screen_show", json!({"game": "tapper", "view": "solo"})).unwrap();
+    let r = tools::call(
+        &c,
+        "screen_show",
+        json!({"game": "hilltop", "view": "solo"}),
+    )
+    .unwrap();
     assert!(!r.is_error, "{}", r.json);
     assert_eq!(r.json["asked"]["view"], "solo");
     assert_eq!(r.json["page_open"], false);
-    let r = tools::call(&c, "screen_show", json!({"game": "tapper"})).unwrap();
+    let r = tools::call(&c, "screen_show", json!({"game": "hilltop"})).unwrap();
     assert_eq!(r.json["asked"], Value::Null);
-    let r = tools::call(&c, "screen_show", json!({"game": "tapper", "view": "x"})).unwrap();
+    let r = tools::call(&c, "screen_show", json!({"game": "hilltop", "view": "x"})).unwrap();
     assert!(r.is_error, "{}", r.json);
 }
 

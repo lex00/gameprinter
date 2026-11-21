@@ -84,7 +84,7 @@ pub enum LoopCmd {
         #[arg(long, value_parser = ["", "low", "medium", "high", "xhigh", "max"])]
         effort: Option<String>,
         /// The games whose quest-log items the loop works on, by name,
-        /// comma-separated ("tapper"); "all" for every game's.
+        /// comma-separated ("rooftop"); "all" for every game's.
         #[arg(long)]
         games: Option<String>,
         /// End game GAME's port run ("all" for every game's): its workers

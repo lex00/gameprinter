@@ -133,8 +133,10 @@ check-all:
     scripts/check/all.sh {{quote(gp)}}
 
 # check's lanes. The Rust lane: clippy, the generated files, Moss Hop's
-# baselines and model, the originals, and the repo's own script checks.
+# baselines and model, the originals, the repo's own script checks, and
+# that the tools name no ported game (scripts/check/no-game-names.sh).
 _check-rust:
+    scripts/check/step.sh game-names bash scripts/check/no-game-names.sh
     scripts/check/step.sh clippy cargo clippy -q --workspace --all-targets --profile {{profile}} -- -D warnings
     scripts/check/step.sh cli-docs {{gp}} self docs --check CLI.md
     scripts/check/step.sh schemas {{gp}} self schemas --check schema

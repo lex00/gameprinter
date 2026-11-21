@@ -991,8 +991,8 @@ mod tests {
             name: "last-call".into(),
             dir: std::path::PathBuf::from("/x/last-call"),
             from: Some(j::Origin {
-                name: "tapper".into(),
-                title: "Tapper".into(),
+                name: "rooftop".into(),
+                title: "Rooftop".into(),
                 kind,
                 dir: None,
             }),
@@ -1001,7 +1001,7 @@ mod tests {
         };
         assert_eq!(
             screen_link(&copy("game")).as_deref(),
-            Some("/mechanic/tapper/screen.html?pictures=last-call&view=solo")
+            Some("/mechanic/rooftop/screen.html?pictures=last-call&view=solo")
         );
         assert_eq!(screen_link(&copy("new")), None);
         assert_eq!(screen_link(&copy("template")), None);

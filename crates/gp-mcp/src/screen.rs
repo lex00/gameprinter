@@ -151,7 +151,7 @@ fn open_mechanic(home: &Path, game: &str) -> Option<String> {
 #[derive(Debug, Default, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ShowArgs {
-    /// The game: its folder's name in the games checkout (tapper).
+    /// The game: its folder's name in the games checkout (rooftop).
     pub game: String,
     /// A clip of the mechanic's session to show (its number), stood still
     /// at `frame`. Leave it out to keep what is shown.
@@ -358,7 +358,7 @@ mod tests {
 
     fn home() -> tempfile::TempDir {
         let d = tempfile::tempdir().unwrap();
-        let m = d.path().join("mechanics/tapper");
+        let m = d.path().join("mechanics/rooftop");
         std::fs::create_dir_all(m.join("move/clips")).unwrap();
         std::fs::write(m.join("current"), "move\n").unwrap();
         std::fs::write(m.join("move/clips/001.toml"), "start = 4\nframes = 20\n").unwrap();
@@ -376,7 +376,7 @@ mod tests {
         let h = home();
         let v = show_at(
             h.path(),
-            &args(json!({"game": "tapper", "view": "top", "opacity": 0.25})),
+            &args(json!({"game": "rooftop", "view": "top", "opacity": 0.25})),
             Duration::ZERO,
         )
         .unwrap();
@@ -388,7 +388,7 @@ mod tests {
         assert!(v["said"].as_str().unwrap().contains("isn't open"));
         let v = show_at(
             h.path(),
-            &args(json!({"game": "tapper", "clip": 1, "frame": 9})),
+            &args(json!({"game": "rooftop", "clip": 1, "frame": 9})),
             Duration::ZERO,
         )
         .unwrap();
@@ -400,15 +400,15 @@ mod tests {
         assert!(v["asked"].get("view").is_none());
         let v = show_at(
             h.path(),
-            &args(json!({"game": "tapper", "live": true})),
+            &args(json!({"game": "rooftop", "live": true})),
             Duration::ZERO,
         )
         .unwrap();
         assert_eq!(v["asked"]["clip"], Value::Null);
         // Asking nothing reads it back and writes no ask.
-        let v = show_at(h.path(), &args(json!({"game": "tapper"})), Duration::ZERO).unwrap();
+        let v = show_at(h.path(), &args(json!({"game": "rooftop"})), Duration::ZERO).unwrap();
         assert_eq!(v["asked"], Value::Null);
-        assert_eq!(ask_of(h.path(), "tapper").unwrap()["seq"], 3);
+        assert_eq!(ask_of(h.path(), "rooftop").unwrap()["seq"], 3);
     }
 
     /// A wrong part is refused in words, and nothing is written.
@@ -417,25 +417,25 @@ mod tests {
         let h = home();
         for (a, says) in [
             (
-                json!({"game": "tapper", "view": "over"}),
+                json!({"game": "rooftop", "view": "over"}),
                 "side, top, diff or solo",
             ),
-            (json!({"game": "tapper", "opacity": 2.0}), "0 to 1"),
-            (json!({"game": "tapper", "clip": 7}), "no clip 7"),
-            (json!({"game": "tapper", "pictures": "../x"}), "theme's id"),
+            (json!({"game": "rooftop", "opacity": 2.0}), "0 to 1"),
+            (json!({"game": "rooftop", "clip": 7}), "no clip 7"),
+            (json!({"game": "rooftop", "pictures": "../x"}), "theme's id"),
             (
-                json!({"game": "tapper", "live": true, "clip": 1}),
+                json!({"game": "rooftop", "live": true, "clip": 1}),
                 "live is play",
             ),
             (
-                json!({"game": "../tapper", "view": "side"}),
+                json!({"game": "../rooftop", "view": "side"}),
                 "a game's name",
             ),
         ] {
             let e = show_at(h.path(), &args(a), Duration::ZERO).unwrap_err();
             assert!(e.contains(says), "{e}");
         }
-        assert_eq!(ask_of(h.path(), "tapper").unwrap(), Value::Null);
+        assert_eq!(ask_of(h.path(), "rooftop").unwrap(), Value::Null);
     }
 
     /// The page's report is what the call reads back, in words, and an
@@ -445,14 +445,14 @@ mod tests {
         let h = home();
         report(
             h.path(),
-            "tapper",
+            "rooftop",
             &json!({"applied": 1, "clip": 1, "mechanic": "move", "frame": 9,
                     "view": "top", "opacity": 0.5, "pictures": "last-call", "by": "person"}),
         )
         .unwrap();
         let v = show_at(
             h.path(),
-            &args(json!({"game": "tapper", "view": "top"})),
+            &args(json!({"game": "rooftop", "view": "top"})),
             Duration::ZERO,
         )
         .unwrap();
@@ -462,7 +462,7 @@ mod tests {
             v["said"],
             "The screen shows clip 1 of move at frame 9, the model over the original at 50%, in the theme last-call (the person's choice)."
         );
-        assert!(report(h.path(), "tapper", &json!([1])).is_err());
+        assert!(report(h.path(), "rooftop", &json!([1])).is_err());
     }
 
     /// The work file keeps the clip's window through events with none, is
@@ -470,20 +470,20 @@ mod tests {
     #[test]
     fn the_work_keeps_its_window_and_ends() {
         let h = home();
-        assert_eq!(work_of(h.path(), "tapper").unwrap(), Value::Null);
+        assert_eq!(work_of(h.path(), "rooftop").unwrap(), Value::Null);
         work(
             h.path(),
-            "tapper",
+            "rooftop",
             &json!({"clip": "serve-1", "start": 100, "frames": 300, "from": 140, "to": 200}),
         )
         .unwrap();
         work(
             h.path(),
-            "tapper",
+            "rooftop",
             &json!({"clip": "serve-1", "start": 100, "frames": 300, "says": "round 1"}),
         )
         .unwrap();
-        let v = work_of(h.path(), "tapper").unwrap();
+        let v = work_of(h.path(), "rooftop").unwrap();
         assert_eq!(
             (v["from"].clone(), v["to"].clone()),
             (json!(140), json!(200))
@@ -492,18 +492,18 @@ mod tests {
         // Another clip starts with no window.
         work(
             h.path(),
-            "tapper",
+            "rooftop",
             &json!({"clip": "pour-2", "start": 9, "frames": 50}),
         )
         .unwrap();
-        assert!(work_of(h.path(), "tapper").unwrap()["from"].is_null());
+        assert!(work_of(h.path(), "rooftop").unwrap()["from"].is_null());
         work(
             h.path(),
-            "tapper",
+            "rooftop",
             &json!({"clip": "pour-2", "ended": true}),
         )
         .unwrap();
-        assert_eq!(work_of(h.path(), "tapper").unwrap()["live"], false);
+        assert_eq!(work_of(h.path(), "rooftop").unwrap()["live"], false);
         let said = said_of(&json!({"work_clip": "pour-2", "frame": 3}));
         assert!(
             said.contains("your refine works on, pour-2, at frame 3"),

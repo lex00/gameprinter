@@ -568,7 +568,7 @@ pub fn gate_card_refused(
         return None;
     }
     if value(values, &["clip"]).is_none() {
-        return Some("a model gate card names the clip that shows what the change does, so the person can watch it: add clip (N, ROW/N or a corpus clip's id, such as tapper.attract.001), frames A-B and look (game, or the theme it is about). The card and its row then have LOOK AT IT".to_owned());
+        return Some("a model gate card names the clip that shows what the change does, so the person can watch it: add clip (N, ROW/N or a corpus clip's id, such as rooftop.attract.001), frames A-B and look (game, or the theme it is about). The card and its row then have LOOK AT IT".to_owned());
     }
     if gate_clip(values).is_none() || value(values, &["frames"]).is_none() {
         return Some("a model gate card's clip is N, ROW/N or a corpus clip's id, with frames A-B (or A) from the clip's start, so LOOK AT IT shows the frames in question".to_owned());
@@ -747,8 +747,7 @@ mod tests {
     /// command left says; one whose command still runs, one this server
     /// still runs, one another live server runs and a finished one stay.
     /// Taken again it is the person's yes until it ends, and cut off
-    /// CUT_OFF_TRIES times it fails (yes-survives-restart; tapper's
-    /// scoreboard-matches-direct card, 2026-11-20).
+    /// CUT_OFF_TRIES times it fails (docs/mcp.md, "Every command").
     #[cfg(unix)]
     #[test]
     fn a_yes_survives_its_server_stopping() {
@@ -861,15 +860,15 @@ mod tests {
                 .collect()
         };
         let none = |_: &str| false;
-        let bare = s(&[("game", "tapper"), ("patch", "x.patch")]);
+        let bare = s(&[("game", "rooftop"), ("patch", "x.patch")]);
         assert!(gate_card_refused(&bare, none).is_some());
         assert!(gate_card_refused(&bare, |n| n == "dry-run").is_none());
         assert!(gate_card_refused(&bare, |n| n == "import").is_none());
-        let no_frames = s(&[("game", "tapper"), ("clip", "tapper.attract.001")]);
+        let no_frames = s(&[("game", "rooftop"), ("clip", "rooftop.attract.001")]);
         assert!(gate_card_refused(&no_frames, none).is_some());
         let full = s(&[
-            ("game", "tapper"),
-            ("clip", "tapper.attract.001"),
+            ("game", "rooftop"),
+            ("clip", "rooftop.attract.001"),
             ("frames", "761-763"),
             ("look", "game"),
         ]);
@@ -882,7 +881,7 @@ mod tests {
         let v = make(d.path(), &n).unwrap();
         assert_eq!(
             v["clip"],
-            json!({"id": "tapper.attract.001", "from": 761, "to": 763, "look": "game"})
+            json!({"id": "rooftop.attract.001", "from": 761, "to": 763, "look": "game"})
         );
         assert_eq!(
             gate_clip(&s(&[("clip", "credit-line/2"), ("frames", "5")])),

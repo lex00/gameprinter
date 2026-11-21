@@ -128,7 +128,7 @@ mod tests {
         let mut asked = Vec::new();
         let s = decide(
             "gp_run",
-            &json!({"command": "corpus score", "args": {"game": "tapper"}}),
+            &json!({"command": "corpus score", "args": {"game": "rooftop"}}),
             &json!({}),
             None,
             |a| {
@@ -136,7 +136,7 @@ mod tests {
                 Ok(json!({"next": {"id": "s1", "who": "tools", "says": "Score it."}}))
             },
         );
-        assert_eq!(asked, ["progress", "--next", "--template", "tapper"]);
+        assert_eq!(asked, ["progress", "--next", "--template", "rooftop"]);
         assert_eq!(s["id"], "s1");
         let mut asked = Vec::new();
         decide(

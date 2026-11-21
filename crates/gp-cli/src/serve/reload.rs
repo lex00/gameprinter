@@ -1,5 +1,5 @@
-//! gp serve moves itself onto a newly published gp (quest log
-//! tapper/serve-reloads-itself; docs/loop.md, "The runner"). Every few
+//! gp serve moves itself onto a newly published gp (docs/loop.md, "The
+//! runner"). Every few
 //! seconds it looks at `$GP_HOME/bin/gp`; when the gate has published
 //! another build since this one started, nothing new starts (the runner's
 //! workers and its clip keeping wait; the person's yeses still run, since
@@ -316,7 +316,7 @@ mod tests {
             "--games",
             "/g",
             "--rom",
-            "tapper=tapperg",
+            "hilltop=hilltop2",
             "--rom=rooftop=rooftop2",
             "--clip-agent",
             "claude --model sonnet",

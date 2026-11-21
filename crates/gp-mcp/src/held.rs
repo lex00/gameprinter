@@ -308,7 +308,7 @@ pub fn diff_shown(held: &Value) -> String {
     )
 }
 
-/// Each held file in words: `tapper/corpus.toml (3 lines removed or
+/// Each held file in words: `rooftop/corpus.toml (3 lines removed or
 /// changed, 40 added)`.
 pub fn each_in_words(held: &Value) -> Vec<String> {
     held["files"]

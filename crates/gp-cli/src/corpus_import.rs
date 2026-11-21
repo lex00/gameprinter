@@ -113,7 +113,7 @@ pub(crate) struct Script {
     /// The frames between two presses: least and most.
     #[serde(default)]
     pub gap: [u64; 2],
-    /// An arcade set's presses line, `SYSTEM COLUMNS` (`tapper CSRLDUT`).
+    /// An arcade set's presses line, `SYSTEM COLUMNS` (`rooftop CSRLDUT`).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub arcade: String,
 }
@@ -1345,7 +1345,7 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let script = "[import]\nprefix = \"g\"\n\n[import.script]\nseed = 7\nframes = 120\n\
                       buttons = [\"left\", \"right\", \"tap\"]\nhold = [2, 10]\ngap = [0, 5]\n\
-                      arcade = \"tapper CSRLDUT\"\n\n";
+                      arcade = \"rooftop CSRLDUT\"\n\n";
         let mut presses = Vec::new();
         for (who, start, spans) in [("a", 10, ["right@0-19"]), ("b", 14, ["left@3-9"])] {
             let home = d.path().join(who).join("home");
@@ -1367,7 +1367,7 @@ mod tests {
         assert_eq!(presses[0], presses[1]);
         let p = cs::parse_presses(&presses[0]).unwrap();
         assert_eq!(p.frames, 120);
-        assert_eq!(p.arcade.unwrap().system, "tapper");
+        assert_eq!(p.arcade.unwrap().system, "rooftop");
         assert!(p.spans.len() > 5, "{presses:?}");
         let named = |s: &String| ["left@", "right@", "tap@"].iter().any(|b| s.starts_with(b));
         assert!(p.spans.iter().all(named), "{presses:?}");

@@ -2121,8 +2121,8 @@ mod tests {
             "{body}"
         );
         assert_eq!(
-            log_set("gp-arcade-input 0\nsystem tapper\ncolumns CSRLDUT\n6 .......\n").as_deref(),
-            Some("tapper")
+            log_set("gp-arcade-input 0\nsystem rooftop\ncolumns CSRLDUT\n6 .......\n").as_deref(),
+            Some("rooftop")
         );
         assert_eq!(log_set(&log(&["........"])), None);
     }

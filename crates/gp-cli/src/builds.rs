@@ -509,7 +509,7 @@ mod tests {
         file_aged(&gate_run.join("tapes").join("old-2.json"), 200, day);
         file_aged(&gate_run.join("new.json"), 7, new);
         // The home's own run in use, with one old score.
-        let home_run = home.join("work").join("regenerate").join("tapper");
+        let home_run = home.join("work").join("regenerate").join("rooftop");
         file_aged(&home_run.join("old.json"), 40, day);
         file_aged(&home_run.join("new.json"), 1, new);
         let none = BTreeSet::new();

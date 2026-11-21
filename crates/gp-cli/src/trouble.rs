@@ -66,7 +66,7 @@ static WRITING: Mutex<()> = Mutex::new(());
 
 /// A message as its cause: lower case, its words of letters and digits,
 /// each word with a digit in it (a number, a pid, a card or step id) one
-/// `#`, and a run of those one `#` (a clip id, tapper.l15.001). Two
+/// `#`, and a run of those one `#` (a clip id, rooftop.l15.001). Two
 /// messages that differ only there are the same trouble.
 pub(crate) fn key(what: &str) -> String {
     let mut words: Vec<String> = what
@@ -399,10 +399,10 @@ mod tests {
     /// Numbers and ids are out of the key; the words stay.
     #[test]
     fn a_key_is_the_cause() {
-        let a = key("Card a1b2c3 failed in the last hour: tapper.l15.001 ran past 170 ms");
-        let b = key("Card ff09e7 failed in the last hour: tapper.l15.001 ran past 171 ms");
+        let a = key("Card a1b2c3 failed in the last hour: rooftop.l15.001 ran past 170 ms");
+        let b = key("Card ff09e7 failed in the last hour: rooftop.l15.001 ran past 171 ms");
         assert_eq!(a, b);
-        assert_eq!(a, "card # failed in the last hour tapper # ran past # ms");
+        assert_eq!(a, "card # failed in the last hour rooftop # ran past # ms");
         assert_ne!(a, key("Card a1b2c3 is waiting"));
         let r = row_name(&a);
         assert!(r.starts_with("trouble-card-failed-in-the-last-hour"), "{r}");
@@ -415,7 +415,7 @@ mod tests {
     fn the_same_trouble_adds_to_its_row() {
         let d = tempfile::tempdir().unwrap();
         let p = paths(d.path());
-        let set_mismatch = "Couldn't set up the clip for picture-other-the-level-picture-main: the log is of tapper with columns 6; this is tapperg with 6";
+        let set_mismatch = "Couldn't set up the clip for picture-other-the-level-picture-main: the log is of rooftop with columns 6; this is rooftopg with 6";
         let t = Trouble {
             game: "made-up",
             kind: Kind::Page,

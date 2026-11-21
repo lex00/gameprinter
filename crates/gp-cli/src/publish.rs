@@ -341,7 +341,7 @@ mod tests {
         std::os::unix::fs::symlink(format!("gp-{:012}", 0), &link).unwrap();
         // A port run on an old build keeps it too.
         let run_on = bin.join(format!("gp-{:012}", 2));
-        crate::port_run::gp_for(dir.path(), "tapper", &run_on, 1);
+        crate::port_run::gp_for(dir.path(), "rooftop", &run_on, 1);
         prune(&bin, &link);
         assert!(
             bin.join(format!("gp-{:012}", 0)).is_file(),

@@ -91,7 +91,7 @@ pub struct GateArgs {
     #[arg(long)]
     pub no_rebase: bool,
     /// The clip that shows what the change does: N (a clip of the step's
-    /// row), ROW/N, or a corpus clip's id (tapper.attract.001). Its card on
+    /// row), ROW/N, or a corpus clip's id (rooftop.attract.001). Its card on
     /// the person's page gets LOOK AT IT, which sets the clip up on their
     /// screens. The gate itself doesn't read it; gp_run refuses a card for a
     /// patch without it.
@@ -2124,7 +2124,7 @@ fn picture_worse_each(base: &Rows, new: &Rows) -> Vec<(String, String)> {
 ///
 /// ```toml
 /// [[tolerate]]
-/// clip = "tapper.attract.*"
+/// clip = "rooftop.attract.*"
 /// why = "the board's one-frame sprite lag (issue #42)"
 /// ```
 pub(crate) const TOLERATE_FILE: &str = "tolerate.toml";

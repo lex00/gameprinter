@@ -525,7 +525,7 @@ mod tests {
                 model: "sonnet".into(),
                 effort: "medium".into(),
             },
-            games: vec!["tapper".into()],
+            games: vec!["rooftop".into()],
         };
         save(&home, &s).unwrap();
         assert_eq!(settings(&home), s);

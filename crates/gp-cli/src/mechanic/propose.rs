@@ -324,44 +324,51 @@ mod tests {
     fn a_new_clip_is_added_to_its_row() {
         let d = tempfile::tempdir().unwrap();
         let p = paths(&d.path().join("home"));
-        let f = queue_file(&p, "tapper").unwrap();
-        let l1 = vec!["tapper.l1.001".to_owned()];
+        let f = queue_file(&p, "rooftop").unwrap();
+        let l1 = vec!["rooftop.l1.001".to_owned()];
         let first = Proposal {
-            game: "tapper",
+            game: "rooftop",
             row: "picture-other-the-level-picture-main",
-            from: "gp picture --run r, tapper.l1.001 frame 0",
+            from: "gp picture --run r, rooftop.l1.001 frame 0",
             what: "the picture differs",
             clips: &l1,
             ..Proposal::default()
         };
         propose(&p, None, &first).unwrap();
-        assert_eq!(read_queue(&f)[0]["seen_in"], json!(["tapper.l1.001"]));
+        assert_eq!(read_queue(&f)[0]["seen_in"], json!(["rooftop.l1.001"]));
         let mut q = read_queue(&f);
         q[0]["status"] = json!("done");
         q[0]["note"] = json!("Landed: level 1's start");
         write_queue(&f, &q).unwrap();
 
-        let both = vec!["tapper.demo.001".to_owned(), "tapper.l1.001".to_owned()];
+        let both = vec!["rooftop.demo.001".to_owned(), "rooftop.l1.001".to_owned()];
         let v = propose(
             &p,
             None,
             &Proposal {
-                from: "gp picture --run r, tapper.demo.001 frame 2",
+                from: "gp picture --run r, rooftop.demo.001 frame 2",
                 clips: &both,
                 test: None,
                 ..first
             },
         )
         .unwrap();
-        assert_eq!(v["clips_added"], json!(["tapper.demo.001"]));
-        assert!(words(&v).contains("tapper.demo.001 added"), "{}", words(&v));
+        assert_eq!(v["clips_added"], json!(["rooftop.demo.001"]));
+        assert!(
+            words(&v).contains("rooftop.demo.001 added"),
+            "{}",
+            words(&v)
+        );
         let q = read_queue(&f);
         assert_eq!(q.len(), 1);
         assert_eq!(q[0]["status"], "next");
-        assert_eq!(q[0]["seen_in"], json!(["tapper.l1.001", "tapper.demo.001"]));
+        assert_eq!(
+            q[0]["seen_in"],
+            json!(["rooftop.l1.001", "rooftop.demo.001"])
+        );
         assert_eq!(
             q[0]["note"],
-            "Landed: level 1's start Also seen in tapper.demo.001 (from gp picture --run r, tapper.demo.001 frame 2)."
+            "Landed: level 1's start Also seen in rooftop.demo.001 (from gp picture --run r, rooftop.demo.001 frame 2)."
         );
 
         let again = propose(
@@ -386,13 +393,13 @@ mod tests {
 
         // Archived, the row stays archived when proposed again from a clip
         // it names, and comes back reopened from a new one: never made anew.
-        let a = super::super::archive::archive_file(&p.home, "tapper");
+        let a = super::super::archive::archive_file(&p.home, "rooftop");
         write_queue(&a, &read_queue(&f)).unwrap();
         write_queue(&f, &[]).unwrap();
         let v = propose(&p, None, &first).unwrap();
         assert_eq!(v["added"], json!(false));
         assert!(read_queue(&f).is_empty());
-        let l2 = vec!["tapper.l2.001".to_owned()];
+        let l2 = vec!["rooftop.l2.001".to_owned()];
         propose(
             &p,
             None,

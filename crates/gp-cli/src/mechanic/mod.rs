@@ -498,7 +498,7 @@ pub enum MechanicCmd {
         repo: Option<String>,
         /// The clip that shows what the person is to judge: N (clip N of
         /// this row), ROW/N (clip N of another row) or a corpus clip's id
-        /// (tapper.l1.001). The row and its card get a LOOK AT IT button
+        /// (rooftop.l1.001). The row and its card get a LOOK AT IT button
         /// that sets it up on the screens, the original beside the model.
         #[arg(long, requires = "mechanic", conflicts_with = "no_clip")]
         clip: Option<String>,
@@ -1427,7 +1427,7 @@ fn row_clip(clip: &str, frames: Option<&str>, look: Option<&str>) -> Result<Valu
     } else if !clip.is_empty() && clip.chars().all(id_char) {
         json!({"id": clip})
     } else {
-        bail!("--clip is N, ROW/N or a corpus clip's id (tapper.l1.001): {clip}");
+        bail!("--clip is N, ROW/N or a corpus clip's id (rooftop.l1.001): {clip}");
     };
     if let Some(f) = frames {
         let num = |s: &str| s.trim().parse::<u64>().ok();
@@ -1453,7 +1453,7 @@ fn row_clip(clip: &str, frames: Option<&str>, look: Option<&str>) -> Result<Valu
     Ok(v)
 }
 
-/// A letter of a corpus clip's id: tapper.l1.001.
+/// A letter of a corpus clip's id: rooftop.l1.001.
 fn id_char(c: char) -> bool {
     c.is_ascii_alphanumeric() || "._-".contains(c)
 }
@@ -2134,8 +2134,8 @@ mod tests {
             row_clip("get-ready-screen/1", Some("40"), None).unwrap(),
             json!({"mechanic": "get-ready-screen", "n": 1, "from": 40, "to": 40})
         );
-        let id = row_clip("tapper.l1.001", None, None).unwrap();
-        assert_eq!(id, json!({"id": "tapper.l1.001"}));
+        let id = row_clip("rooftop.l1.001", None, None).unwrap();
+        assert_eq!(id, json!({"id": "rooftop.l1.001"}));
         assert!(row_clip("", None, None).is_err());
         assert!(row_clip("a b", None, None).is_err());
         assert!(row_clip("2", Some("9-3"), None).is_err());
@@ -2143,7 +2143,7 @@ mod tests {
         let other = row_clip("get-ready-screen/1", Some("200-230"), Some("last-call")).unwrap();
         let words = "clip 1 of get-ready-screen, frames 200 to 230, in last-call";
         assert_eq!(clip_words(&other), words);
-        assert_eq!(clip_words(&id), "corpus clip tapper.l1.001");
+        assert_eq!(clip_words(&id), "corpus clip rooftop.l1.001");
         let d = tempfile::tempdir().unwrap();
         let p = paths(d.path());
         let none: &[String] = &[];

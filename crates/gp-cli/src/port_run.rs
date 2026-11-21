@@ -1,5 +1,5 @@
-//! A game's port run keeps the gp it started on (quest log
-//! tapper/pin-gp-for-port-run; docs/loop.md, "The runner"). gp serve moves
+//! A game's port run keeps the gp it started on (docs/loop.md, "The
+//! runner"). gp serve moves
 //! itself onto each newly published gp (serve/reload.rs), and before this
 //! each new worker on a game started on whatever was published then, so a
 //! tool row landing part way through changed the tools under a port, and
@@ -200,14 +200,14 @@ mod tests {
     #[test]
     fn a_games_rows_are_its_port_and_a_tools_row_is_not() {
         assert_eq!(
-            game_of(&step(&["row:tapper/x", "game:tapper"], "games")).as_deref(),
-            Some("tapper")
+            game_of(&step(&["row:hilltop/x", "game:hilltop"], "games")).as_deref(),
+            Some("hilltop")
         );
         assert_eq!(
-            game_of(&step(&["game:tapper"], "")).as_deref(),
-            Some("tapper")
+            game_of(&step(&["game:hilltop"], "")).as_deref(),
+            Some("hilltop")
         );
-        assert_eq!(game_of(&step(&["row:tapper/x"], "tools")), None);
+        assert_eq!(game_of(&step(&["row:hilltop/x"], "tools")), None);
         assert_eq!(game_of(&step(&["page"], "")), None);
     }
 
@@ -223,18 +223,18 @@ mod tests {
         fs::write(&new, "new").unwrap();
         let old = fs::canonicalize(&old).unwrap();
         let new = fs::canonicalize(&new).unwrap();
-        // The first worker on tapper starts the run on the gp published then.
-        assert_eq!(gp_for(home, "tapper", &old, 1), old);
+        // The first worker on hilltop starts the run on the gp published then.
+        assert_eq!(gp_for(home, "hilltop", &old, 1), old);
         // A tool landing publishes another; the run's next worker keeps the
         // run's, and another game's first worker takes the newest.
-        assert_eq!(gp_for(home, "tapper", &new, 2), old);
+        assert_eq!(gp_for(home, "hilltop", &new, 2), old);
         assert_eq!(gp_for(home, "rooftop", &new, 3), new);
-        assert_eq!(read(home, "tapper").unwrap()["workers"], json!(2));
+        assert_eq!(read(home, "hilltop").unwrap()["workers"], json!(2));
         assert!(builds(home).contains(old.file_name().unwrap()));
         // A row still open keeps the run on; with every row of the game's
         // done (a tools row doesn't count) it ends, and the next worker
         // starts a new run on the newest.
-        let q = home.join("mechanics").join("tapper");
+        let q = home.join("mechanics").join("hilltop");
         fs::create_dir_all(&q).unwrap();
         let rows = |s: &str| {
             json!([
@@ -243,26 +243,26 @@ mod tests {
             ])
         };
         fs::write(q.join("queue.json"), rows("next").to_string()).unwrap();
-        // rooftop has no row open, so its run ends; tapper's stays on.
+        // rooftop has no row open, so its run ends; hilltop's stays on.
         assert_eq!(end_finished(home, &[]), vec!["rooftop".to_owned()]);
-        assert!(read(home, "tapper").is_some());
+        assert!(read(home, "hilltop").is_some());
         fs::write(q.join("queue.json"), rows("asking you").to_string()).unwrap();
-        assert!(at_work(home, "tapper", &[]));
+        assert!(at_work(home, "hilltop", &[]));
         // A row parked in line, waiting on the person, holds no run.
         fs::write(q.join("queue.json"), rows("in line").to_string()).unwrap();
-        assert!(!at_work(home, "tapper", &[]));
-        let working = json!({"state": "working", "pid": std::process::id(), "step": {"touches": ["row:tapper/a", "game:tapper"]}});
+        assert!(!at_work(home, "hilltop", &[]));
+        let working = json!({"state": "working", "pid": std::process::id(), "step": {"touches": ["row:hilltop/a", "game:hilltop"]}});
         fs::write(q.join("queue.json"), rows("done").to_string()).unwrap();
-        assert!(at_work(home, "tapper", std::slice::from_ref(&working)));
-        assert_eq!(end_finished(home, &[]), vec!["tapper".to_owned()]);
-        assert_eq!(gp_for(home, "tapper", &new, 4), new);
+        assert!(at_work(home, "hilltop", std::slice::from_ref(&working)));
+        assert_eq!(end_finished(home, &[]), vec!["hilltop".to_owned()]);
+        assert_eq!(gp_for(home, "hilltop", &new, 4), new);
         // Its build gone, a run starts again on the newest.
-        assert!(end(home, "tapper"));
-        assert_eq!(gp_for(home, "tapper", &old, 5), old);
+        assert!(end(home, "hilltop"));
+        assert_eq!(gp_for(home, "hilltop", &old, 5), old);
         fs::remove_file(&old).unwrap();
-        assert_eq!(gp_for(home, "tapper", &new, 6), new);
+        assert_eq!(gp_for(home, "hilltop", &new, 6), new);
         assert!(
-            read(home, "tapper").unwrap()["why"]
+            read(home, "hilltop").unwrap()["why"]
                 .as_str()
                 .unwrap()
                 .contains("gone")

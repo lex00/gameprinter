@@ -1294,7 +1294,7 @@ fn settle_lock(qf: &Path, row: &str, out: &Locked, now: u64) -> anyhow::Result<(
 }
 
 /// The quest-log row a corpus clip's ID names: its session,
-/// `drink-far-end` of `tapper.drink-far-end.001`.
+/// `drink-far-end` of `rooftop.drink-far-end.001`.
 fn row_of_clip(id: &str) -> Option<&str> {
     let (rest, _n) = id.rsplit_once('.')?;
     Some(rest.rsplit_once('.').map_or(rest, |(_, s)| s))
@@ -2691,7 +2691,7 @@ mod tests {
                 {"mechanic": "b", "status": "asking you", "note": "The card waits for your YES"},
                 {"mechanic": "c", "status": "done", "note": "Done long ago"},
                 {"mechanic": "d", "status": "agent working", "note": "card up"},
-                // Set by hand after its card failed (tapper's move); set
+                // Set by hand after its card failed; set
                 // aside after its NO (double-drink-end).
                 {"mechanic": "e", "status": "done", "note": "Landed by hand after the first card failed",
                  "changed_ms": gp_mcp::asks::now_ms() - 100},
@@ -2880,7 +2880,7 @@ mod tests {
     #[test]
     fn a_held_clip_waits_on_its_row_with_why() {
         assert_eq!(
-            row_of_clip("tapper.drink-far-end.001"),
+            row_of_clip("rooftop.drink-far-end.001"),
             Some("drink-far-end")
         );
         assert_eq!(row_of_clip("hop.walk.002"), Some("walk"));
