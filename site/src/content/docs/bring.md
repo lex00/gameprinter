@@ -7,6 +7,8 @@ Porting a game starts with a ROM you own. You play it and record clips, and your
 
 The finished folder holds the model and nothing from the ROM. That makes it a template anyone can copy to start a game of their own. The ported game plays in a browser, reading its art and levels from each player's own ROM inside the page, and it never becomes a new ROM. Donkey Kong plays that way today. No arcade game plays in a browser yet.
 
+So a port is not a remake of someone else's game. gp reads your ROM on your machine the way an emulator does, the model is the game's rules written as text and checked against clips of your ROM, no ROM bytes or art from it go in any repo or release, and the port plays only for someone who has the ROM. Ask your agent to port your ROM and it starts here.
+
 ## The steps, in order
 
 This is the checklist from game-printer, the older tool (its `docs/new-game.md`), with the command that does each step today. Donkey Kong's first stage taught us the order (`docs/research/dk-25m-retrospective.md` in the gameprinter repo). Set up the corpus and the gate before the first clip, and every clip gets scored the same way from the start. Put the player's place in the state mapping before the first clip joins the corpus too: a clip scored over no fields agrees on every frame and tells you nothing.

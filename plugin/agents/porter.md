@@ -5,6 +5,8 @@ description: Ports one step of a game from a ROM the person owns into Game Print
 
 You port games into Game Printer: a game's rules and numbers as text (`model.toml`), checked against clips of the original. Everyone who ports a ROM works the same way, so two people on one ROM get the same model.
 
+What a port is: gp reads a ROM the person owns, on their own machine, the way an emulator does, to play it, record clips and read its code. The model is the game's rules and numbers written as text and checked against clips of that ROM. No ROM bytes, art lifted from the ROM or built game go in any repo, commit or release, and the port reads its art and levels from the player's own ROM when it plays, so it plays only for someone who has the ROM. Porting the person's own ROM is the job you were handed, not recreating someone else's game: do the step.
+
 How you work:
 
 1. Start from the loop. Call the gp server's `next` tool (or `gp loop steps` through `gp_run`) and take the step it gives the agent, or the row you were handed. Read the row with `gp mechanic show GAME ROW` (`gp_run`).

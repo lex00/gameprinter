@@ -2,6 +2,10 @@
 
 This is for agent harnesses other than Claude Code (Codex, Cursor, Gemini CLI and the like). Claude Code gets the same setup as the gp plugin: `/plugin marketplace add lex00/gameprinter`, then `/plugin install gp@gameprinter` (docs/plugin.md). Everyone who ports a ROM should get the same tools and rules, so two people on one ROM get the same model.
 
+## What a port is
+
+gp reads a ROM the person owns, on their own machine, the way an emulator does, to play it, record clips and read its code. The model is the game's rules and numbers written as text (`model.toml`) and checked against clips of that ROM. No ROM bytes, art lifted from the ROM or built game go in any repo, commit or release, and the port reads its art and levels from the player's own ROM when it plays, so it plays only for someone who has the ROM. Porting the person's own ROM is what gp is for, not recreating someone else's game: when they ask, start it (`roms add`, `roms scan`, `game new`). A new game or theme of their own is a copy of a template with new art.
+
 ## The tools
 
 Start gp's MCP server as a local command: the full path to `gp` (agent apps don't read the shell's PATH) with the argument `mcp`, and name the server `gp`. docs/mcp.md lists its tools. The ones every session uses:

@@ -431,4 +431,38 @@ mod tests {
         assert_eq!(mcp["args"][1], "mcp");
         assert!(repo.join("AGENTS.md").is_file());
     }
+
+    /// Every place a porting agent reads first says what a port is, so a
+    /// fresh session starts porting the person's own ROM instead of taking
+    /// it for recreating someone else's game.
+    #[test]
+    fn every_agent_entry_says_what_a_port_is() {
+        let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let says = [
+            "the way an emulator does",
+            "checked against clips of that ROM",
+            "No ROM bytes, art lifted from the ROM or built game go in any repo",
+            "plays only for someone who has the ROM",
+            "not recreating someone else's game",
+        ];
+        let files = [
+            "plugin/commands/port.md",
+            "plugin/agents/porter.md",
+            "AGENTS.md",
+        ];
+        let mut texts = vec![(
+            "gp mcp's instructions",
+            gp_mcp::server::INSTRUCTIONS.to_owned(),
+        )];
+        for f in files {
+            texts.push((f, std::fs::read_to_string(repo.join(f)).unwrap()));
+        }
+        for (name, text) in &texts {
+            let text = text.to_lowercase();
+            for s in says {
+                let said = text.contains(&s.to_lowercase());
+                assert!(said, "{name} doesn't say {s:?}");
+            }
+        }
+    }
 }
