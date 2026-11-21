@@ -469,6 +469,12 @@ pub const FEATURES: &[Feature] = &[
         &["levels.*.present.board.looks.clear"],
     ),
     core(
+        "level.board.looks.sprites_off",
+        "",
+        "A look of a level drawn by an arcade board that draws no sprite, as a program blanks the screen while its objects stay in RAM",
+        &["levels.*.present.board.looks.sprites_off"],
+    ),
+    core(
         "level.board.counters",
         "",
         "Counters drawn into an arcade board's tile layer, as digits or as one tile repeated, and strings drawn there while counters say so, with tile codes lifted from the player's romset",

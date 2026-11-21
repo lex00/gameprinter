@@ -1131,6 +1131,12 @@ pub struct BoardLookWhen {
     /// texts still draw over it. Not with `screen`.
     #[serde(default, skip_serializing_if = "is_false")]
     pub clear: bool,
+    /// Feature `level.board.looks.sprites_off`: no sprite drawn, as a
+    /// program that blanks the screen while its objects stay in RAM (the
+    /// bodies stay in play, only their sprites aren't drawn). The tile
+    /// layer is drawn as the look says.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub sprites_off: bool,
     /// More bytes written into palette RAM, after the level's own
     /// `palette_writes` (or, with `palette`, after loading it): a bar's
     /// colours by the bar shown.

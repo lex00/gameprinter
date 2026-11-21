@@ -105,6 +105,7 @@ palette_writes = [{ at = 0x60, slot = "bar_colors", row = 1 }, { at = 0x6C, slot
 | `when` | Required: the counter tests, each `{ counter, cmp, value }` as a HUD field's `when` (`cmp` one of `<`, `<=`, `==`, `!=`, `>=`, `>`). The look is chosen while every one holds |
 | `screen` | A `board-screen` slot in place of the level's `screen` |
 | `clear` | `true`: the tile layer cleared, tile 0 everywhere in colour bank 0, in place of any screen (feature `level.board.looks.clear`), as a program that clears video RAM for an interlude. The counters, repeats and texts still draw over it. Not with `screen` |
+| `sprites_off` | `true`: no sprite drawn while the look is chosen (feature `level.board.looks.sprites_off`), as a program that blanks the screen while its objects stay in RAM. The bodies stay in play; the tile layer is drawn as the look says |
 | `palette` | A `board-palette` slot loaded in place of the level's. The level's `palette_writes` aren't written over it then, only the look's own, as a program that loads its colours again |
 | `palette_writes` | More bytes written into palette RAM: after the level's own writes, or with `palette` after loading it |
 

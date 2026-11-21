@@ -77,6 +77,8 @@ struct Look {
     videoram: Vec<u8>,
     /// The 64 colours as 0xRRGGBB.
     palette: [u32; 64],
+    /// No sprite drawn (`sprites_off`).
+    sprites_off: bool,
 }
 
 /// A counter test (a `Guard`), its counter by its index in the spec.
@@ -661,6 +663,7 @@ impl BoardArt {
                     stage: None,
                     videoram,
                     palette: colors,
+                    sprites_off: false,
                 })
             };
             let base = make(
@@ -691,12 +694,13 @@ impl BoardArt {
                 } else {
                     o.screen.as_deref().or(look.screen.as_deref())
                 };
-                let made = make(
+                let mut made = make(
                     o.palette.as_deref().unwrap_or(&look.palette),
                     writes,
                     screen,
                 )
                 .map_err(at_o)?;
+                made.sprites_off = o.sprites_off;
                 looks.push((tests(&o.when).map_err(at_o)?, made));
             }
             let mut numbers = Vec::with_capacity(look.counters.len());
@@ -938,7 +942,12 @@ impl BoardArt {
         let mut at: Vec<(usize, usize)> = Vec::new();
         let mut later = Vec::new();
         for (i, b) in w.bodies.iter().enumerate() {
-            if !shown.get(i).copied().unwrap_or(false) || !self.draws_kind(b.kind) {
+            // A look with its sprites off draws none: the bodies stay in
+            // play, the board shows only its tile layer.
+            if look.sprites_off
+                || !shown.get(i).copied().unwrap_or(false)
+                || !self.draws_kind(b.kind)
+            {
                 continue;
             }
             match rank.get(i).copied().map(|r| r as usize) {
@@ -2433,6 +2442,53 @@ asset = "stage2"
         assert!(err.contains("clears the tile layer"), "{err}");
     }
 
+    /// A look with its sprites off draws no sprite while its counters
+    /// choose it, the body still in the world, and its tile layer as
+    /// before; the next frame its counters don't hold draws the sprite.
+    #[test]
+    fn a_look_with_its_sprites_off_draws_none() {
+        let dir = tempfile::tempdir().unwrap();
+        lift(dir.path());
+        let text = MODEL.replace(
+            "[[levels.main.spawn]]",
+            "[[levels.main.present.board.looks]]\nwhen = [{ counter = \"bar\", cmp = \"==\", value = 1 }]\nsprites_off = true\n\n[[levels.main.spawn]]",
+        ) + "\n[counters.bar]\n";
+        let model = Model::parse(&text).unwrap();
+        assert!(
+            model
+                .features_used()
+                .contains("level.board.looks.sprites_off")
+        );
+        let said: Vec<_> = gp_model::validate::validate(&model)
+            .into_iter()
+            .filter(|p| p.message != "no evidence covers this fact")
+            .collect();
+        assert!(said.is_empty(), "{said:?}");
+        let lifted = gp_interp::Lifted::read_dir(dir.path(), &model).unwrap();
+        let spec = gp_interp::compile::compile(&model, &lifted).unwrap();
+        let art = BoardArt::load(&model, &spec, dir.path()).unwrap().unwrap();
+        let mut w = World {
+            counters: vec![0; spec.counters.len()],
+            ..Default::default()
+        };
+        w.bodies.push(gp_sim::world::Body {
+            x: gp_sim::Fx::from_int(53),
+            y: gp_sim::Fx::from_int(191),
+            alive: true,
+            ext: [0, 0x0203, 0, 0],
+            ..Default::default()
+        });
+        let with = art.draw(&w, &[true], &[u32::MAX]).unwrap();
+        assert_eq!(with.drawn.len(), 1);
+        w.counters[spec.counters.index_of("bar").unwrap()] = 1;
+        let off = art.draw(&w, &[true], &[u32::MAX]).unwrap();
+        assert!(off.drawn.is_empty());
+        assert!(off.pens.iter().all(|p| p & video::SPRITE_BIT == 0));
+        assert_eq!(at_of(&off, 0, 0), at_of(&with, 0, 0));
+        assert_eq!(off.screen, with.screen);
+        assert_eq!(w.bodies.len(), 1);
+    }
+
     /// A body's other sprite takes the entry after the body's own, else
     /// the lowest entry free after every body's own, at its offset, while
     /// its picture isn't 0.
@@ -2631,6 +2687,7 @@ asset = "stage2"
             palette: None,
             screen: None,
             clear: false,
+            sprites_off: false,
             palette_writes: Vec::new(),
         });
         b.counters[0].at = [30, 1];

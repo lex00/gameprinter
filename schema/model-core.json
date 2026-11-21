@@ -505,6 +505,10 @@
             "null"
           ]
         },
+        "sprites_off": {
+          "description": "Feature `level.board.looks.sprites_off`: no sprite drawn, as a\nprogram that blanks the screen while its objects stay in RAM (the\nbodies stay in play, only their sprites aren't drawn). The tile\nlayer is drawn as the look says.",
+          "type": "boolean"
+        },
         "when": {
           "description": "The model's counters this look is chosen by, as a HUD field's\n`when`: every test must hold.",
           "type": "array",
