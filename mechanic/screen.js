@@ -1252,6 +1252,9 @@ function queueRow(r, g, open) {
   here.addEventListener("click", (e) => { e.stopPropagation(); e.currentTarget.blur(); void pickRow(r.mechanic); });
   li.append(here);
   if (r.scores) li.append(noteLine("SCORES", r.scores, "qscore"));
+  // Its target closes it when the scoreboard's measure gets there.
+  if (r.target_says) li.append(noteLine("TARGET", r.target_says, "qscore"));
+  else if (r.measure_needed) li.append(noteLine("NO MEASURE YET", `what would measure it: ${r.measure_needed}`, "qscore"));
   // Who wrote it: the person's words from the page (by: person) stay theirs
   // (asked) once the agent's note takes the row over.
   if (r.asked) li.append(noteLine("YOU ASKED", r.asked));

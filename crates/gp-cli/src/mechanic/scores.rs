@@ -33,6 +33,16 @@ pub(crate) fn scored_queue(home: &Path, game: &str) -> Vec<Value> {
     .and_then(|b| serde_json::from_slice(&b).ok())
     .unwrap_or(Value::Null);
     let fps = fps_milli(game);
+    // A row's target with where the scoreboard stands on it.
+    if q.iter().any(|r| r["target"].is_string()) {
+        let board =
+            crate::roms_cmd::games_dir(None).and_then(|g| crate::scoreboard::board(home, &g, game));
+        for r in &mut q {
+            if let Some(t) = r["target"].as_str() {
+                r["target_says"] = json!(crate::scoreboard::target_says(board.as_ref(), t));
+            }
+        }
+    }
     for r in &mut q {
         let Some(m) = r["mechanic"].as_str().map(str::to_owned) else {
             continue;

@@ -166,6 +166,17 @@ A picture check takes about a minute a clip, so gp serve measures in the backgro
 
 Under the lines are the held-out runs: every sealed run of the game (docs/sealed.md), filed under `$GP_HOME/sealed/FOLDER/` for the game's folder name or a source ID its roms.toml lists, whichever way it was sealed (STOP AND SEAL on the screen page, the old mechanic page, or a log put there by hand). Each is named by the note it was sealed with (the part it plays, such as level 1), else `sealed run RUN`, and has its game state straight through and with resync and its longest stretch together, from `gp sealed score FOLDER RUN`. gp serve's measurer is the coordinator: it runs that command after the lines, a run at a time, when the model the gate landed, the game's hook code, the run's files or the gp change, and keeps the numbers (no frames, no presses) in the same `GAME.json` under `held`, with the score before so each says how it moved. It picks the module as for the lines: one given to gp serve, else none for a game with hooks of its own (so `gp sealed score` builds it from them). A sealed run's pictures aren't checked, since `gp picture` is one of the readers the guard refuses. With no sealed runs, the board says so and how to seal one. The model is never tuned on these runs: no worker's tool reads them, so a held-out number that moves with the corpus's says the model plays the game, not the clips.
 
+## A row's target
+
+The owner, 2026-11-20: each quest-log row states its target as a measure and closes itself when the measure gets there; a worker doesn't decide done. A target is a line of the game's scoreboard, a column and the least it must read: `LINE state|background|sprites|own at least N`, frames matched for background, sprites and an own-draws line's own (`level 1 sprites at least 330 of 336`, the `of M` only a check), the state's percent (`the demo state at least 99.5%`). `gp mechanic queue GAME ROW --target WORDS` sets it, refused when the words aren't a measure, the scoreboard has no such line, or the line hasn't that column; `--no-target` takes it off, the person's call only (refused under `GP_STEP`). A row no line can measure says what would measure it instead: `--measure-needed WORDS`. A row with neither gets a hint from `gp mechanic queue`. Held-out runs aren't targets: a row can't aim at a number no worker may look at.
+
+| What | How |
+|---|---|
+| Closing | Every 30 seconds, after it measures, gp serve's scoreboard sets done each row whose target the board meets on a current measure (not out of date, not being measured, not failed), its note "Met its target: TARGET. Now READING, measured on CLIP" (`scoreboard::close_rows`) |
+| Done by hand | `--status done` on a row with a target is refused until the board's current measure meets it, with where the measure stands |
+| A landing | A YES that lands a row with a target sets it in line with `awaiting_measure` (the time), not done. Once the line is measured after that, the row is done if it meets the target, else back to next with the reading, so the loop takes it up again |
+| Shown | `gp mechanic queue` prints `target: TARGET: now READING` (or `met`, `not measured yet`); the quest log on the loop's page has a TARGET line, or NO MEASURE YET with what would measure it |
+
 ## What is left of #43
 
 - A failed gate attempt going back to the worker with the gate's score as a new brief, and a step that fails N times becoming a problem row for the owner (part 6). Today a worker that ends with an error is tried again once with its exit and last line.

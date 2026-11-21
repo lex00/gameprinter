@@ -505,6 +505,20 @@ pub enum MechanicCmd {
         /// Take the clip off the row.
         #[arg(long, requires = "mechanic")]
         no_clip: bool,
+        /// The row's target, a measure on a line of the game's scoreboard:
+        /// LINE state|background|sprites|own at least N (level 1 sprites at
+        /// least 330 of 336; the demo state at least 99.5%). gp serve's
+        /// scoreboard closes the row when the measure gets there, and
+        /// --status done is refused before.
+        #[arg(long, requires = "mechanic", conflicts_with_all = ["no_target", "measure_needed"])]
+        target: Option<String>,
+        /// Take the target off the row (the person's, not a worker's).
+        #[arg(long, requires = "mechanic", conflicts_with = "measure_needed")]
+        no_target: bool,
+        /// For a row with no measure yet: what would measure it (a line
+        /// the scoreboard lacks, a clip still to record).
+        #[arg(long, value_name = "WORDS", requires = "mechanic")]
+        measure_needed: Option<String>,
     },
     /// A sweep of one mechanic: a grid of clips from one spot, each played
     /// on the original and on a rebuilt model in lockstep. `jump` (the
@@ -1092,11 +1106,20 @@ pub(crate) fn run(cmd: &MechanicCmd, paths: &Paths) -> Result<Outcome> {
             frames,
             look,
             no_clip,
+            target,
+            no_target,
+            measure_needed,
         } => {
             let clip = match clip {
                 Some(c) => Some(row_clip(c, frames.as_deref(), look.as_deref())?),
                 None => None,
             };
+            if *no_target && std::env::var("GP_STEP").is_ok_and(|s| !s.is_empty()) {
+                bail!(
+                    "a worker doesn't take a row's target off: the measure closes the row. Ask the person on the row (--status \"asking you\") if the target is wrong"
+                );
+            }
+            let games = crate::roms_cmd::games_dir(None);
             // A row's status set from outside the loop's steps while the
             // runner goes is a hand fix: the loop files it (crate::trouble).
             if let (Some(m), Some(st)) = (mechanic.as_deref(), status.as_deref()) {
@@ -1121,6 +1144,10 @@ pub(crate) fn run(cmd: &MechanicCmd, paths: &Paths) -> Result<Outcome> {
                     repo: repo.as_deref(),
                     clip: clip.as_ref(),
                     no_clip: *no_clip,
+                    target: target.as_deref(),
+                    no_target: *no_target,
+                    measure_needed: measure_needed.as_deref(),
+                    games: games.as_deref(),
                 },
             )
         }
@@ -1322,6 +1349,13 @@ struct RowChange<'a> {
     /// The clip the person judges on (row_clip's object).
     clip: Option<&'a Value>,
     no_clip: bool,
+    /// The row's target (crate::scoreboard::parse_target's words).
+    target: Option<&'a str>,
+    no_target: bool,
+    /// What would measure a row with no target.
+    measure_needed: Option<&'a str>,
+    /// The games checkout, for the game's scoreboard.
+    games: Option<&'a std::path::Path>,
 }
 
 /// A row's clip, as the screen page reads it: `{"n": N}` (with
@@ -1398,6 +1432,12 @@ fn queue(paths: &Paths, game: &str, mechanic: Option<&str>, c: &RowChange) -> Re
     let f = queue_file(paths, game)?;
     let mut q = read_queue(&f);
     let mut hint: Option<String> = None;
+    let board = c
+        .games
+        .and_then(|g| crate::scoreboard::board(&paths.home, g, game));
+    if let Some(t) = c.target {
+        crate::scoreboard::check_target(board.as_ref(), game, t).map_err(anyhow::Error::msg)?;
+    }
     if let Some(m) = mechanic
         && (c.status.is_some()
             || !c.known.is_empty()
@@ -1407,7 +1447,10 @@ fn queue(paths: &Paths, game: &str, mechanic: Option<&str>, c: &RowChange) -> Re
             || c.repo.is_some()
             || c.clip.is_some()
             || c.no_clip
-            || c.in_scope)
+            || c.in_scope
+            || c.target.is_some()
+            || c.no_target
+            || c.measure_needed.is_some())
     {
         if !name_ok(m) {
             bail!("a mechanic name is lower-case letters, digits and dashes: {m}");
@@ -1471,6 +1514,37 @@ fn queue(paths: &Paths, game: &str, mechanic: Option<&str>, c: &RowChange) -> Re
             if c.no_clip {
                 o.remove("clip");
             }
+            if let Some(t) = c.target {
+                o.insert("target".into(), json!(t.trim()));
+                o.remove("measure_needed");
+            }
+            if c.no_target {
+                o.remove("target");
+                o.remove("awaiting_measure");
+            }
+            if let Some(w) = c.measure_needed {
+                o.insert("measure_needed".into(), json!(w.trim()));
+            }
+        }
+        // A row with a target is done only when the measure gets there: a
+        // worker's word doesn't close it.
+        let r = q
+            .iter()
+            .find(|r| r["mechanic"] == json!(m))
+            .expect("just changed");
+        if c.status == Some("done")
+            && let Some(t) = r["target"].as_str()
+        {
+            crate::scoreboard::may_close(board.as_ref(), t)
+                .map_err(|e| anyhow::anyhow!("{m}: {e}"))?;
+        }
+        if r["status"] != json!("done")
+            && r.get("target").is_none()
+            && r.get("measure_needed").is_none()
+        {
+            hint = Some(format!(
+                "{m} has no target: give it one on a line of the scoreboard (--target \"LINE sprites at least N of M\"), or say what would measure it (--measure-needed WORDS)"
+            ));
         }
         // A question for the person with nothing to look at: say how to
         // give it one, since the page sets the clip up from the row.
@@ -1485,7 +1559,15 @@ fn queue(paths: &Paths, game: &str, mechanic: Option<&str>, c: &RowChange) -> Re
         }
         write_queue(&f, &q)?;
     }
-    let q = scores::scored_queue(&paths.home, game);
+    let mut q = scores::scored_queue(&paths.home, game);
+    // The target as this call's games checkout measures it.
+    if c.games.is_some() {
+        for r in &mut q {
+            if let Some(t) = r["target"].as_str() {
+                r["target_says"] = json!(crate::scoreboard::target_says(board.as_ref(), t));
+            }
+        }
+    }
     let text = q
         .iter()
         .map(|r| {
@@ -1516,6 +1598,11 @@ fn queue(paths: &Paths, game: &str, mechanic: Option<&str>, c: &RowChange) -> Re
             }
             if let Some(cl) = r.get("clip") {
                 l.push_str(&format!("\n    to judge on: {}", clip_words(cl)));
+            }
+            if let Some(t) = r["target_says"].as_str() {
+                l.push_str(&format!("\n    target: {t}"));
+            } else if let Some(w) = r["measure_needed"].as_str() {
+                l.push_str(&format!("\n    no measure yet; what would measure it: {w}"));
             }
             l
         })
@@ -1679,6 +1766,10 @@ mod tests {
             repo: None,
             clip: None,
             no_clip: false,
+            target: None,
+            no_target: false,
+            measure_needed: None,
+            games: None,
         };
         assert!(
             queue(&p, "test-hop", Some("hop"), &plain)
@@ -1736,6 +1827,186 @@ mod tests {
         assert!(read_queue(&f)[0].get("asked").is_none());
     }
 
+    /// A row's target is a measure on a scoreboard line: a target the
+    /// board can't measure is refused, done is refused while the measure
+    /// is short, and the board's measure closes the row once it gets there;
+    /// a landing waits in line and goes back to next if the measure after
+    /// it falls short.
+    #[test]
+    fn a_row_with_a_target_closes_on_its_measure() {
+        let d = tempfile::tempdir().unwrap();
+        let p = paths(d.path());
+        let games = tempfile::tempdir().unwrap();
+        let put = |f: &std::path::Path, s: &str| {
+            std::fs::create_dir_all(f.parent().unwrap()).unwrap();
+            std::fs::write(f, s).unwrap();
+        };
+        let g = games.path().join("test-hop");
+        put(&g.join("model.toml"), "# a model\n");
+        put(
+            &g.join("corpus.toml"),
+            "[corpus]\nformat = \"1.0.0\"\n\n[[clip]]\nid = \"hop.l1.001\"\nframes = 336\nlevel = \"field\"\n",
+        );
+        put(
+            &g.join("scoreboard.toml"),
+            "[[line]]\nname = \"Level 1\"\nclip = \"hop.l1.001\"\n",
+        );
+        // The gp that measures, as the board keys its lines.
+        put(&p.home.join("bin/gp"), "a gp");
+        let none: &[String] = &[];
+        let plain = RowChange {
+            status: None,
+            note: None,
+            worker: None,
+            known: none,
+            reads: none,
+            opens: none,
+            out_of_scope: None,
+            in_scope: false,
+            repo: None,
+            clip: None,
+            no_clip: false,
+            target: None,
+            no_target: false,
+            measure_needed: None,
+            games: Some(games.path()),
+        };
+        // A line the board lacks, and words that aren't a measure.
+        for t in ["level 9 sprites at least 1", "make the mugs nicer"] {
+            let c = RowChange {
+                status: Some("next"),
+                target: Some(t),
+                ..plain
+            };
+            assert!(queue(&p, "test-hop", Some("mugs"), &c).is_err(), "{t}");
+        }
+        // No measure yet: done is refused, and the row says so.
+        let target = "level 1 sprites at least 330 of 336";
+        let set = RowChange {
+            status: Some("agent working"),
+            note: Some("the mugs' frames"),
+            target: Some(target),
+            ..plain
+        };
+        let o = queue(&p, "test-hop", Some("mugs"), &set).unwrap();
+        assert!(
+            o.text
+                .contains(&format!("target: {target}: not measured yet")),
+            "{}",
+            o.text
+        );
+        let done = RowChange {
+            status: Some("done"),
+            note: Some("I fixed it"),
+            ..plain
+        };
+        let Err(e) = queue(&p, "test-hop", Some("mugs"), &done) else {
+            panic!("done before the target was met");
+        };
+        let e = e.to_string();
+        assert!(e.contains("closes itself"), "{e}");
+        // Measured short: still refused, and close_rows leaves it.
+        let key = |home: &std::path::Path| {
+            crate::scoreboard::key_of(home, &g, "test-hop", "hop.l1.001", &home.join("bin/gp"))
+        };
+        let measured = |n: u64| crate::scoreboard::Numbers {
+            background: [336, 336],
+            sprites: [n, 336],
+            state: None,
+            own: None,
+        };
+        crate::scoreboard::record(
+            &p.home,
+            "test-hop",
+            "hop.l1.001",
+            &key(&p.home),
+            Ok(measured(322)),
+        )
+        .unwrap();
+        assert!(queue(&p, "test-hop", Some("mugs"), &done).is_err());
+        assert!(crate::scoreboard::close_rows(&p.home, games.path(), "test-hop").is_empty());
+        // A landing waits in line; the measure after it falls short: next.
+        let f = queue_file(&p, "test-hop").unwrap();
+        let mut q = read_queue(&f);
+        q[0]["status"] = json!("in line");
+        q[0]["awaiting_measure"] = json!(1);
+        write_queue(&f, &q).unwrap();
+        crate::scoreboard::record(
+            &p.home,
+            "test-hop",
+            "hop.l1.001",
+            &key(&p.home),
+            Ok(measured(325)),
+        )
+        .unwrap();
+        assert_eq!(
+            crate::scoreboard::close_rows(&p.home, games.path(), "test-hop"),
+            vec!["mugs".to_owned()]
+        );
+        let r = &read_queue(&f)[0];
+        assert_eq!(r["status"], "next");
+        assert!(r.get("awaiting_measure").is_none());
+        assert!(
+            r["note"]
+                .as_str()
+                .unwrap()
+                .contains("now sprites 325 of 336"),
+            "{r}"
+        );
+        // Measured at the target: the board closes it.
+        crate::scoreboard::record(
+            &p.home,
+            "test-hop",
+            "hop.l1.001",
+            &key(&p.home),
+            Ok(measured(331)),
+        )
+        .unwrap();
+        assert_eq!(
+            crate::scoreboard::close_rows(&p.home, games.path(), "test-hop"),
+            vec!["mugs".to_owned()]
+        );
+        let r = &read_queue(&f)[0];
+        assert_eq!(r["status"], "done");
+        assert!(
+            r["note"].as_str().unwrap().starts_with("Met its target"),
+            "{r}"
+        );
+        // A row with no target says what would measure it.
+        let o = queue(
+            &p,
+            "test-hop",
+            Some("feel"),
+            &RowChange {
+                status: Some("next"),
+                ..plain
+            },
+        )
+        .unwrap();
+        assert!(
+            o.json["hint"]
+                .as_str()
+                .unwrap()
+                .contains("--measure-needed")
+        );
+        let o = queue(
+            &p,
+            "test-hop",
+            Some("feel"),
+            &RowChange {
+                measure_needed: Some("a scoreboard line for the jump"),
+                ..plain
+            },
+        )
+        .unwrap();
+        assert!(
+            o.text
+                .contains("what would measure it: a scoreboard line for the jump"),
+            "{}",
+            o.text
+        );
+    }
+
     /// A row asking the person carries the clip they judge on, which the
     /// page sets up; one without a clip gets a hint, and --no-clip takes it
     /// off.
@@ -1774,6 +2045,10 @@ mod tests {
             repo: None,
             clip: None,
             no_clip: false,
+            target: None,
+            no_target: false,
+            measure_needed: None,
+            games: None,
         };
         let asking = RowChange {
             status: Some("asking you"),
@@ -1792,7 +2067,11 @@ mod tests {
             ..asking
         };
         let o = queue(&p, "test-hop", Some("mug"), &with_clip).unwrap();
-        assert!(o.json.get("hint").is_none(), "{}", o.json);
+        assert!(
+            !o.json["hint"].as_str().unwrap_or("").contains("--clip"),
+            "{}",
+            o.json
+        );
         assert_eq!(o.json["queue"][0]["clip"], cl);
         let words = "to judge on: clip 1, frames 10 to 20, in game";
         assert!(o.text.contains(words), "{}", o.text);

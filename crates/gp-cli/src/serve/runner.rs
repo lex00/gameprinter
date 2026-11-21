@@ -624,9 +624,24 @@ fn settle_row_by_card(
             format!("Its card ran out unanswered ({what}). Should it land?"),
         ),
     };
+    // A row with a target closes on its measure, not on the landing: it
+    // waits in line until the scoreboard measures it again
+    // (crate::scoreboard::close_rows).
+    let (status, note) = match r["target"].as_str() {
+        Some(t) if status == "done" => (
+            "in line",
+            format!(
+                "{note} It closes itself when its target is met ({t}); the scoreboard measures it again."
+            ),
+        ),
+        _ => (status, note),
+    };
     let Some(o) = r.as_object_mut() else {
         return Ok(true);
     };
+    if status == "in line" && o.contains_key("target") {
+        o.insert("awaiting_measure".into(), json!(gp_mcp::asks::now_ms()));
+    }
     if o.get("by") == Some(&json!("person")) && !o.contains_key("asked") {
         let said = o.get("note").cloned().unwrap_or(json!(""));
         o.insert("asked".into(), said);
@@ -1266,7 +1281,8 @@ pub(crate) fn brief(setup: &Setup, step: &Value, wt: &Path, branch: &str, before
             format!("At every step say where you are on the person's page: {gp} mechanic busy {game} {row} \"WHAT YOU ARE DOING. Next: WHAT COMES NEXT\"; put what you found with {gp} mechanic log {game} {row} \"...\"."),
             format!("When you ask the person to judge something they can see, give the row the clip that shows it: gp_run mechanic queue with game {game}, mechanic {row}, status \"asking you\", the question as note, clip N (or ROW/N, or a corpus clip's id), frames A-B and look THEME (the theme it is about, or game). The row and its card then have LOOK AT IT, which sets it up on their screens, the original beside the model. When they say yes to a look in the game's own pictures, lock it: gp_run mechanic approve with game {game} and mechanic {row} (the clip must be in the corpus), and the model gate then fails a change that draws it further from the original."),
             format!("Land a change with git diff > a patch file in your worktree, then gp_run model gate with game {game}, patch FILE, message \"{game}: WHAT CHANGES. Expect: WHAT THE PERSON SEES. Checked: HOW\" and dry_run first; then the same without dry_run puts a card on the person's page and the loop runs it on their YES. Don't wait for it: say in your report that the card is up, and stop. Never run a gate from your shell, and never land onto your own branch."),
-            format!("When the item is done: {gp} mechanic queue {game} {row} --status done --note \"WHAT LANDED\". When it needs the person: --status \"asking you\" with the question in --note."),
+            format!("A row with a target (the TARGET line of mechanic show, a measure on the scoreboard) closes itself when gp serve's scoreboard measures it there; you don't set it done, and --status done is refused before. Without one, give it one as you start: gp_run mechanic queue with game {game}, mechanic {row}, target \"LINE sprites at least N of M\" (a line of {game}/scoreboard.toml), or measure_needed \"WHAT WOULD MEASURE IT\" when no line can."),
+            format!("When an item with no target is done: {gp} mechanic queue {game} {row} --status done --note \"WHAT LANDED\". A row with a target whose change is on a card: --status \"in line\"; the YES lands it and the measure closes it. When it needs the person: --status \"asking you\" with the question in --note."),
             format!("A problem you find that isn't this item's becomes a row of its own, with no card: gp_run mechanic propose with game {game}, mechanic NEW-ROW, what \"WHAT IS WRONG\", from \"WHERE YOU SAW IT\" and its test in the same call (goal \"RAM TEST\", do, stop), which goes in triage.toml so the triage tries it first. Don't fix it in this step."),
         ]);
     }
