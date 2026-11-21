@@ -222,11 +222,18 @@ fn point_at(bin: &Path, _link: &Path, short: &str) -> Result<()> {
     Ok(())
 }
 
-/// Keeps the newest [`KEEP`] builds and the linked one.
+/// Keeps the newest [`KEEP`] builds, the linked one and the ones a game's
+/// port run is on (crate::port_run), which its workers still start on.
 fn prune(bin: &Path, link: &Path) {
-    let keep = fs::read_link(link)
-        .ok()
-        .and_then(|p| p.file_name().map(|n| n.to_owned()));
+    let mut keep = bin
+        .parent()
+        .map(crate::port_run::builds)
+        .unwrap_or_default();
+    keep.extend(
+        fs::read_link(link)
+            .ok()
+            .and_then(|p| p.file_name().map(|n| n.to_owned())),
+    );
     let Ok(rd) = fs::read_dir(bin) else {
         return;
     };
@@ -241,7 +248,7 @@ fn prune(bin: &Path, link: &Path) {
         .collect();
     builds.sort();
     for (_, p) in builds.iter().rev().skip(KEEP) {
-        if p.file_name() != keep.as_deref() {
+        if p.file_name().is_none_or(|n| !keep.contains(n)) {
             let _ = fs::remove_file(p);
         }
     }
@@ -332,11 +339,15 @@ mod tests {
         }
         let link = bin.join("gp");
         std::os::unix::fs::symlink(format!("gp-{:012}", 0), &link).unwrap();
+        // A port run on an old build keeps it too.
+        let run_on = bin.join(format!("gp-{:012}", 2));
+        crate::port_run::gp_for(dir.path(), "tapper", &run_on, 1);
         prune(&bin, &link);
         assert!(
             bin.join(format!("gp-{:012}", 0)).is_file(),
             "the linked one stays"
         );
+        assert!(run_on.is_file(), "the port run's stays");
         assert!(bin.join(format!("gp-{:012}", 11)).is_file());
         assert!(!bin.join(format!("gp-{:012}", 1)).exists());
     }

@@ -421,7 +421,8 @@ fn run_yeses(ctx: &Arc<Ctx>) {
             YESES_RUNNING.fetch_sub(1, Ordering::SeqCst);
             continue;
         };
-        let gp = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("gp"));
+        let gp = yes_gp(&home, &a)
+            .unwrap_or_else(|| std::env::current_exe().unwrap_or_else(|_| PathBuf::from("gp")));
         let games = ctx.games.clone();
         // The person's own gameprinter checkout: the one the build tree is
         // a worktree of (its git's common folder's parent), on its branch.
@@ -1423,6 +1424,9 @@ fn look(ctx: &Ctx) {
     let Some(setup) = setup_of(ctx) else {
         return;
     };
+    // A game's port run ends once its rows are done and no worker is on it:
+    // its next worker starts on the newest gp (crate::port_run).
+    crate::port_run::end_finished(home, &loop_state::workers(home));
     let v = crate::loop_cmd::steps_json(&ctx.paths, Some(&ctx.games));
     let open = v["open"].as_array().cloned().unwrap_or_default();
     let todo = plan(
@@ -2035,6 +2039,19 @@ fn last_line(log: &Path) -> Option<String> {
 fn work(setup: &Setup, live: &Live, rec: &mut Value, resume: bool) -> anyhow::Result<()> {
     let step = rec["step"].clone();
     let id = step["id"].as_str().unwrap_or("").to_owned();
+    // A worker on a game's port starts on the gp its port run started on,
+    // not on one a tool landing published since (crate::port_run).
+    let pinned;
+    let setup = match port_gp(setup, rec) {
+        Some(gp) => {
+            pinned = Setup {
+                gp,
+                ..setup.clone()
+            };
+            &pinned
+        }
+        None => setup,
+    };
     let in_games = in_games(&step);
     let (wt, branch) = worktree(setup, &id, in_games)?;
     rec["worktree"] = json!(wt);
@@ -2208,6 +2225,38 @@ fn work(setup: &Setup, live: &Live, rec: &mut Value, resume: bool) -> anyhow::Re
         }
     }
     Ok(())
+}
+
+/// The gp a worker on a game's port runs (crate::port_run), written in its
+/// record: the one its record already names (a later try, or a worker
+/// taken up after a move onto a new gp), else its port run's. None for a
+/// worker on no game's port (a tools row runs on the newest gp).
+fn port_gp(setup: &Setup, rec: &mut Value) -> Option<PathBuf> {
+    let game = crate::port_run::game_of(&rec["step"])?;
+    if let Some(gp) = rec["gp"]
+        .as_str()
+        .map(PathBuf::from)
+        .filter(|g| g.is_file())
+    {
+        return Some(gp);
+    }
+    let gp = crate::port_run::gp_for(&setup.home, &game, &setup.gp, gp_mcp::asks::now_ms());
+    rec["gp"] = json!(gp);
+    rec["port_run"] = json!(game);
+    Some(gp)
+}
+
+/// The gp a yes runs on: the one the worker that raised its card ran, for a
+/// card of a game's port run ([`port_gp`]), so the call runs on the gp that
+/// made it; None for any other (the tool's own commands run on the newest).
+fn yes_gp(home: &Path, a: &Value) -> Option<PathBuf> {
+    if a["command"].as_str().is_none_or(|c| c.starts_with("tool ")) {
+        return None;
+    }
+    let id = a["step"].as_str().filter(|id| id_ok(id))?;
+    let w: Value = serde_json::from_slice(&fs::read(file(home, id)).ok()?).ok()?;
+    w["port_run"].as_str()?;
+    w["gp"].as_str().map(PathBuf::from).filter(|g| g.is_file())
 }
 
 /// Stops worker `id`: its flag when this server runs it, else its process
@@ -3069,6 +3118,76 @@ mod tests {
         setup.argv = vec!["claude".into(), "--model".into(), "haiku".into()];
         let a = claude_args(&setup, &wt, &mcp);
         assert_eq!(flag(&a, "--model"), None);
+    }
+
+    #[test]
+    fn a_worker_started_in_a_port_run_keeps_the_runs_gp_after_a_tool_landing() {
+        let t = tempfile::tempdir().unwrap();
+        let out = t.path().join("seen");
+        let mut setup = rig(
+            t.path(),
+            &format!("echo \"$GP_STEP $GP_GP\" >> {}\n", out.display()),
+        );
+        let bin = setup.home.join("bin");
+        fs::create_dir_all(&bin).unwrap();
+        let (old, new) = (bin.join("gp-aaaaaaaaaaaa"), bin.join("gp-bbbbbbbbbbbb"));
+        fs::write(&old, "").unwrap();
+        fs::write(&new, "").unwrap();
+        let (old, new) = (
+            fs::canonicalize(old).unwrap(),
+            fs::canonicalize(new).unwrap(),
+        );
+        let row = |id: &str, row: &str, repo: &str| {
+            let mut st = s(id, "agent", &[&format!("row:g/{row}"), "game:g"]);
+            st["repo"] = json!(repo);
+            st
+        };
+        setup.gp = old.clone();
+        spawn(setup.clone(), row("s0000000000c1", "a", "games"))
+            .join()
+            .unwrap();
+        // A tool landing published another gp, and gp serve moved onto it.
+        setup.gp = new.clone();
+        spawn(setup.clone(), row("s0000000000c2", "b", "games"))
+            .join()
+            .unwrap();
+        // A tools row changes gp itself: it runs on the newest.
+        let mut tool = s("s0000000000c3", "agent", &["row:g/c"]);
+        tool["repo"] = json!("tools");
+        spawn(setup.clone(), tool).join().unwrap();
+        let seen = fs::read_to_string(&out).unwrap();
+        assert!(
+            seen.contains(&format!("s0000000000c1 {}\n", old.display())),
+            "{seen}"
+        );
+        assert!(
+            seen.contains(&format!("s0000000000c2 {}\n", old.display())),
+            "{seen}"
+        );
+        assert!(
+            seen.contains(&format!("s0000000000c3 {}\n", new.display())),
+            "{seen}"
+        );
+        let mcp: Value = serde_json::from_slice(
+            &fs::read(files_dir(&setup.home, "s0000000000c2").join("mcp.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(mcp["mcpServers"]["gp"]["command"], json!(old));
+        // The YES on a card one of them raised runs on the gp that made it;
+        // a tool gate's on the newest.
+        let card = |command: &str| json!({"step": "s0000000000c2", "command": command});
+        assert_eq!(yes_gp(&setup.home, &card("model gate")), Some(old.clone()));
+        assert_eq!(yes_gp(&setup.home, &card("tool gate")), None);
+        // Moved on, the game's next worker starts on the newest.
+        assert!(crate::port_run::end(&setup.home, "g"));
+        spawn(setup.clone(), row("s0000000000c4", "d", "games"))
+            .join()
+            .unwrap();
+        let seen = fs::read_to_string(&out).unwrap();
+        assert!(
+            seen.contains(&format!("s0000000000c4 {}\n", new.display())),
+            "{seen}"
+        );
     }
 
     #[test]

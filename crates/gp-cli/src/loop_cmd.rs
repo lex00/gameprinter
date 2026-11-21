@@ -87,6 +87,12 @@ pub enum LoopCmd {
         /// comma-separated ("tapper"); "all" for every game's.
         #[arg(long)]
         games: Option<String>,
+        /// End game GAME's port run ("all" for every game's): its workers
+        /// stay on the gp the run started on, past the tool landings since,
+        /// until its rows are done; after this its next worker starts on the
+        /// newest published gp (crate::port_run).
+        #[arg(long, value_name = "GAME")]
+        move_on: Option<String>,
     },
     /// Mark an open step wrong, with why: the loop halts (next emits no
     /// steps, gp_run runs none, the runner starts no worker) until a change
@@ -313,8 +319,26 @@ pub(crate) fn run(cmd: &LoopCmd, paths: &gp_evidence::Paths) -> Result<Outcome> 
             model,
             effort,
             games,
+            move_on,
         } => {
             let home = &paths.home;
+            let mut moved = Vec::new();
+            if let Some(g) = move_on {
+                let g = g.trim();
+                let which: Vec<String> = if g == "all" {
+                    crate::port_run::all(home)
+                        .iter()
+                        .filter_map(|r| r["game"].as_str().map(str::to_owned))
+                        .collect()
+                } else {
+                    vec![g.to_owned()]
+                };
+                for g in which {
+                    if crate::port_run::end(home, &g) {
+                        moved.push(g);
+                    }
+                }
+            }
             let mut s = gp_mcp::steps::settings(home);
             if let Some(v) = steps_required {
                 s.steps_required = v == "on";
@@ -354,9 +378,25 @@ pub(crate) fn run(cmd: &LoopCmd, paths: &gp_evidence::Paths) -> Result<Outcome> 
             if changed {
                 gp_mcp::steps::save(home, &s).map_err(anyhow::Error::msg)?;
             }
+            let mut text = settings_text(&s);
+            if let Some(g) = move_on {
+                text.push_str(&if moved.is_empty() {
+                    format!("\nno port run of {} was on", g.trim())
+                } else {
+                    format!(
+                        "\nmoved on: {}'s next worker starts on the newest gp",
+                        moved.join(", ")
+                    )
+                });
+            }
+            let runs = crate::port_run::all(home);
+            for r in &runs {
+                text.push('\n');
+                text.push_str(&crate::port_run::says(home, r));
+            }
             Ok(Outcome::ok(
-                json!({"settings": s, "file": gp_mcp::steps::settings_file(home), "changed": changed}),
-                settings_text(&s),
+                json!({"settings": s, "file": gp_mcp::steps::settings_file(home), "changed": changed, "moved_on": moved, "port_runs": runs}),
+                text,
             ))
         }
         LoopCmd::Wrong { step, why } => {
@@ -712,6 +752,10 @@ fn checks(paths: &gp_evidence::Paths, games_dir: Option<&std::path::Path>) -> Va
                 );
             }
         }
+    }
+    // Each game's port run, on the gp it started on (crate::port_run).
+    for r in crate::port_run::all(home) {
+        ok(&mut lines, crate::port_run::says(home, &r));
     }
     // The home's free disk: workers' builds fill it (loop-cleans-its-builds).
     match crate::builds::disk_line(home) {

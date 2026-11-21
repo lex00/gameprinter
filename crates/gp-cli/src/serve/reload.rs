@@ -18,6 +18,11 @@
 //! process keeps its pid and start time across the exec, so `ps` alone
 //! can't tell the build it runs. `GP_SERVE_NO_RELOAD=1` keeps a server on
 //! the build it started on.
+//!
+//! The server moves, but a game's workers don't: the runner starts each
+//! worker on a game's port on the gp its port run started on, and the YES
+//! on its card runs there too (crate::port_run), until the game's rows are
+//! done or `gp loop set --move-on GAME`.
 
 use std::ffi::OsString;
 use std::fs;
