@@ -4,7 +4,7 @@
 //!
 //! | Event | What it does |
 //! |---|---|
-//! | `session-start` | Puts the loop's state in the session: gp's and the plugin's versions, whether the runner works the rows, the open yeses, and `gp progress --next` |
+//! | `session-start` | Puts the loop's state in the session: gp's and the plugin's versions, why the plugin's MCP server won't start in the session's folder when it won't, whether the runner works the rows, the open yeses, and `gp progress --next` |
 //! | `pre-tool-use` | Refuses Edit, Write, MultiEdit and NotebookEdit on a file in a game's folder of a games checkout: a game changes through gp's tools and its gate |
 //! | `stop` | Refuses the first stop while a yes the person gave hasn't been used, or a card raised in the last half hour waits for them |
 //!
@@ -54,10 +54,21 @@ pub struct Facts {
     /// first (gp_mcp::asks).
     pub asks: Vec<Value>,
     pub now_ms: u64,
+    /// Why the plugin's MCP server (`gp mcp` in the session's folder)
+    /// won't start, when it won't (crate::mcp::wont_start).
+    pub mcp_wont_start: Option<String>,
 }
 
 impl Facts {
-    fn gather(home: &Path) -> Facts {
+    fn gather(paths: &gp_evidence::Paths, cwd: Option<&Path>, event: HookEvent) -> Facts {
+        let home = &paths.home;
+        let mcp_wont_start = (event == HookEvent::SessionStart)
+            .then(|| {
+                cwd.map(Path::to_path_buf)
+                    .or_else(|| std::env::current_dir().ok())
+            })
+            .flatten()
+            .and_then(|d| crate::mcp::wont_start(&d, paths));
         let workers: std::collections::BTreeSet<String> = gp_mcp::steps::workers(home)
             .iter()
             .filter_map(|w| w["step"]["id"].as_str().map(str::to_owned))
@@ -75,6 +86,7 @@ impl Facts {
                 .map(PathBuf::from),
             asks,
             now_ms: gp_mcp::asks::now_ms(),
+            mcp_wont_start,
         }
     }
 }
@@ -194,6 +206,17 @@ pub fn versions_line(plugin: Option<&str>) -> String {
     }
 }
 
+/// The line on the gp tools when the plugin's MCP server won't start: why,
+/// what fixes it, and that Claude Code keeps the failure until /mcp
+/// reconnects it.
+pub fn mcp_line(why: &str) -> String {
+    format!(
+        "The gp tools (the plugin's MCP server, gp mcp) won't start in this folder: {why}. \
+         Tell the person that in one line with the fix it names; once it is fixed, /mcp \
+         reconnects the gp server (Claude Code keeps a failed start for a while)."
+    )
+}
+
 /// SessionStart: the loop's state, as context for the session.
 fn session_start(home: &Path, f: &Facts) -> Value {
     let mut lines = vec![versions_line(
@@ -201,6 +224,10 @@ fn session_start(home: &Path, f: &Facts) -> Value {
             .and_then(|r| plugin_version(Path::new(&r)))
             .as_deref(),
     )];
+    let mcp = f.mcp_wont_start.as_deref().filter(|_| f.step.is_none());
+    if let Some(why) = mcp {
+        lines.push(mcp_line(why));
+    }
     if let Some(s) = &f.step {
         lines.push(format!(
             "You are a worker of the loop on step {s}: do that step and nothing else, then stop with a report."
@@ -228,12 +255,22 @@ fn session_start(home: &Path, f: &Facts) -> Value {
             lines.push(format!("gp progress --next:\n{next}"));
         }
     }
-    json!({
+    session_answer(&lines, mcp)
+}
+
+/// SessionStart's answer: `lines` as the session's context, and when the
+/// MCP server won't start, why, as a message the person sees too.
+fn session_answer(lines: &[String], mcp: Option<&str>) -> Value {
+    let mut out = json!({
         "hookSpecificOutput": {
             "hookEventName": HookEvent::SessionStart.claude_name(),
             "additionalContext": lines.join("\n"),
         }
-    })
+    });
+    if let Some(why) = mcp {
+        out["systemMessage"] = json!(format!("gp: the gp tools won't start here: {why}"));
+    }
+    out
 }
 
 /// `gp progress --next`'s words, its first 40 lines.
@@ -263,7 +300,7 @@ pub(crate) fn run(event: HookEvent, paths: &gp_evidence::Paths) -> Result<Outcom
     } else {
         serde_json::from_str(&raw).context("the hook's input isn't JSON")?
     };
-    let f = Facts::gather(&paths.home);
+    let f = Facts::gather(paths, input["cwd"].as_str().map(Path::new), event);
     let answer = match event {
         HookEvent::SessionStart => Some(session_start(&paths.home, &f)),
         HookEvent::PreToolUse => pre_tool_use(&input, &f),
@@ -284,7 +321,40 @@ mod tests {
             games: None,
             asks,
             now_ms: 10 * CARD_HOLDS_STOP_MS,
+            mcp_wont_start: None,
         }
+    }
+
+    #[test]
+    fn session_start_says_why_the_gp_tools_wont_start() {
+        let why = crate::mcp::NO_REPO;
+        let v = session_answer(&[mcp_line(why)], Some(why));
+        let ctx = v["hookSpecificOutput"]["additionalContext"]
+            .as_str()
+            .unwrap();
+        assert!(ctx.contains("won't start") && ctx.contains("/mcp"), "{ctx}");
+        assert!(ctx.contains("install a released gp"), "{ctx}");
+        assert!(v["systemMessage"].as_str().unwrap().contains(why));
+        assert!(
+            session_answer(&["x".into()], None)
+                .get("systemMessage")
+                .is_none()
+        );
+        // A runner worker's server is the runner's: no line about it.
+        let t = tempfile::tempdir().unwrap();
+        let w = Facts {
+            step: Some("s0123456789ab".into()),
+            mcp_wont_start: Some(why.into()),
+            ..facts(vec![])
+        };
+        let v = session_start(t.path(), &w);
+        assert!(v.get("systemMessage").is_none());
+        assert!(
+            !v["hookSpecificOutput"]["additionalContext"]
+                .as_str()
+                .unwrap()
+                .contains("won't start")
+        );
     }
 
     fn edit(path: &Path) -> Value {

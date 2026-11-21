@@ -16,7 +16,7 @@ gp mcp --rom target/mosshop/mosshop.nes
 
 | Option | Default | What it is |
 |---|---|---|
-| `--repo DIR` | The git work tree of the current directory | Where `templates/` and `baselines/` are, and what evidence refs are read against |
+| `--repo DIR` | The git work tree of the current directory when it has `templates/`, else the files a released gp carries, else the checkout gp was built from (so a source build started outside any repo, as an agent app starts the plugin's server, still serves); with none of them it exits saying what to install | Where `templates/` and `baselines/` are, and what evidence refs are read against |
 | `--work DIR` | `$GP_HOME/work/mcp` | Working copies, and the store validation keeps results in (`DIR/.store`). It must be outside any git work tree |
 | `--rom FILE` | Found in `$GP_ROM_DIR` by hash | The original's ROM, for validation |
 | `--assets DIR` | `$GP_HOME/work/assets/<model.source>` | Lifted assets, for previews and validation, and copied into a working copy's own `assets/` by its first `assets_place` |

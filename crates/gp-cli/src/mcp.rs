@@ -49,25 +49,52 @@ fn absolute(p: &Path) -> Result<PathBuf> {
     std::path::absolute(p).with_context(|| p.display().to_string())
 }
 
-pub(crate) fn run(args: &McpArgs, paths: &Paths) -> Result<Outcome> {
-    let cwd = std::env::current_dir()?;
-    let repo = match &args.repo {
+/// What `gp mcp` says when it finds no templates/ to serve: one line, with
+/// what to install.
+pub(crate) const NO_REPO: &str = "gp mcp found no templates/ to serve: this gp carries none \
+     and the checkout it was built from is gone; install a released gp \
+     (https://github.com/lex00/gameprinter, the install page), or run it in a gameprinter \
+     checkout or give one with --repo";
+
+/// The repo `gp mcp` serves from `cwd`: `given`, else the git work tree
+/// of `cwd` when it has templates/, else the files a released gp carries,
+/// else the checkout gp was built from (a source build, the published
+/// ones too). So `gp mcp` started outside any repo, as an agent app
+/// starts a plugin's server, works on what the binary has.
+pub(crate) fn repo_for(given: Option<&Path>, cwd: &Path) -> Result<PathBuf> {
+    let has = |d: &Path| d.join("templates").is_dir();
+    let repo = match given {
         Some(r) => absolute(r)?,
-        // A released gp's own templates when the folder it runs in has
-        // none (a theme's repo, or no repo at all).
-        None => match gp_evidence::paths::enclosing_git_work_tree(&cwd) {
-            Some(t) if t.join("templates").is_dir() => t,
-            found => match crate::bundle::root().filter(|r| r.join("templates").is_dir()) {
-                Some(r) => r,
-                None => found
-                    .ok_or_else(|| anyhow!("not in a git work tree; give the repo with --repo"))?,
-            },
-        },
+        None => gp_evidence::paths::enclosing_git_work_tree(cwd)
+            .filter(|t| has(t))
+            .or_else(|| crate::bundle::root().filter(|r| has(r)))
+            .or_else(|| {
+                let b = crate::repo::built();
+                has(&b).then(|| b.canonicalize().unwrap_or(b))
+            })
+            .ok_or_else(|| anyhow!(NO_REPO))?,
     };
-    if !repo.join("templates").is_dir() {
+    if !has(&repo) {
         bail!("{} has no templates/", repo.display());
     }
-    let work = match &args.work {
+    Ok(repo)
+}
+
+/// Why `gp mcp` with no options, started in `cwd`, would not start, or
+/// None when it would: the session-start hook says so (crate::loop_hook),
+/// since an agent app that saw the server fail keeps the failure a while.
+pub(crate) fn wont_start(cwd: &Path, paths: &Paths) -> Option<String> {
+    let check = || -> Result<()> {
+        repo_for(None, cwd)?;
+        work_for(None, paths)?;
+        Ok(())
+    };
+    check().err().map(|e| format!("{e:#}"))
+}
+
+/// The working copies' folder, made, refused inside a git work tree.
+fn work_for(given: Option<&Path>, paths: &Paths) -> Result<PathBuf> {
+    let work = match given {
         Some(w) => absolute(w)?,
         None => paths.home.join("work").join("mcp"),
     };
@@ -85,6 +112,12 @@ pub(crate) fn run(args: &McpArgs, paths: &Paths) -> Result<Outcome> {
         );
     }
     std::fs::create_dir_all(&work).with_context(|| format!("creating {}", work.display()))?;
+    Ok(work)
+}
+
+pub(crate) fn run(args: &McpArgs, paths: &Paths) -> Result<Outcome> {
+    let repo = repo_for(args.repo.as_deref(), &std::env::current_dir()?)?;
+    let work = work_for(args.work.as_deref(), paths)?;
     let config = gp_mcp::Config {
         gp: std::env::current_exe().context("finding the gp binary")?,
         repo,
@@ -106,4 +139,40 @@ pub(crate) fn run(args: &McpArgs, paths: &Paths) -> Result<Outcome> {
     gp_mcp::server::serve_stdio(config, env!("CARGO_PKG_VERSION")).map_err(anyhow::Error::msg)?;
     // stdout was the MCP channel, so nothing more is printed there.
     Ok(Outcome::ok(shown, String::new()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Started in a folder of no repo, as an agent app starts the plugin's
+    /// server, a source build serves the checkout it was built from.
+    #[test]
+    fn gp_mcp_outside_a_repo_serves_the_checkout_it_was_built_from() {
+        let t = tempfile::tempdir().unwrap();
+        let repo = repo_for(None, t.path()).unwrap();
+        assert!(repo.join("templates").is_dir(), "{}", repo.display());
+        let built = crate::repo::built().canonicalize().unwrap();
+        assert_eq!(repo.canonicalize().unwrap(), built);
+        let home = t.path().join("home");
+        let paths = Paths {
+            store: home.join("store"),
+            roms: home.join("roms"),
+            home,
+        };
+        assert_eq!(wont_start(t.path(), &paths), None);
+        // A git work tree without templates/ (a theme's repo) too.
+        std::fs::create_dir(t.path().join(".git")).unwrap();
+        assert_eq!(
+            repo_for(None, t.path()).unwrap().canonicalize().unwrap(),
+            built
+        );
+        // A --repo without templates/ is still refused, in one line.
+        let e = repo_for(Some(t.path()), t.path()).unwrap_err().to_string();
+        assert!(e.ends_with("has no templates/"), "{e}");
+        assert!(!NO_REPO.contains('\n'));
+        // Working copies inside a git work tree: it says why it won't start.
+        let why = wont_start(t.path(), &paths).unwrap();
+        assert!(why.contains("working copies go outside it"), "{why}");
+    }
 }

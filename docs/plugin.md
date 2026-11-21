@@ -28,7 +28,7 @@ Each hook runs `gp loop hook EVENT` (crates/gp-cli/src/loop_hook.rs), which read
 
 | Event | What it does |
 |---|---|
-| `session-start` | Puts in the session gp's and the plugin's versions, whether the loop's runner works the rows (then the session watches the setup with `gp loop health`) or not (then it calls `next`), each yes the person gave that hasn't been used, and `gp progress --next` |
+| `session-start` | Puts in the session gp's and the plugin's versions; when `gp mcp` would not start in the session's folder (no templates/ to serve, or working copies inside a git work tree), why and what to install, shown to the person too, with `/mcp` to reconnect once fixed (Claude Code keeps a failed start for a while); whether the loop's runner works the rows (then the session watches the setup with `gp loop health`) or not (then it calls `next`), each yes the person gave that hasn't been used, and `gp progress --next` |
 | `pre-tool-use` | Refuses Edit, Write, MultiEdit and NotebookEdit on a file in a game's folder (one holding `roms.toml`) of a games checkout (its parent is `$GP_GAMES_DIR` or a git work tree's root), and says to change it through gp's tools and `gp model gate`. A copy of a game outside a checkout is the person's to edit |
 | `stop` | Refuses the first stop while a yes on the person's page hasn't been used (call `gp_run` again with its `ask_id`), or while a card raised in the last half hour waits for them (wait with `next`, or say the card is up). A second stop in a row goes, as Claude Code's `stop_hook_active` says. A runner worker's cards don't hold it |
 
