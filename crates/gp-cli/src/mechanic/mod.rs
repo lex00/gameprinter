@@ -46,6 +46,7 @@ use gp_evidence::Paths;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+pub(crate) mod archive;
 mod autoplay;
 mod demo;
 pub(crate) mod detect;
@@ -448,10 +449,17 @@ pub enum MechanicCmd {
     /// line. With `--status`, adds the mechanic or changes it; without,
     /// prints the quest log. A row whose clips are in the corpus takes a
     /// line of scores from the gate's status.json, and keeps its typed
-    /// status; the typed note is shown under it.
+    /// status; the typed note is shown under it. A row done for an hour is
+    /// moved to the game's archive by gp serve's runner; `--archived` lists
+    /// the archive instead (with a row's name, that row; with words, the
+    /// rows that hold them).
     Queue {
         game: String,
         mechanic: Option<String>,
+        /// List the archive of finished rows: their notes, facts, session
+        /// and landed commit, newest closed first.
+        #[arg(long, conflicts_with_all = ["status", "known", "reads", "opens", "out_of_scope", "in_scope", "repo", "clip", "no_clip", "target", "no_target", "measure_needed"])]
+        archived: bool,
         #[arg(long, requires = "mechanic", value_parser = ["done", "asking you", "agent working", "in line", "next"])]
         status: Option<String>,
         /// One plain line: what is known, or what it's waiting on.
@@ -1122,7 +1130,16 @@ pub(crate) fn run(cmd: &MechanicCmd, paths: &Paths) -> Result<Outcome> {
             target,
             no_target,
             measure_needed,
+            archived,
         } => {
+            if *archived {
+                if !name_ok(game) {
+                    bail!("a game name is lower-case letters, digits and dashes: {game}");
+                }
+                let rows = archive::find(&paths.home, game, mechanic.as_deref());
+                let text = archive::words(&rows, gp_mcp::asks::now_ms());
+                return Ok(Outcome::ok(json!({"archived": rows}), text));
+            }
             let clip = match clip {
                 Some(c) => Some(row_clip(c, frames.as_deref(), look.as_deref())?),
                 None => None,
@@ -1494,7 +1511,9 @@ fn queue(paths: &Paths, game: &str, mechanic: Option<&str>, c: &RowChange) -> Re
             if c.status.is_none() {
                 bail!("{m} isn't in the quest log: give it a --status");
             }
-            q.push(json!({"mechanic": m}));
+            // An archived row taken up again comes back with its history.
+            let back = archive::bring_back(&paths.home, game, |r| r["mechanic"] == json!(m))?;
+            q.push(back.unwrap_or_else(|| json!({"mechanic": m})));
         }
         let r = q
             .iter_mut()
@@ -1818,6 +1837,16 @@ mod tests {
             &[json!({"mechanic": "trouble-x", "status": "next", "note": "Proposed by the loop: x"})],
         )
         .unwrap();
+        // An archived row shows its note too.
+        write_queue(
+            &dir.join("archive.json"),
+            &[json!({"mechanic": "old-row", "status": "done", "note": "Landed: y"})],
+        )
+        .unwrap();
+        let v = Session::row_state(&p, "test-hop", "old-row")
+            .unwrap()
+            .unwrap();
+        assert_eq!(v["prompt"], "Landed: y");
         let v = Session::row_state(&p, "test-hop", "trouble-x")
             .unwrap()
             .unwrap();

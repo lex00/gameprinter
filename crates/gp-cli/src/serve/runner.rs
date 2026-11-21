@@ -347,6 +347,7 @@ pub(crate) fn start(ctx: Arc<Ctx>) {
         // gp loop health. The first check is a minute in, after the first
         // heartbeats.
         let mut health_at = Instant::now() + Duration::from_secs(60);
+        let mut archive_at = Instant::now() + Duration::from_secs(60);
         loop {
             if Instant::now() >= health_at {
                 health_at = Instant::now() + HEALTH_EVERY;
@@ -366,6 +367,12 @@ pub(crate) fn start(ctx: Arc<Ctx>) {
                     .contains(id)
             });
             settle_card_rows(&ctx.paths.home);
+            // Rows long finished leave the quest log for its archive, so the
+            // page shows the work going on.
+            if Instant::now() >= archive_at {
+                archive_at = Instant::now() + ARCHIVE_EVERY;
+                archive_finished(&ctx.paths.home, gp_mcp::asks::now_ms());
+            }
             // The person's yeses run even while gp serve moves onto a newly
             // published gp (serve/reload.rs): the move waits for the
             // workers' steps, which can take half an hour, and a yes must
@@ -729,6 +736,65 @@ fn settle_row_by_card(
     }
     crate::mechanic::session::write_queue(&f, &q)?;
     Ok(true)
+}
+
+/// How often the runner archives finished rows.
+const ARCHIVE_EVERY: Duration = Duration::from_secs(60);
+
+/// Moves each game's rows done for an hour, with no live worker and no
+/// card still open or unsettled, from its quest log to its archive
+/// (crate::mechanic::archive), with the commit the row's newest landed
+/// card names.
+fn archive_finished(home: &Path, now: u64) {
+    use crate::mechanic::archive::{Beside, commit_of, sweep};
+    let recent = gp_mcp::asks::OPEN_FOR_MS + CARD_SETTLES_FOR_MS;
+    let cards: Vec<(Value, (String, String))> = gp_mcp::asks::all(home)
+        .into_iter()
+        .filter(|a| now.saturating_sub(a["made_ms"].as_u64().unwrap_or(0)) < recent)
+        .filter_map(|a| {
+            let row = ask_row(home, &a)?;
+            Some((a, row))
+        })
+        .collect();
+    let held: BTreeSet<String> = loop_state::workers(home)
+        .iter()
+        .filter(|w| loop_state::holds(w))
+        .flat_map(|w| w["step"]["touches"].as_array().cloned().unwrap_or_default())
+        .filter_map(|t| t.as_str().map(str::to_owned))
+        .collect();
+    let Ok(dir) = fs::read_dir(home.join("mechanics")) else {
+        return;
+    };
+    for e in dir.flatten() {
+        let game = e.file_name().to_string_lossy().into_owned();
+        if !crate::mechanic::session::name_ok(&game) || !e.path().join("queue.json").is_file() {
+            continue;
+        }
+        let beside = |row: &str| {
+            let mine = || {
+                cards
+                    .iter()
+                    .filter(|(_, (g, r))| *g == game && r == row)
+                    .map(|(a, _)| a)
+            };
+            let landed = mine()
+                .filter(|a| a["ran"]["state"] == json!("landed"))
+                .max_by_key(|a| a["made_ms"].as_u64().unwrap_or(0))
+                .map(|a| {
+                    json!({
+                        "card": a["id"],
+                        "what": card_what(a),
+                        "commit": commit_of(&a["ran"]["lines"]),
+                    })
+                });
+            Beside {
+                worker: held.contains(&format!("row:{game}/{row}")),
+                card: mine().any(|a| a["row_settled"] != json!(true)),
+                landed,
+            }
+        };
+        let _ = sweep(home, &game, now, beside);
+    }
 }
 
 /// One gate the runner runs at a time (a yes, or the clips it keeps): two
@@ -2684,6 +2750,78 @@ mod tests {
             ask_row(home, &gp_mcp::asks::read(home, "ask-2").unwrap()),
             Some(("g".into(), "b".into()))
         );
+    }
+
+    /// The runner archives a row done for an hour with the commit its
+    /// landed card names; a row with a live worker, one whose card isn't
+    /// settled yet and one done lately stay on the page.
+    #[test]
+    fn a_finished_row_goes_to_the_archive_with_its_landed_commit() {
+        let t = tempfile::tempdir().unwrap();
+        let home = t.path();
+        let now = gp_mcp::asks::now_ms();
+        let old = now - 2 * 60 * 60 * 1000;
+        let f = home.join("mechanics/g/queue.json");
+        fs::create_dir_all(f.parent().unwrap()).unwrap();
+        fs::write(
+            &f,
+            json!([
+                {"mechanic": "a", "status": "done", "note": "Landed on your YES: the glass froths.", "changed_ms": old},
+                {"mechanic": "b", "status": "done", "changed_ms": old},
+                {"mechanic": "c", "status": "done", "changed_ms": old},
+                {"mechanic": "d", "status": "done", "changed_ms": now - 1000},
+                {"mechanic": "e", "status": "next", "changed_ms": old},
+            ])
+            .to_string(),
+        )
+        .unwrap();
+        let asks = gp_mcp::asks::dir(home);
+        fs::create_dir_all(&asks).unwrap();
+        fs::create_dir_all(loop_state::workers_dir(home)).unwrap();
+        let step = |n: u64, row: &str, extra: Value| {
+            let id = format!("s{n:012x}");
+            let mut w =
+                json!({"step": {"id": id, "touches": [format!("row:g/{row}")]}, "state": "done"});
+            for (k, v) in extra.as_object().unwrap() {
+                w[k] = v.clone();
+            }
+            fs::write(file(home, &id), w.to_string()).unwrap();
+            id
+        };
+        let card = |n: u64, row: &str, extra: Value| {
+            let id = step(n, row, json!({}));
+            let mut a = json!({"id": format!("ask-{n}"), "made_ms": now - 3 * 60 * 60 * 1000 + n, "step": id, "game": "g",
+                "command": "tool gate", "argv": ["--message", "the glass froths. Expect: froth"]});
+            for (k, v) in extra.as_object().unwrap() {
+                a[k] = v.clone();
+            }
+            fs::write(asks.join(format!("ask-{n}.json")), a.to_string()).unwrap();
+        };
+        card(
+            1,
+            "a",
+            json!({"state": "used", "row_settled": true,
+                "ran": {"state": "landed", "done_ms": old, "lines": ["PASS: landed 0123abcd on main"]}}),
+        );
+        card(2, "c", json!({"state": "yes"}));
+        step(
+            3,
+            "b",
+            json!({"state": "working", "pid": std::process::id()}),
+        );
+        archive_finished(home, now);
+        let left: Vec<String> = crate::mechanic::session::read_queue(&f)
+            .iter()
+            .filter_map(|r| r["mechanic"].as_str().map(str::to_owned))
+            .collect();
+        assert_eq!(left, vec!["b", "c", "d", "e"]);
+        let a = crate::mechanic::archive::read_archive(home, "g");
+        assert_eq!(a.len(), 1);
+        assert_eq!(a[0]["mechanic"], "a");
+        assert_eq!(a[0]["landed"]["commit"], "0123abcd");
+        assert_eq!(a[0]["landed"]["card"], "ask-1");
+        assert_eq!(a[0]["landed"]["what"], "the glass froths");
+        assert_eq!(a[0]["closed_ms"], json!(old));
     }
 
     /// A clip the gate held out waits on its session's row with why: a

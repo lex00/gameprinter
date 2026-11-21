@@ -102,6 +102,12 @@ Each quest-log row of a game the loop works on (`games`) whose status is `next` 
 
 A row whose item is in the game's triage.toml and that no triage has tried (no `triage` on its quest-log row, not done, not out of scope) is a step of the tools' before the agent works on it: `gp mechanic triage GAME ROW...` with just those rows, so a row added after the first triage is tried too (next.rs, the tools' free work).
 
+## Finished rows go to the archive
+
+The quest log shows the work going on, not its history (the owner, 2026-11-21). Once a minute gp serve's runner moves each row that has been done for an hour (its `changed_ms`), with no live worker's step touching it and no card of it still open, running or not yet settled onto the row, from `$GP_HOME/mechanics/GAME/queue.json` to `archive.json` beside it (crates/gp-cli/src/mechanic/archive.rs, serve/runner.rs `archive_finished`). The archived row keeps everything it had (note, asked, known, read, open, target, trouble) and gets `closed_ms` (its last change), `archived_ms`, `session` (its folder, which stays where it is, and how many clips and turns it holds) and `landed` (the newest landed card of the row: its id, what it did, and the commit from the gate's "PASS: landed K" line). A row that isn't done stays, whatever its age; out of scope rows that are done go too, and the corpus import's out-of-scope list and the findings (findings.rs) read the archive as well as the log.
+
+The archive is read by asking an agent: `gp mechanic queue GAME --archived` lists it, newest closed first, and `--archived ROW` gives that row, or with words the rows whose name, note, asked words or facts hold them (`--json` for all of it). `gp mechanic show GAME ROW` still shows an archived row. A row the loop takes up again comes back out of the archive with its history rather than being made anew: `gp mechanic queue GAME ROW --status S`, a proposal of the same row seen in a new clip (one from a clip it names leaves it archived, as it leaves a done row done) and the same trouble again.
+
 ## The loop proposes rows
 
 What the loop finds becomes quest-log rows on its own, with no card (the owner, 2026-11-19). `gp mechanic propose GAME ROW --what WORDS --from WHERE` adds the row as next, its note "Proposed by the loop: WHAT (from WHERE)", with `by = "loop"` and `from` on it; a row the quest log has, whatever its status, is left as it is, so a row the person finished or put out of scope stays so (crates/gp-cli/src/mechanic/propose.rs).

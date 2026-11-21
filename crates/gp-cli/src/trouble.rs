@@ -105,6 +105,14 @@ pub(crate) fn file(paths: &Paths, t: &Trouble, now: u64) -> Result<Value> {
     let _one = WRITING.lock().unwrap_or_else(|e| e.into_inner());
     let f = queue_file(paths, t.game)?;
     let mut q = read_queue(&f);
+    // Trouble that comes back to an archived row brings the row back.
+    if !q.iter().any(|r| r["trouble"]["key"] == json!(k))
+        && let Some(r) = crate::mechanic::archive::bring_back(&paths.home, t.game, |r| {
+            r["trouble"]["key"] == json!(k)
+        })?
+    {
+        q.push(r);
+    }
     if let Some(r) = q.iter_mut().find(|r| r["trouble"]["key"] == json!(k)) {
         let count = r["trouble"]["count"].as_u64().unwrap_or(1) + 1;
         r["trouble"]["count"] = json!(count);
@@ -456,6 +464,23 @@ mod tests {
         write_queue(&f, &q).unwrap();
         file(&p, &t, 4000).unwrap();
         assert_eq!(read_queue(&f)[0]["status"], "done");
+
+        // Archived, the same trouble brings its row back rather than
+        // filing a new one.
+        let mut q = read_queue(&f);
+        q[0]["scope"] = json!(null);
+        let a = crate::mechanic::archive::archive_file(&p.home, "made-up");
+        write_queue(&a, &q).unwrap();
+        write_queue(&f, &[]).unwrap();
+        let back = file(&p, &t, 5000).unwrap();
+        assert_eq!(
+            (back["added"].clone(), back["came_back"].clone()),
+            (json!(false), json!(true))
+        );
+        let q = read_queue(&f);
+        assert_eq!(q.len(), 1);
+        assert_eq!(q[0]["status"], "next");
+        assert!(read_queue(&a).is_empty());
     }
 
     /// The page's same error within a minute is filed once.

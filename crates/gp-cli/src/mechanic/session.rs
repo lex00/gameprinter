@@ -153,7 +153,9 @@ impl Session {
     pub fn row_state(paths: &Paths, game: &str, mechanic: &str) -> Result<Option<Value>> {
         Self::dir_of(paths, game, mechanic)?;
         let q = read_queue(&queue_file(paths, game)?);
+        let archived = super::archive::read_archive(&paths.home, game);
         Ok(q.iter()
+            .chain(&archived)
             .find(|r| r["mechanic"] == json!(mechanic))
             .map(|row| {
                 json!({

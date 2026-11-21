@@ -571,7 +571,11 @@ fn from_farm(paths: &Paths, game: &str, out: &mut Vec<Value>) -> Result<()> {
 fn from_queue_and_rules(paths: &Paths, game: &str, out: &mut Vec<Value>) -> Result<()> {
     let root = paths.home.join("mechanics").join(game);
     let qf = root.join("queue.json");
-    for row in crate::mechanic::session::read_queue(&qf) {
+    let archived = crate::mechanic::archive::read_archive(&paths.home, game);
+    for row in crate::mechanic::session::read_queue(&qf)
+        .into_iter()
+        .chain(archived)
+    {
         let m = row["mechanic"].as_str().unwrap_or("").to_owned();
         for k in row["known"].as_array().into_iter().flatten() {
             let Some(k) = k.as_str() else { continue };

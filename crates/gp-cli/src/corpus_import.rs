@@ -261,13 +261,15 @@ struct Left {
     why: String,
 }
 
-/// The game's quest log rows marked out of scope, with why.
+/// The game's quest log rows marked out of scope, with why, archived ones
+/// too (crate::mechanic::archive).
 fn out_of_scope(home: &Path, game: &str) -> BTreeMap<String, String> {
-    let rows: Vec<serde_json::Value> =
+    let mut rows: Vec<serde_json::Value> =
         fs::read_to_string(home.join("mechanics").join(game).join("queue.json"))
             .ok()
             .and_then(|t| serde_json::from_str(&t).ok())
             .unwrap_or_default();
+    rows.extend(crate::mechanic::archive::read_archive(home, game));
     rows.iter()
         .filter(|r| r["scope"] == json!("out"))
         .filter_map(|r| {

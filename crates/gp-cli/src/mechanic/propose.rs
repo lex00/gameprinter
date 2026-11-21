@@ -102,11 +102,31 @@ pub(crate) fn propose(paths: &Paths, game_dir: Option<&Path>, p: &Proposal) -> R
     }
     let f = queue_file(paths, p.game)?;
     let mut q = read_queue(&f);
-    let at = q.iter().position(|r| r["mechanic"] == json!(p.row));
-    let had_row = at.is_some();
+    let mut at = q.iter().position(|r| r["mechanic"] == json!(p.row));
+    // An archived row is still the row: proposed again it stays archived,
+    // as a done row stays done, unless it was seen in a new clip, when it
+    // comes back to the quest log to be reopened below.
+    let mut archived = false;
+    if at.is_none() {
+        let is_it = |r: &Value| r["mechanic"] == json!(p.row);
+        if let Some(r) = super::archive::read_archive(&paths.home, p.game)
+            .into_iter()
+            .find(is_it)
+        {
+            archived = true;
+            if p.clips.iter().any(|c| !names_clip(&r, c))
+                && let Some(r) = super::archive::bring_back(&paths.home, p.game, is_it)?
+            {
+                q.push(r);
+                at = Some(q.len() - 1);
+            }
+        }
+    }
+    let had_row = at.is_some() || archived;
     let mut new_clips: Vec<&String> = Vec::new();
     let mut reopened = false;
     match at {
+        None if archived => {}
         None => {
             let mut r = json!({
                 "mechanic": p.row,
@@ -363,6 +383,35 @@ mod tests {
         write_queue(&f, &q).unwrap();
         propose(&p, None, &first).unwrap();
         assert_eq!(read_queue(&f)[0]["status"], "done");
+
+        // Archived, the row stays archived when proposed again from a clip
+        // it names, and comes back reopened from a new one: never made anew.
+        let a = super::super::archive::archive_file(&p.home, "tapper");
+        write_queue(&a, &read_queue(&f)).unwrap();
+        write_queue(&f, &[]).unwrap();
+        let v = propose(&p, None, &first).unwrap();
+        assert_eq!(v["added"], json!(false));
+        assert!(read_queue(&f).is_empty());
+        let l2 = vec!["tapper.l2.001".to_owned()];
+        propose(
+            &p,
+            None,
+            &Proposal {
+                clips: &l2,
+                ..first
+            },
+        )
+        .unwrap();
+        let q = read_queue(&f);
+        assert_eq!(q.len(), 1);
+        assert_eq!(q[0]["status"], "next");
+        assert!(
+            q[0]["note"]
+                .as_str()
+                .unwrap()
+                .starts_with("Landed: level 1's start")
+        );
+        assert!(read_queue(&a).is_empty());
     }
 
     /// A test the triage can't read writes nothing: no row, no item.
