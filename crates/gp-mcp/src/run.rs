@@ -1028,6 +1028,13 @@ fn the_yes(
             Ok("no page is open for this home (gp serve isn't running), so this ran on your word that the person said yes to this exact action, as before; with the page open, their YES on the page's card is needed".to_owned())
         }
         found => {
+            // A landing's card names the clip that shows it.
+            if path == "model gate"
+                && let Some(why) =
+                    asks::gate_card_refused(&built.values, |n| built.given.contains(n))
+            {
+                return Err(refusal(format!("gp {path}: {why}."), None));
+            }
             let other = matches!(found, asks::Found::Other(_));
             let cost = (ask == policy::Ask::Spend && c.args.iter().any(|d| d.name == "dry-run"))
                 .then(|| dry_run_cost(config, c, path, &built.argv))

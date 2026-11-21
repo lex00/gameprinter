@@ -90,6 +90,19 @@ pub struct GateArgs {
     /// gated. A gate with --no-rebase or --dry-run batches with no other.
     #[arg(long)]
     pub no_rebase: bool,
+    /// The clip that shows what the change does: N (a clip of the step's
+    /// row), ROW/N, or a corpus clip's id (tapper.attract.001). Its card on
+    /// the person's page gets LOOK AT IT, which sets the clip up on their
+    /// screens. The gate itself doesn't read it; gp_run refuses a card for a
+    /// patch without it.
+    #[arg(long)]
+    pub clip: Option<String>,
+    /// The frames of --clip to watch: A-B or A, from the clip's start.
+    #[arg(long, requires = "clip")]
+    pub frames: Option<String>,
+    /// The pictures to watch --clip in: a theme's name, or game.
+    #[arg(long, requires = "clip")]
+    pub look: Option<String>,
 }
 
 /// What every try reads.

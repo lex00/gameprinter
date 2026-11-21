@@ -1240,7 +1240,8 @@ function noteLine(who, text, cls) {
 function drawQueue() {
   const q = $("queue");
   if (pressing) return;
-  const key = JSON.stringify([session?.mechanic, rows, clipsBy.map((g) => [g.mechanic, (g.talk ?? []).length])]);
+  const cardClips = asksNow.filter((a) => a.clip && !a.ran).map((a) => [askRow(a), a.clip]);
+  const key = JSON.stringify([session?.mechanic, rows, clipsBy.map((g) => [g.mechanic, (g.talk ?? []).length]), cardClips]);
   if (q.dataset.key === key) { markTarget(); return; }
   // Details opened stay open when the log is drawn again.
   const opened = new Set([...q.querySelectorAll("li[data-mechanic]")].filter((li) => [...li.querySelectorAll("details")].some((d) => d.open)).map((li) => li.dataset.mechanic));
@@ -1290,7 +1291,8 @@ function queueRow(r, g, open) {
   // (asked) once the agent's note takes the row over.
   if (r.asked) li.append(noteLine("YOU ASKED", r.asked));
   if (r.note) li.append(noteLine(r.by === "person" && !r.asked ? "YOU WROTE" : "AGENT WROTE", r.note));
-  if (r.clip) li.append(judgeButton(r));
+  const judge = rowToJudge(r);
+  if (judge) li.append(judgeButton(judge));
   const yes = confirmButton(r);
   if (yes) li.append(yes);
   const turns = talkOf(r.mechanic);
@@ -1439,6 +1441,23 @@ const asksOpen = new Set();
 let asksDrawn = "";
 let asksShown = 0; // the yes cards in YOUR TURN now
 let asksNow = []; // those cards, as /api/asks last gave them
+
+/** The quest-log row card `a` is for: the server's `row` (GAME/ROW, from
+ * the step's worker record, even after the step closed), else its open
+ * step's row:GAME/ROW; null for a card raised outside the loop. */
+function askRow(a) {
+  if (a.row) return a.row.split("/").slice(1).join("/");
+  const step = a.step ? openSteps.find((x) => x.id === a.step) : null;
+  return (step?.touches ?? []).find((t) => t.startsWith("row:"))?.split("/").slice(1).join("/") ?? null;
+}
+
+/** Row `r` with the clip to judge it on: its own, else that of an open
+ * card for it (a gate's clip and frames), else null. */
+function rowToJudge(r) {
+  if (r.clip) return r;
+  const a = asksNow.find((x) => x.clip && !x.ran && askRow(x) === r.mechanic);
+  return a ? { ...r, clip: a.clip } : null;
+}
 async function refreshAsks() {
   let list = [];
   const now = Date.now();
@@ -1503,9 +1522,7 @@ async function refreshAsks() {
     // click opens; a card with no step was raised outside the loop.
     // The server names it (`row`, from the step's worker record) even after
     // the step closed; else an open step's.
-    const step = a.step ? openSteps.find((x) => x.id === a.step) : null;
-    const row = a.row ? a.row.split("/").slice(1).join("/")
-      : (step?.touches ?? []).find((t) => t.startsWith("row:"))?.split("/").slice(1).join("/") ?? null;
+    const row = askRow(a);
     if (row) {
       const go = el("button", "ask-row", `FOR ${row.toUpperCase()}`);
       go.type = "button";
@@ -1515,9 +1532,14 @@ async function refreshAsks() {
         toQuestLog(row);
       });
       card.append(go);
-      // The row's clip to judge on, when it has one: the card shows it too.
+      // The clip the card's change is seen in (a gate's clip and frames),
+      // else the row's clip to judge on.
       const r = rows.find((x) => x.mechanic === row);
-      if (r?.clip) card.append(judgeButton(r));
+      if (a.clip) card.append(judgeButton({ ...(r ?? { mechanic: row }), clip: a.clip }));
+      else if (r?.clip) card.append(judgeButton(r));
+    } else if (a.clip?.id) {
+      card.append(judgeButton({ mechanic: a.game ?? "the change", clip: a.clip }));
+      card.append(el("span", "ask-detail", "Raised outside the loop: no quest-log item, no step."));
     } else {
       card.append(el("span", "ask-detail", a.step
         ? `For step ${a.step}, no longer open.`

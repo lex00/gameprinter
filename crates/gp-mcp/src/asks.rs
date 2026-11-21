@@ -495,6 +495,12 @@ pub fn make(home: &Path, n: &New) -> Result<Value, String> {
     if let Some((h, _)) = &n.held {
         v["held"] = h.clone();
     }
+    // The clip that shows the change: the card gets LOOK AT IT.
+    if n.command == "model gate"
+        && let Some(c) = gate_clip(n.values)
+    {
+        v["clip"] = c;
+    }
     // The step the call cited, or a runner's worker's own: the page shows
     // the card with the step's quest-log row, and its list of workers this
     // worker as waiting for a yes.
@@ -507,6 +513,67 @@ pub fn make(home: &Path, n: &New) -> Result<Value, String> {
     }
     write(home, &v)?;
     Ok(v)
+}
+
+/// A model gate call's clip (its clip, frames and look), as the page reads
+/// a row's: `{"n": N}`, `{"mechanic": ROW, "n": N}` or `{"id": ID}`, with
+/// `from`, `to` and `look`. None without a clip or with one it can't read.
+pub fn gate_clip(values: &[(String, String)]) -> Option<Value> {
+    let clip = value(values, &["clip"])?.trim();
+    let name = |s: &str| {
+        !s.is_empty()
+            && s.chars()
+                .all(|c| c.is_ascii_alphanumeric() || "._-".contains(c))
+    };
+    let mut v = if let Ok(n) = clip.parse::<u64>() {
+        json!({"n": n})
+    } else if let Some((m, n)) = clip.split_once('/')
+        && let Ok(n) = n.parse::<u64>()
+        && name(m)
+    {
+        json!({"mechanic": m, "n": n})
+    } else if name(clip) {
+        json!({"id": clip})
+    } else {
+        return None;
+    };
+    if let Some(f) = value(values, &["frames"]) {
+        let num = |s: &str| s.trim().parse::<u64>().ok();
+        let (a, b) = match f.split_once('-') {
+            Some((a, b)) => (num(a)?, num(b)?),
+            None => (num(f)?, num(f)?),
+        };
+        if b < a {
+            return None;
+        }
+        v["from"] = json!(a);
+        v["to"] = json!(b);
+    }
+    if let Some(l) = value(values, &["look"]).map(str::trim).filter(|l| name(l)) {
+        v["look"] = json!(l);
+    }
+    Some(v)
+}
+
+/// Why a model gate call may not put a card on the page, or None: a
+/// landing changes what the person sees, so its card names the clip and
+/// frames that show it (look-cards-carry-their-clip; owner 2026-11-20, "it
+/// doesnt give me a clip to click"). An import or a score-only run lands
+/// no change to judge (`switch` says whether a switch was given).
+pub fn gate_card_refused(
+    values: &[(String, String)],
+    switch: impl Fn(&str) -> bool,
+) -> Option<String> {
+    if switch("dry-run") || switch("import") || switch("score-only") {
+        return None;
+    }
+    if value(values, &["clip"]).is_none() {
+        return Some("a model gate card names the clip that shows what the change does, so the person can watch it: add clip (N, ROW/N or a corpus clip's id, such as tapper.attract.001), frames A-B and look (game, or the theme it is about). The card and its row then have LOOK AT IT".to_owned());
+    }
+    if gate_clip(values).is_none() || value(values, &["frames"]).is_none() {
+        return Some("a model gate card's clip is N, ROW/N or a corpus clip's id, with frames A-B (or A) from the clip's start, so LOOK AT IT shows the frames in question".to_owned());
+    }
+    None
 }
 
 fn value<'a>(values: &'a [(String, String)], names: &[&str]) -> Option<&'a str> {
@@ -780,6 +847,48 @@ mod tests {
         let s = says(&n);
         assert!(s.starts_with("Land \"The ball bounces\" of g"), "{s}");
         assert!(s.contains("It changes g/model.toml."), "{s}");
+    }
+
+    /// A model gate card carries the clip and frames its call names, and
+    /// one with no clip (or no frames) is refused; a dry run, an import and
+    /// a score-only run aren't (look-cards-carry-their-clip).
+    #[test]
+    fn a_gate_card_carries_its_clip() {
+        let d = tempfile::tempdir().unwrap();
+        let s = |v: &[(&str, &str)]| -> Vec<(String, String)> {
+            v.iter()
+                .map(|(a, b)| ((*a).to_owned(), (*b).to_owned()))
+                .collect()
+        };
+        let none = |_: &str| false;
+        let bare = s(&[("game", "tapper"), ("patch", "x.patch")]);
+        assert!(gate_card_refused(&bare, none).is_some());
+        assert!(gate_card_refused(&bare, |n| n == "dry-run").is_none());
+        assert!(gate_card_refused(&bare, |n| n == "import").is_none());
+        let no_frames = s(&[("game", "tapper"), ("clip", "tapper.attract.001")]);
+        assert!(gate_card_refused(&no_frames, none).is_some());
+        let full = s(&[
+            ("game", "tapper"),
+            ("clip", "tapper.attract.001"),
+            ("frames", "761-763"),
+            ("look", "game"),
+        ]);
+        assert!(gate_card_refused(&full, none).is_none());
+        let argv: Vec<String> = Vec::new();
+        let n = New {
+            command: "model gate",
+            ..new(&argv, &full)
+        };
+        let v = make(d.path(), &n).unwrap();
+        assert_eq!(
+            v["clip"],
+            json!({"id": "tapper.attract.001", "from": 761, "to": 763, "look": "game"})
+        );
+        assert_eq!(
+            gate_clip(&s(&[("clip", "credit-line/2"), ("frames", "5")])),
+            Some(json!({"mechanic": "credit-line", "n": 2, "from": 5, "to": 5}))
+        );
+        assert_eq!(gate_clip(&s(&[("clip", "3"), ("frames", "9-4")])), None);
     }
 
     fn new<'a>(argv: &'a [String], values: &'a [(String, String)]) -> New<'a> {
