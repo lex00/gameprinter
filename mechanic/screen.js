@@ -374,6 +374,7 @@ window.addEventListener("message", (e) => {
   if (e.origin !== location.origin || e.source !== $("model-frame").contentWindow) return;
   const m = e.data;
   if (m?.gp === "ready") { model.ready = true; model.onReady?.(); }
+  else if (m?.gp === "failed") model.onFailed?.(m.message);
   else if (m?.gp === "at") {
     model.draws = m.draws ?? null;
     document.body.dataset.draws = m.draws ? JSON.stringify(m.draws) : "";
@@ -422,8 +423,9 @@ async function loadModel(why) {
     } catch (e) { model.visible = null; }
     const f = $("model-frame");
     await new Promise((resolve, reject) => {
-      const t = setTimeout(() => reject(new Error("the model didn't load")), 30000);
+      const t = setTimeout(() => reject(new Error("the model didn't load in 30 s")), 30000);
       model.onReady = () => { clearTimeout(t); resolve(); };
+      model.onFailed = (why) => { clearTimeout(t); reject(new Error(`its preview didn't start: ${why}`)); };
       // files=here: the preview reads the build beside it, not the
       // browser's store of installed games.
       f.src = `rebuild/index.html?control=1&files=here${lookParam()}&t=${Date.now()}`;

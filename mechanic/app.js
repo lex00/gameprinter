@@ -921,8 +921,9 @@ async function rbPlay(kind = "beside") {
       liveRb.profile = profileName();
     }
     await new Promise((resolve, reject) => {
-      const t = setTimeout(() => reject(new Error("the model didn't load")), 30000);
+      const t = setTimeout(() => reject(new Error("the model didn't load in 30 s")), 30000);
       liveRb.onReady = () => { clearTimeout(t); resolve(); };
+      liveRb.onFailed = (why) => { clearTimeout(t); reject(new Error(`its preview didn't start: ${why}`)); };
       const prof = kind === "free" && liveRb.profile !== (profiles?.base ?? "retro") ? `&profile=${encodeURIComponent(liveRb.profile)}` : "";
       // files=here: the preview reads the build beside it, not the
       // browser's store of installed games.
@@ -1138,6 +1139,7 @@ window.addEventListener("message", (e) => {
   if (!liveRb || e.origin !== location.origin || e.source !== $("rb-frame").contentWindow) return;
   const m = e.data;
   if (m?.gp === "ready") { liveRb.ready = true; liveRb.onReady?.(); }
+  else if (m?.gp === "failed") liveRb.onFailed?.(m.message);
   else if (m?.gp === "settings") onSettings(m);
   else if (m?.gp === "error") toast(`The model: ${m.message}`, 6000);
 });

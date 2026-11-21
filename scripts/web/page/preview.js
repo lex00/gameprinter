@@ -2911,4 +2911,10 @@ main().catch((e) => {
   // On the page too, so a refused model (one naming ext hooks this module
   // has no crate for) never looks like a game that just does less.
   showError(`The preview didn't start: ${e?.message ?? e}`);
+  // In control mode the page that embeds it waits for ready: told why at
+  // once, it says so, where before it waited 30 s and said only that the
+  // model didn't load.
+  if (new URLSearchParams(location.search).has("control") && parent !== window) {
+    parent.postMessage({ gp: "failed", message: String(e?.message ?? e) }, location.origin);
+  }
 });
