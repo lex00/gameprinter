@@ -1701,7 +1701,8 @@ pub(crate) fn checklist(genre: &str) -> Result<Vec<Row>> {
 }
 
 /// Seeds a game's quest log from its genre's checklist: each row it lacks
-/// is added as "next" with its line, and each row gets a session if it has
+/// is added as "next" with its line and what would measure it (a line of
+/// the game's scoreboard, once a clip shows it), and each row gets a session if it has
 /// none. Rows already there are left as they are. Returns the quest log's
 /// folder, the rows and how many were new.
 pub(crate) fn seed_quest_log(
@@ -1716,7 +1717,16 @@ pub(crate) fn seed_quest_log(
     let mut added = 0;
     for r in &rows {
         if !q.iter().any(|x| x["mechanic"] == json!(r.row)) {
-            q.push(json!({"mechanic": r.row, "status": "next", "note": r.what}));
+            // No line can measure it before the first clip: the row says
+            // what would, so it isn't closed on a worker's word alone.
+            q.push(json!({
+                "mechanic": r.row, "status": "next", "note": r.what,
+                "measure_needed": format!(
+                    "a line of {game}/{} on the first corpus clip that shows {}",
+                    crate::scoreboard::FILE,
+                    r.row
+                ),
+            }));
             added += 1;
         }
         Session::create(paths, game, &r.row, Some(&r.what), rom_sha)?;
@@ -1769,6 +1779,12 @@ mod tests {
         assert_eq!(q.len(), rows.len());
         assert_eq!(q[2]["mechanic"], "jump");
         assert_eq!(q[2]["status"], "next");
+        assert!(
+            q.iter().all(|r| r["measure_needed"]
+                .as_str()
+                .is_some_and(|w| w.contains("test-hop/scoreboard.toml"))),
+            "every seeded row says what would measure it: {q:?}"
+        );
         let s = Session::open(&p, "test-hop", "jump").unwrap();
         let v = s.state().unwrap();
         assert_eq!(v["prompt"], rows[2].what);

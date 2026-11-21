@@ -1505,8 +1505,7 @@ fn report_on_row(setup: &Setup, rec: &Value) {
         ),
         None => format!("Worker loop-{id} ended ({state}): {said}"),
     };
-    let since = rec["started_ms"].as_u64().unwrap_or(0);
-    let _ = settle_row(&setup.home, &game, &row, &said, since);
+    let _ = settle_row(&setup.home, &game, &row, &said);
     let _ = Command::new(&setup.gp)
         .args(["mechanic", "log", &game, &row, &words])
         .env("GP_HOME", &setup.home)
@@ -1523,36 +1522,18 @@ fn report_on_row(setup: &Setup, rec: &Value) {
 /// on it any more, so it takes its status from the worker's report:
 /// `next` with what the report says is left, and the report's questions
 /// with them for the next worker to decide (only a look, with its clip on
-/// the row, asks the person, and a worker sets that itself). A row the
-/// worker left at `next` with a note it wrote since `since_ms` saying the
-/// work is done (Landed, Done, Nothing to land, Already fixed, Gone ...,
-/// naming nothing left) and no target is set done. Any other row the
-/// worker moved itself (done, asking you, ...) stays as it is.
-fn settle_row(
-    home: &Path,
-    game: &str,
-    row: &str,
-    report: &str,
-    since_ms: u64,
-) -> anyhow::Result<()> {
+/// the row, asks the person, and a worker sets that itself). No row is
+/// closed on a note's or a report's wording: a row closes by its target's
+/// measure, or by its worker setting it done (`gp mechanic queue --status
+/// done`), so two runs of the same item end the same way whatever words
+/// their workers chose. Any other row the worker moved itself (done,
+/// asking you, next ...) stays as it is.
+fn settle_row(home: &Path, game: &str, row: &str, report: &str) -> anyhow::Result<()> {
     if !crate::mechanic::session::name_ok(game) {
         bail!("not a game name: {game}");
     }
     let f = home.join("mechanics").join(game).join("queue.json");
     let mut q = crate::mechanic::session::read_queue(&f);
-    if let Some(r) = q.iter_mut().find(|r| {
-        r["mechanic"] == json!(row)
-            && r["status"] == json!("next")
-            && r.get("target").is_none()
-            && r["changed_ms"].as_u64().is_some_and(|c| c >= since_ms)
-            && r["note"].as_str().is_some_and(says_done)
-    }) {
-        r["status"] = json!("done");
-        if let Some(o) = r.as_object_mut() {
-            o.remove("worker");
-        }
-        return crate::mechanic::session::write_queue(&f, &q);
-    }
     let Some(r) = q
         .iter_mut()
         .find(|r| r["mechanic"] == json!(row) && r["status"] == json!("agent working"))
@@ -1616,29 +1597,6 @@ const LEFT_WORDS: &[&str] = &[
 fn names_left(l: &str) -> bool {
     let l = l.to_lowercase();
     LEFT_WORDS.iter().any(|k| l.contains(k))
-}
-
-/// Whether a row's note says its work is done: it starts by saying so and
-/// names nothing left.
-fn says_done(note: &str) -> bool {
-    let n = note.trim_start().to_lowercase();
-    [
-        "done",
-        "landed",
-        "nothing to land",
-        "nothing new to land",
-        "nothing new landed",
-        "nothing landed",
-        "nothing to change",
-        "already fixed",
-        "already on main",
-        "already landed",
-        "gone",
-    ]
-    .iter()
-    .any(|p| n.starts_with(p))
-        && !n.starts_with("done when")
-        && !names_left(note)
 }
 
 /// What the report says is left: from its line naming what is left (or
@@ -2404,7 +2362,6 @@ mod tests {
             "g",
             "a",
             "I made the clip.\nShould I model the initials screen? Or leave it?\n",
-            0,
         )
         .unwrap();
         let a = row("a");
@@ -2425,7 +2382,6 @@ mod tests {
             "g",
             "t",
             "Did the patch.\nShould this row move to the tool's quest log?",
-            0,
         )
         .unwrap();
         assert_eq!(row("t")["status"], "next");
@@ -2436,38 +2392,25 @@ mod tests {
             "g",
             "b",
             "Did the fix (see https://x/?a=1).\n\nLeft: the card for the gate.\nThen done.",
-            0,
         )
         .unwrap();
         let b = row("b");
         assert_eq!(b["status"], "next");
         assert_eq!(b["note"], "Left: the card for the gate. Then done.");
-        settle_row(home, "g", "c", "Anything left?", 0).unwrap();
+        settle_row(home, "g", "c", "Anything left?").unwrap();
         assert_eq!(row("c")["status"], "done");
-        // A row its worker left at next with a note saying it is done.
+        // A row its worker left at next stays at next whatever its note or
+        // the report says: wording closes nothing.
         let mut q = crate::mechanic::session::read_queue(&f);
         q.push(json!({"mechanic": "d", "status": "next", "note": "Nothing new to land: ad344acc has it."}));
-        q.push(json!({"mechanic": "e", "status": "next", "note": "Landed 1f2e. Left: the card for the theme."}));
-        q.push(json!({"mechanic": "h", "status": "next", "note": "Done when the demo matches."}));
+        q.push(json!({"mechanic": "e", "status": "next", "note": "Landed 1f2e."}));
+        q.push(json!({"mechanic": "g", "status": "next", "note": "Gone from the tip."}));
         q.push(json!({"mechanic": "i", "status": "next", "note": "Landed it.", "target": "level 1 sprites at least 1"}));
         crate::mechanic::session::write_queue(&f, &q).unwrap();
-        for m in ["d", "e", "h", "i"] {
-            settle_row(home, "g", m, "Done.", 0).unwrap();
+        for m in ["d", "e", "g", "i"] {
+            settle_row(home, "g", m, "Done. Landed.").unwrap();
+            assert_eq!(row(m)["status"], "next", "{m}");
         }
-        assert_eq!(row("d")["status"], "done");
-        assert_eq!(row("e")["status"], "next", "it names something left");
-        assert_eq!(
-            row("h")["status"],
-            "next",
-            "a done-when is a target in words"
-        );
-        assert_eq!(row("i")["status"], "next", "a target closes by its measure");
-        // A note from before the worker started isn't its word.
-        let mut q = crate::mechanic::session::read_queue(&f);
-        q.push(json!({"mechanic": "j", "status": "next", "note": "Landed long ago."}));
-        crate::mechanic::session::write_queue(&f, &q).unwrap();
-        settle_row(home, "g", "j", "Done.", u64::MAX).unwrap();
-        assert_eq!(row("j")["status"], "next");
         // With no line naming what is left, its last paragraph.
         assert_eq!(left_of("Did it.\n\nThe card is up."), "The card is up.");
     }

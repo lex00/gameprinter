@@ -1722,7 +1722,11 @@ pub(crate) fn gather(
         .collect();
     f.rom_found = !accepts.is_empty()
         && crate::roms::find(&accepts, &[], &paths.roms).is_ok_and(|m| !m.is_empty());
-    f.triage_plan = gdir.join("triage.toml").is_file();
+    // A plan with no items (gp game new's) gives the triage nothing to try.
+    f.triage_plan = std::fs::read_to_string(gdir.join("triage.toml"))
+        .ok()
+        .and_then(|t| t.parse::<toml::Table>().ok())
+        .is_some_and(|t| t.get("item").is_some());
 
     // The model and mapping the run plays: the working copy once there is one.
     let rdir = home.join("work/serve").join(&g);

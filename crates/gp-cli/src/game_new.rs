@@ -13,7 +13,8 @@
 //! | `model.toml` | The genre's header, the pad, a player and an empty level, each a placeholder its evidence says is one |
 //! | `mapping.toml`, `observe.toml`, `probes.toml`, `profiles.toml`, `fidelity.toml` | Empty or default, each saying what goes in it |
 //! | `corpus.toml` | The corpus plan with no clips |
-//! | `$GP_HOME/mechanics/GAME/` | The quest log seeded from the genre's checklist (mechanic/checklists.toml), and a mechanic session for each row |
+//! | `scoreboard.toml`, `triage.toml` | The scoreboard and the triage plan, with no lines and no items until the first clips |
+//! | `$GP_HOME/mechanics/GAME/` | The quest log seeded from the genre's checklist (mechanic/checklists.toml), each row saying what would measure it, and a mechanic session for each row |
 //!
 //! Nothing is written over: a folder that exists is refused, and the quest
 //! log only gains the rows it lacks. No ROM byte is written; the lift's
@@ -403,6 +404,8 @@ fn nes_files(
             "corpus.toml".into(),
             corpus_toml(source, &title, &sha, &recipes),
         ),
+        (crate::scoreboard::FILE.into(), scoreboard_toml(&title)),
+        ("triage.toml".into(), triage_toml(&title)),
     ];
     // A game with no folder yet may have a coverage definition waiting
     // in the games checkout (known/coverage/<id>.toml): it comes with the
@@ -537,6 +540,8 @@ fn arcade_files(
             "corpus.toml".into(),
             corpus_toml(game, title, &rom.sha256, &recipes),
         ),
+        (crate::scoreboard::FILE.into(), scoreboard_toml(title)),
+        ("triage.toml".into(), triage_toml(title)),
     ];
     let about = About {
         input: "the arcade controls (coin, start1, a joystick and button1)",
@@ -546,6 +551,33 @@ fn arcade_files(
         draws_line,
     };
     Ok((files, about))
+}
+
+/// The scoreboard with no lines yet: a line needs a clip of the corpus,
+/// and a new game has none.
+fn scoreboard_toml(title: &str) -> String {
+    format!(
+        "# The scoreboard of {title}, written by gp game new (docs/loop.md, \"The scoreboard\").\n\
+         # Each [[line]] is a part of the game measured on one clip of corpus.toml;\n\
+         # a quest-log row's target is a measure on a line (\"level 1 sprites at\n\
+         # least 330 of 336\"), and the row closes when the board gets there.\n\
+         # Add a line as each part's first clip lands:\n\
+         #\n\
+         # [[line]]\n\
+         # name = \"level 1\"\n\
+         # level = \"1\"            # or clip = \"ID\"\n"
+    )
+}
+
+/// The triage plan with no items yet (mechanic/triage.rs has the format):
+/// `gp mechanic propose` adds a row's test here.
+fn triage_toml(title: &str) -> String {
+    format!(
+        "# The triage plan of {title}, written by gp game new (gp mechanic triage).\n\
+         # Each [[item]] is a quest-log row's test on RAM, with the names in [watch];\n\
+         # gp mechanic propose adds a row's test here.\n\
+         [watch]\n"
+    )
 }
 
 fn arcade_roms_toml(
@@ -1166,6 +1198,13 @@ mod tests {
         )
         .unwrap();
         assert_eq!(s["rom"].as_str(), out.json["rom"].as_str());
+        // The scoreboard and the triage plan are there and read, empty
+        // until the first clips; each row says what would measure it.
+        assert_eq!(crate::scoreboard::lines(&dir), Some(Ok(vec![])));
+        let t: toml::Table =
+            toml::from_str(&fs::read_to_string(dir.join("triage.toml")).unwrap()).unwrap();
+        assert!(t.contains_key("watch") && !t.contains_key("item"), "{t:?}");
+        assert!(q.iter().all(|r| r["measure_needed"].is_string()), "{q:?}");
         // Again: refused, and nothing changed.
         assert!(run(&a, &paths).is_err());
         // A ROM a game names already is refused.
