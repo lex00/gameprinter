@@ -1022,9 +1022,11 @@ pub(crate) fn start(home: PathBuf, games: PathBuf, modules: BTreeMap<String, Pat
                 let module = module_for(&home, &games.join(g), g, &modules);
                 measure_held(&gp, &games, r, module.as_deref())
             });
-            // The rows whose target the board now meets close themselves.
+            // The rows whose target the board now meets close themselves,
+            // and a line near full asks the owner to look at it.
             for g in crate::next::games_in(&games) {
                 close_rows(&home, &games, &g);
+                ask_looks(&home, &games, &g);
             }
             // Room for a worker and no row for it: rows from the lines'
             // gaps, so the loop doesn't sit idle while a line isn't full.
@@ -1328,6 +1330,86 @@ pub(crate) fn close_rows(home: &Path, games: &Path, game: &str) -> Vec<String> {
     changed
 }
 
+/// How much of a line's frames its background and its sprites each match
+/// for the line to be the owner's to look at: 335 of 336 is near enough.
+const LOOK_SHARE: f64 = 0.99;
+
+/// The quest-log row that asks the owner to look at a line: `confirm-` and
+/// the line's name in a row's letters (`level 1`, `confirm-level-1`).
+pub(crate) fn confirm_row(line: &str) -> String {
+    let mut s = String::from("confirm");
+    for w in line
+        .to_lowercase()
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|w| !w.is_empty() && *w != "the")
+    {
+        s.push('-');
+        s.push_str(w);
+    }
+    s
+}
+
+/// Asks the owner to look at each picture line that measures near full
+/// (background and sprites each at least [`LOOK_SHARE`] of the frames, on a
+/// current measure): a row `confirm-LINE`, asking you, with the line's
+/// clip over all its frames in the game's own pictures, so LOOK AT IT sets
+/// it up beside the original. A row the quest log has already, whatever
+/// its status, is left as it is. Returns the rows it added.
+pub(crate) fn ask_looks(home: &Path, games: &Path, game: &str) -> Vec<String> {
+    let Some(b) = board(home, games, game) else {
+        return Vec::new();
+    };
+    let f = home.join("mechanics").join(game).join("queue.json");
+    let mut q = crate::mechanic::session::read_queue(&f);
+    let mut added = Vec::new();
+    for l in b["lines"].as_array().into_iter().flatten() {
+        if l["own_draws"] == json!(true)
+            || l["stale"] == json!(true)
+            || l["measuring"] == json!(true)
+            || !l["error"].is_null()
+        {
+            continue;
+        }
+        let near = |c: &str| -> Option<(u64, u64)> {
+            let (m, t) = (l[c]["matched"].as_u64()?, l[c]["total"].as_u64()?);
+            (t > 0 && m as f64 >= LOOK_SHARE * t as f64).then_some((m, t))
+        };
+        let (Some(bg), Some(sp)) = (near("background"), near("sprites")) else {
+            continue;
+        };
+        let name = l["name"].as_str().unwrap_or("");
+        let row = confirm_row(name);
+        if row == "confirm" || q.iter().any(|r| r["mechanic"] == json!(row)) {
+            continue;
+        }
+        let state = l["state"]["pct"]
+            .as_f64()
+            .map(|p| format!("state {p}%, "))
+            .unwrap_or_default();
+        q.push(json!({
+            "mechanic": row,
+            "status": "asking you",
+            "by": "loop",
+            "from": format!("scoreboard line {name}, measured near full"),
+            "note": format!(
+                "Watch {name} beside the original (LOOK AT IT). Does it look right? YES locks it: the gate then refuses any change that draws these frames worse. Measured: {state}background {} of {}, sprites {} of {}.",
+                bg.0, bg.1, sp.0, sp.1
+            ),
+            "clip": {
+                "id": l["clip"],
+                "from": 0,
+                "to": bg.1.saturating_sub(1),
+                "look": "game",
+            },
+        }));
+        added.push(row);
+    }
+    if !added.is_empty() {
+        let _ = crate::mechanic::session::write_queue(&f, &q);
+    }
+    added
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1481,6 +1563,78 @@ level = "field"
         );
         measure();
         assert_eq!(find_work(h, d.path(), &gp, || true, |_, _| {}).len(), 1);
+    }
+
+    /// A picture line near full asks the owner to look at it, once: a
+    /// confirm row at asking you with the line's clip in the game's own
+    /// pictures. A short line and an own-draws line don't, and a row the
+    /// quest log has already is left as it is.
+    #[test]
+    fn a_line_near_full_asks_the_owner_to_look() {
+        let d = games();
+        let home = tempfile::tempdir().unwrap();
+        let h = home.path();
+        board_file(
+            d.path(),
+            "[[line]]\nname = \"the title\"\nclip = \"hop.title.001\"\n\n[[line]]\nname = \"level 1\"\nclip = \"hop.l1.001\"\n\n[[line]]\nname = \"level 2\"\nclip = \"hop.l2.001\"\n\n[[line]]\nname = \"own\"\nclip = \"hop.l1.001\"\nown_draws = true\n",
+        );
+        put(
+            &h.join("work/refine/hop/status.json"),
+            r#"{"model": {"hash": "look-1"}, "clips": [{"id": "hop.l1.001", "frames": 200, "straight": {"pct": 100.0}}]}"#,
+        );
+        let gp = h.join("bin/gp");
+        put(&gp, "a gp");
+        refresh(h, d.path(), &gp, |_, l| {
+            Ok(match (l.own_draws, l.clip.as_str()) {
+                (true, _) => Numbers {
+                    own: Some([200, 200]),
+                    ..Numbers::default()
+                },
+                (_, "hop.l1.001") => Numbers {
+                    background: [200, 200],
+                    sprites: [199, 200],
+                    ..Numbers::default()
+                },
+                (_, "hop.l2.001") => Numbers {
+                    background: [300, 300],
+                    sprites: [280, 300],
+                    ..Numbers::default()
+                },
+                _ => Numbers {
+                    background: [100, 100],
+                    sprites: [100, 100],
+                    ..Numbers::default()
+                },
+            })
+        });
+        let f = h.join("mechanics/hop/queue.json");
+        put(
+            &f,
+            r#"[{"mechanic": "confirm-title", "status": "done", "note": "the owner's"}]"#,
+        );
+        assert_eq!(ask_looks(h, d.path(), "hop"), vec!["confirm-level-1"]);
+        let q = crate::mechanic::session::read_queue(&f);
+        assert_eq!(q[0]["status"], "done", "a row it has is left");
+        let r = q
+            .iter()
+            .find(|r| r["mechanic"] == "confirm-level-1")
+            .unwrap();
+        assert_eq!(r["status"], "asking you");
+        assert_eq!(r["by"], "loop");
+        assert_eq!(
+            r["clip"],
+            json!({"id": "hop.l1.001", "from": 0, "to": 199, "look": "game"})
+        );
+        let note = r["note"].as_str().unwrap();
+        assert!(note.contains("LOOK AT IT"), "{note}");
+        let measured = "state 100%, background 200 of 200, sprites 199 of 200";
+        assert!(note.contains(measured), "{note}");
+        assert_eq!(q.len(), 2, "level 2 is short and own draws isn't a look");
+        assert!(ask_looks(h, d.path(), "hop").is_empty(), "once");
+        assert_eq!(
+            confirm_row("The first bonus round"),
+            "confirm-first-bonus-round"
+        );
     }
 
     #[test]

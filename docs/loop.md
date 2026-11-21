@@ -177,6 +177,7 @@ The owner, 2026-11-20: each quest-log row states its target as a measure and clo
 | What | How |
 |---|---|
 | Closing | Every 30 seconds, after it measures, gp serve's scoreboard sets done each row whose target the board meets on a current measure (not out of date, not being measured, not failed), its note "Met its target: TARGET. Now READING, measured on CLIP" (`scoreboard::close_rows`) |
+| A look | After it closes rows, the scoreboard asks the owner to look at each picture line near full (background and sprites each at least 99% of the frames, on a current measure): a row `confirm-LINE` (the line's words, `the` left out: `confirm-level-1`, `confirm-demo`), asking you, `by = "loop"`, with the line's clip over all its frames in the game's own pictures, so LOOK AT IT sets it up beside the original. A row the quest log has by that name, whatever its status, is left as it is (`scoreboard::ask_looks`) |
 | Done by hand | `--status done` on a row with a target is refused until the board's current measure meets it, with where the measure stands |
 | A landing | A YES that lands a row with a target sets it in line with `awaiting_measure` (the time), not done. Once the line is measured after that, the row is done if it meets the target, else back to next with the reading, so the loop takes it up again |
 | Shown | `gp mechanic queue` prints `target: TARGET: now READING` (or `met`, `not measured yet`); the quest log on the loop's page has a TARGET line, or NO MEASURE YET with what would measure it |
