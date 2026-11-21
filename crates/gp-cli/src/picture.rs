@@ -92,7 +92,9 @@ pub struct PictureArgs {
     /// Add each gap the check finds to the game's quest log as a row of
     /// its own (`gp mechanic propose`): every cause but flicker seen on at
     /// least 2 frames, the `--top` of each group, status next, with the
-    /// clip and frame it was seen on. Rows the quest log has are left.
+    /// clip and frame it was seen on. A row the quest log has gets each
+    /// clip it doesn't name yet added to its note, and goes back to next
+    /// if it was done.
     #[arg(long)]
     pub propose: bool,
     /// Each compared frame's pixels apart, kept in the JSON as `apart`
@@ -105,12 +107,12 @@ pub struct PictureArgs {
 
 /// The gaps `--propose` makes rows of: each group's details by how many
 /// clips and frames show them, flicker and one-frame gaps left out, at most
-/// `top` of a group. Each is (row, what, from).
+/// `top` of a group. Each is (row, what, from, the clips it is seen in).
 fn proposals(
     run: &str,
     details: &BTreeMap<(&'static str, String), Tally>,
     top: usize,
-) -> Vec<(String, String, String)> {
+) -> Vec<(String, String, String, Vec<String>)> {
     let mut by: BTreeMap<&'static str, Vec<(&String, &Tally)>> = BTreeMap::new();
     for ((g, d), t) in details {
         if *g != "flicker" && t.frames >= 2 {
@@ -143,7 +145,7 @@ fn proposals(
                 ),
                 None => format!("gp picture --run {run}"),
             };
-            out.push((row, what, from));
+            out.push((row, what, from, t.clips.iter().cloned().collect()));
         }
     }
     out
@@ -1496,12 +1498,13 @@ pub(crate) fn run(args: &PictureArgs, paths: &gp_evidence::Paths) -> Result<Outc
         if list.is_empty() {
             let _ = writeln!(text_out, "  nothing: no gap but flicker or one-frame gaps");
         }
-        for (row, what, from) in &list {
+        for (row, what, from, clips) in &list {
             let p = crate::mechanic::propose::Proposal {
                 game: &name,
                 row,
                 from,
                 what,
+                clips,
                 ..Default::default()
             };
             let v = crate::mechanic::propose::propose(paths, None, &p)?;
@@ -1750,7 +1753,8 @@ mod tests {
                 "picture-placed-elsewhere-hero-1-px-further-right".to_owned(),
                 "the picture differs, placed elsewhere: hero: 1 px further right (1 clips, 3 frames)"
                     .to_owned(),
-                "gp picture --run r1, game.l1.001 frame 40, sprites at 8, 16 16x16".to_owned()
+                "gp picture --run r1, game.l1.001 frame 40, sprites at 8, 16 16x16".to_owned(),
+                vec!["game.l1.001".to_owned()]
             )]
         );
     }

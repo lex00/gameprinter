@@ -31,6 +31,21 @@ pub(crate) struct Proposal<'a> {
     pub repo: Option<&'a str>,
     /// The row's triage test, with the person's request.
     pub test: Option<Test<'a>>,
+    /// The clips the gap is seen in (`gp picture --propose`). A row the
+    /// quest log has already gets each clip it doesn't name yet added to its
+    /// note and its `seen_in`, and goes back to next if it was done: the
+    /// row is done only when every clip it names is fixed.
+    pub clips: &'a [String],
+}
+
+/// Whether the row names the clip: in `seen_in`, or (rows from before
+/// `seen_in`) in its note or where it came from.
+fn names_clip(r: &Value, clip: &str) -> bool {
+    r["seen_in"]
+        .as_array()
+        .is_some_and(|a| a.iter().any(|c| c == clip))
+        || r["note"].as_str().is_some_and(|s| s.contains(clip))
+        || r["from"].as_str().is_some_and(|s| s.contains(clip))
 }
 
 /// A triage.toml item's test and request (mechanic/triage.rs has the
@@ -87,20 +102,54 @@ pub(crate) fn propose(paths: &Paths, game_dir: Option<&Path>, p: &Proposal) -> R
     }
     let f = queue_file(paths, p.game)?;
     let mut q = read_queue(&f);
-    let had_row = q.iter().any(|r| r["mechanic"] == json!(p.row));
-    if !had_row {
-        let mut r = json!({
-            "mechanic": p.row,
-            "status": "next",
-            "note": format!("{MARK} {} (from {})", p.what.trim(), p.from.trim()),
-            "by": "loop",
-            "from": p.from.trim(),
-        });
-        if p.repo == Some("tools") {
-            r["repo"] = json!("tools");
+    let at = q.iter().position(|r| r["mechanic"] == json!(p.row));
+    let had_row = at.is_some();
+    let mut new_clips: Vec<&String> = Vec::new();
+    let mut reopened = false;
+    match at {
+        None => {
+            let mut r = json!({
+                "mechanic": p.row,
+                "status": "next",
+                "note": format!("{MARK} {} (from {})", p.what.trim(), p.from.trim()),
+                "by": "loop",
+                "from": p.from.trim(),
+            });
+            if p.repo == Some("tools") {
+                r["repo"] = json!("tools");
+            }
+            if !p.clips.is_empty() {
+                r["seen_in"] = json!(p.clips);
+            }
+            q.push(r);
+            write_queue(&f, &q)?;
         }
-        q.push(r);
-        write_queue(&f, &q)?;
+        Some(i) => {
+            let r = &mut q[i];
+            new_clips = p.clips.iter().filter(|c| !names_clip(r, c)).collect();
+            if !new_clips.is_empty() {
+                let mut seen: Vec<Value> = r["seen_in"].as_array().cloned().unwrap_or_default();
+                seen.extend(new_clips.iter().map(|c| json!(c)));
+                r["seen_in"] = Value::Array(seen);
+                let list = new_clips
+                    .iter()
+                    .map(|c| c.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let note = r["note"].as_str().unwrap_or("").trim().to_owned();
+                let also = format!("Also seen in {list} (from {}).", p.from.trim());
+                r["note"] = json!(if note.is_empty() {
+                    also
+                } else {
+                    format!("{note} {also}")
+                });
+                if r["status"] == json!("done") && r["scope"] != json!("out") {
+                    r["status"] = json!("next");
+                    reopened = true;
+                }
+                write_queue(&f, &q)?;
+            }
+        }
     }
     let mut wrote_test = None;
     if let (Some(t), false) = (&p.test, had_test) {
@@ -120,6 +169,8 @@ pub(crate) fn propose(paths: &Paths, game_dir: Option<&Path>, p: &Proposal) -> R
     Ok(json!({
         "row": p.row,
         "added": !had_row,
+        "clips_added": new_clips,
+        "reopened": reopened,
         "test": wrote_test,
         "test_was_there": had_test,
     }))
@@ -146,8 +197,22 @@ fn item_toml(row: &str, t: &Test) -> String {
 /// The line `gp mechanic propose` prints.
 pub(crate) fn words(v: &Value) -> String {
     let row = v["row"].as_str().unwrap_or("");
+    let added: Vec<&str> = v["clips_added"]
+        .as_array()
+        .map(|a| a.iter().filter_map(Value::as_str).collect())
+        .unwrap_or_default();
     let mut s = if v["added"] == json!(true) {
         format!("{row}: added to the quest log as next, proposed by the loop.")
+    } else if !added.is_empty() {
+        let back = if v["reopened"] == json!(true) {
+            "; it was done, so it is next again"
+        } else {
+            ""
+        };
+        format!(
+            "{row}: the quest log has it; {} added to its note{back}.",
+            added.join(", ")
+        )
     } else {
         format!("{row}: the quest log has it already; left as it is.")
     };
@@ -230,6 +295,74 @@ mod tests {
         propose(&p, Some(&game), &prop).unwrap();
         let q = read_queue(&queue_file(&p, "made-up").unwrap());
         assert_eq!((q.len(), q[0]["status"].as_str()), (1, Some("done")));
+    }
+
+    /// A gap proposed from another clip is added to the row's note and
+    /// `seen_in`, and a done row goes back to next; a clip the row names
+    /// (in `seen_in` or, for an older row, its from) changes nothing.
+    #[test]
+    fn a_new_clip_is_added_to_its_row() {
+        let d = tempfile::tempdir().unwrap();
+        let p = paths(&d.path().join("home"));
+        let f = queue_file(&p, "tapper").unwrap();
+        let l1 = vec!["tapper.l1.001".to_owned()];
+        let first = Proposal {
+            game: "tapper",
+            row: "picture-other-the-level-picture-main",
+            from: "gp picture --run r, tapper.l1.001 frame 0",
+            what: "the picture differs",
+            clips: &l1,
+            ..Proposal::default()
+        };
+        propose(&p, None, &first).unwrap();
+        assert_eq!(read_queue(&f)[0]["seen_in"], json!(["tapper.l1.001"]));
+        let mut q = read_queue(&f);
+        q[0]["status"] = json!("done");
+        q[0]["note"] = json!("Landed: level 1's start");
+        write_queue(&f, &q).unwrap();
+
+        let both = vec!["tapper.demo.001".to_owned(), "tapper.l1.001".to_owned()];
+        let v = propose(
+            &p,
+            None,
+            &Proposal {
+                from: "gp picture --run r, tapper.demo.001 frame 2",
+                clips: &both,
+                test: None,
+                ..first
+            },
+        )
+        .unwrap();
+        assert_eq!(v["clips_added"], json!(["tapper.demo.001"]));
+        assert!(words(&v).contains("tapper.demo.001 added"), "{}", words(&v));
+        let q = read_queue(&f);
+        assert_eq!(q.len(), 1);
+        assert_eq!(q[0]["status"], "next");
+        assert_eq!(q[0]["seen_in"], json!(["tapper.l1.001", "tapper.demo.001"]));
+        assert_eq!(
+            q[0]["note"],
+            "Landed: level 1's start Also seen in tapper.demo.001 (from gp picture --run r, tapper.demo.001 frame 2)."
+        );
+
+        let again = propose(
+            &p,
+            None,
+            &Proposal {
+                clips: &both,
+                test: None,
+                ..first
+            },
+        )
+        .unwrap();
+        assert_eq!(again["clips_added"], json!([]));
+
+        // A row from before seen_in names its clip in from.
+        let mut q = read_queue(&f);
+        q[0].as_object_mut().unwrap().remove("seen_in");
+        q[0]["status"] = json!("done");
+        write_queue(&f, &q).unwrap();
+        propose(&p, None, &first).unwrap();
+        assert_eq!(read_queue(&f)[0]["status"], "done");
     }
 
     /// A test the triage can't read writes nothing: no row, no item.
