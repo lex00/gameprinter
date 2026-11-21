@@ -304,14 +304,20 @@ pub(crate) fn start(ctx: Arc<Ctx>) {
                     .contains(id)
             });
             settle_card_rows(&ctx.paths.home);
-            // Moving onto a newly published gp (serve/reload.rs): nothing
-            // new starts here; the new build takes it up.
+            // The person's yeses run even while gp serve moves onto a newly
+            // published gp (serve/reload.rs): the move waits for the
+            // workers' steps, which can take half an hour, and a yes must
+            // not wait that long (trouble-card-the-person-said-yes-over-a-
+            // minute). The move waits for the yeses too (still_at_work).
+            if loop_state::settings(&ctx.paths.home).runner.on {
+                run_yeses(&ctx);
+            }
+            // Anything else new waits for the move; the new build takes it up.
             if !super::reload::draining() {
-                if loop_state::settings(&ctx.paths.home).runner.on {
-                    run_yeses(&ctx);
-                    if crate::wrong::halt(&ctx.paths.home).is_none() {
-                        keep_clips(&ctx);
-                    }
+                if loop_state::settings(&ctx.paths.home).runner.on
+                    && crate::wrong::halt(&ctx.paths.home).is_none()
+                {
+                    keep_clips(&ctx);
                 }
                 look(&ctx);
             }
@@ -333,7 +339,16 @@ fn run_yeses(ctx: &Arc<Ctx>) {
             continue;
         }
         let id = a["id"].as_str().unwrap_or("").to_owned();
+        // Counted before it is taken, so the move onto a new gp (reload.rs,
+        // which marks itself sealed and then counts the yeses) either sees
+        // it or is seen here: none is cut off by the exec.
+        YESES_RUNNING.fetch_add(1, Ordering::SeqCst);
+        if super::reload::sealed() {
+            YESES_RUNNING.fetch_sub(1, Ordering::SeqCst);
+            return;
+        }
         let Some(a) = gp_mcp::asks::claim_for_runner(&home, &id) else {
+            YESES_RUNNING.fetch_sub(1, Ordering::SeqCst);
             continue;
         };
         let gp = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("gp"));
@@ -353,7 +368,6 @@ fn run_yeses(ctx: &Arc<Ctx>) {
             })
             .unwrap_or_else(|| ctx.repo.clone());
         let home = home.clone();
-        YESES_RUNNING.fetch_add(1, Ordering::SeqCst);
         YES_IDS
             .lock()
             .unwrap_or_else(|e| e.into_inner())

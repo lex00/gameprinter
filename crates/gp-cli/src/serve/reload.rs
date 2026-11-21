@@ -2,7 +2,8 @@
 //! tapper/serve-reloads-itself; docs/loop.md, "The runner"). Every few
 //! seconds it looks at `$GP_HOME/bin/gp`; when the gate has published
 //! another build since this one started, nothing new starts (the runner's
-//! workers, the yeses it runs and its clip keeping wait), and once the
+//! workers and its clip keeping wait; the person's yeses still run, since
+//! the workers can take half an hour), and once the
 //! workers have finished their step, the yeses written their result, the
 //! background jobs and the preview's build ended and no request is being
 //! answered, the process becomes the new build (exec) with the arguments
@@ -37,6 +38,10 @@ const REQUESTS_FOR: Duration = Duration::from_secs(120);
 static DRAINING: AtomicBool = AtomicBool::new(false);
 /// Requests are refused from now on (the exec is next).
 static CLOSING: AtomicBool = AtomicBool::new(false);
+/// No yes starts from now on: set just before the last look at what is at
+/// work, so a yes the runner took in between is seen (runner::run_yeses
+/// counts a yes before it looks at this).
+static SEALED: AtomicBool = AtomicBool::new(false);
 /// Requests being answered now.
 static ANSWERING: AtomicUsize = AtomicUsize::new(0);
 /// What it waits for, in words, while it drains.
@@ -45,6 +50,11 @@ static WAITING: Mutex<Option<String>> = Mutex::new(None);
 /// Whether the server is moving onto a newer gp, so nothing new starts.
 pub(crate) fn draining() -> bool {
     DRAINING.load(Ordering::SeqCst)
+}
+
+/// Whether the move onto a newer gp is under way, so no yes starts.
+pub(crate) fn sealed() -> bool {
+    SEALED.load(Ordering::SeqCst)
 }
 
 /// The runner's words while it moves onto a newer gp.
@@ -219,7 +229,15 @@ pub(crate) fn start(ctx: Arc<Ctx>) {
             if still_at_work().is_some() {
                 continue;
             }
+            // The yeses still start while it drains; now none does, and a
+            // yes taken since the look above is waited for.
+            SEALED.store(true, Ordering::SeqCst);
+            if still_at_work().is_some() {
+                SEALED.store(false, Ordering::SeqCst);
+                continue;
+            }
             if !crate::mechanic::server::runs(&bin) {
+                SEALED.store(false, Ordering::SeqCst);
                 eprintln!(
                     "gp serve: {} doesn't run `--version`; staying on this build",
                     bin.display()
@@ -250,6 +268,7 @@ pub(crate) fn start(ctx: Arc<Ctx>) {
             eprintln!("gp serve: couldn't move onto {}: {e:#}", bin.display());
             seen = now;
             CLOSING.store(false, Ordering::SeqCst);
+            SEALED.store(false, Ordering::SeqCst);
             DRAINING.store(false, Ordering::SeqCst);
             *WAITING.lock().unwrap_or_else(|e| e.into_inner()) = None;
             write(
