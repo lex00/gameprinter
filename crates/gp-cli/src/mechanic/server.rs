@@ -1271,8 +1271,33 @@ fn handle(s: &Server, req: &Request) -> Result<Response> {
                 t["laya"] = json!(l);
                 t["agreed"] = json!(v["text"].as_str() == Some(l));
             }
-            let (n, again) = s.target(v["mechanic"].as_str())?.turn_once(t)?;
-            Ok(Response::json(&json!({"turn": n, "again": again})))
+            let text = v["text"].as_str().unwrap_or("").to_owned();
+            let session = s.target(v["mechanic"].as_str())?;
+            // A plain yes on a row asking to confirm a look is CONFIRM: the
+            // runner locks it, no worker (crate::approved::confirm).
+            let qf = s.queue_file()?;
+            let me = session.mechanic().to_owned();
+            let q = read_queue(&qf);
+            let row = q.iter().find(|r| r["mechanic"] == json!(me));
+            let yes = crate::approved::says_yes(&text);
+            let confirms = yes && row.is_some_and(crate::approved::confirmable);
+            let (n, again) = session.turn_once(t)?;
+            if confirms {
+                crate::approved::confirm(&qf, &me, &text, true)?;
+            }
+            Ok(Response::json(
+                &json!({"turn": n, "again": again, "confirmed": confirms}),
+            ))
+        }
+        // CONFIRM on a row asking the person to confirm a look: their yes,
+        // which gp serve's runner locks with no worker.
+        ("POST", "/api/confirm") => {
+            let v: Value = serde_json::from_slice(&req.body)?;
+            let m = v["mechanic"].as_str().context("mechanic")?;
+            match crate::approved::confirm(&s.queue_file()?, m, "CONFIRM", false) {
+                Ok(r) => Ok(Response::json(&json!({"mechanic": m, "row": r}))),
+                Err(e) => Ok(Response::error(409, &format!("{e:#}"))),
+            }
         }
         // A new quest-log row from the person's words (the screen page's NEW
         // ITEM): named from its first words, made unique, status "next" and

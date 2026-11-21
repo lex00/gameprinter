@@ -216,6 +216,89 @@ fn corpus_id(game: &str, row: &str, clip: &Value, ids: &[String]) -> Result<Stri
     Ok(id)
 }
 
+/// Whether quest-log row `r` asks the owner to confirm a look a yes can
+/// lock: it is asking them, with a clip (a corpus id or a number) in the
+/// game's own pictures.
+pub(crate) fn confirmable(r: &Value) -> bool {
+    let c = &r["clip"];
+    r["status"] == json!("asking you")
+        && c["look"] == json!("game")
+        && (c["id"].is_string() || c["n"].is_u64())
+}
+
+/// Whether a typed answer is a plain yes to a look: "yes", "y", "looks
+/// right", "lock it" and the like, nothing more.
+pub(crate) fn says_yes(text: &str) -> bool {
+    const YES: &[&str] = &[
+        "yes",
+        "y",
+        "yep",
+        "yeah",
+        "ok",
+        "okay",
+        "confirm",
+        "confirmed",
+        "lock it",
+        "it does",
+        "it is",
+        "looks right",
+        "it looks right",
+        "looks good",
+        "it looks good",
+    ];
+    let t = text
+        .trim()
+        .trim_end_matches(['.', '!'])
+        .trim()
+        .to_lowercase();
+    let rest = t.strip_prefix("yes, ").or_else(|| t.strip_prefix("yes "));
+    YES.contains(&rest.unwrap_or(&t))
+}
+
+/// The owner's yes on row `row` of the quest log in `qf`, a row asking them
+/// to confirm a look ([`confirmable`]): the row goes in line with
+/// `confirmed` (when, and the words they said), and gp serve's runner
+/// locks it with no worker (serve/runner.rs, `run_confirms`). `typed`: the
+/// yes was their answer in the row's talk, whose turn has just set the row
+/// agent working.
+pub(crate) fn confirm(qf: &Path, row: &str, said: &str, typed: bool) -> Result<Value> {
+    use crate::mechanic::session::{read_queue, write_queue};
+    let mut q = read_queue(qf);
+    let Some(r) = q.iter_mut().find(|r| r["mechanic"] == json!(row)) else {
+        bail!("the quest log has no row {row}");
+    };
+    if r["confirmed"].is_object() {
+        return Ok(r.clone());
+    }
+    let mut asked = r.clone();
+    if typed && asked["status"] == json!("agent working") {
+        asked["status"] = json!("asking you");
+    }
+    if !confirmable(&asked) {
+        bail!(
+            "row {row} doesn't ask you to confirm a look (it needs status asking you and a clip in the game's own pictures)"
+        );
+    }
+    let now = gp_mcp::asks::now_ms();
+    let Some(o) = r.as_object_mut() else {
+        bail!("row {row} isn't a table");
+    };
+    if !o.contains_key("asked") {
+        o.insert("asked".into(), o.get("note").cloned().unwrap_or(json!("")));
+    }
+    o.insert("status".into(), json!("in line"));
+    o.insert("confirmed".into(), json!({"at_ms": now, "said": said}));
+    o.insert(
+        "note".into(),
+        json!("You said yes to this look: the loop locks it now (gp mechanic approve, landed through the model gate), with no worker."),
+    );
+    o.insert("changed_ms".into(), json!(now));
+    o.remove("worker");
+    let out = r.clone();
+    write_queue(qf, &q)?;
+    Ok(out)
+}
+
 /// `gp mechanic approve GAME ROW`: locks the row's clip, frames and look as
 /// the owner said yes to them, measured on the game as it is now.
 pub(crate) fn approve(
@@ -337,6 +420,25 @@ mod tests {
         fs::write(&f, text(&[theme])).unwrap();
         let e = read(d.path()).unwrap_err();
         assert!(e.contains("only the game's own"), "{e}");
+    }
+
+    #[test]
+    fn a_plain_yes_on_a_look_row_confirms_it() {
+        for y in ["yes", "Yes.", "y", "Looks right!", "lock it"] {
+            assert!(says_yes(y), "{y}");
+        }
+        assert!(says_yes("yes, it looks right"));
+        for n in ["no", "yes but the mug is off", "not yet", ""] {
+            assert!(!says_yes(n), "{n}");
+        }
+        let row = |s: &str, c: Value| json!({"mechanic": "r", "status": s, "clip": c});
+        let asking = |c: Value| confirmable(&row("asking you", c));
+        assert!(asking(json!({"n": 1, "look": "game"})));
+        assert!(asking(json!({"id": "t.l1.001", "look": "game"})));
+        assert!(!confirmable(&row("next", json!({"n": 1, "look": "game"}))));
+        assert!(!asking(json!({"n": 1, "look": "last-call"})));
+        assert!(!asking(json!({"n": 1})));
+        assert!(!asking(Value::Null));
     }
 
     #[test]

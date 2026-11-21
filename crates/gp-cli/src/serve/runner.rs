@@ -365,6 +365,7 @@ pub(crate) fn start(ctx: Arc<Ctx>) {
             // minute). The move waits for the yeses too (still_at_work).
             if loop_state::settings(&ctx.paths.home).runner.on {
                 run_yeses(&ctx);
+                run_confirms(&ctx);
             }
             // Anything else new waits for the move; the new build takes it up.
             if !super::reload::draining() {
@@ -892,6 +893,14 @@ fn gate_import(
         .env("GP_NO_HINTS", "1")
         .stdin(Stdio::null())
         .output();
+    gate_said(out)
+}
+
+/// A `gp --json model gate` run's state (landed, passed or failed), its
+/// lines, and the clips it refused (`refused`).
+fn gate_said(
+    out: std::io::Result<std::process::Output>,
+) -> (&'static str, Vec<String>, Vec<Value>) {
     match out {
         Ok(o) => {
             let v: Value = serde_json::from_slice(&o.stdout).unwrap_or(Value::Null);
@@ -923,6 +932,280 @@ fn gate_import(
             Vec::new(),
         ),
     }
+}
+
+/// The rows whose confirmed look this server locks now (`GAME/ROW`).
+static LOCKING: Mutex<BTreeSet<String>> = Mutex::new(BTreeSet::new());
+/// How long a confirmed look whose clip isn't in the corpus yet waits
+/// before it is tried again: the clip keeping takes clips in that often.
+const LOCK_AGAIN_MS: u64 = 120_000;
+/// How many tries a confirmed look gets before its row goes back to next.
+const LOCK_TRIES: u64 = 30;
+
+/// How locking one confirmed look ended.
+#[derive(Debug, PartialEq)]
+enum Locked {
+    /// Landed (or the same lock was there): the clip, its frames, how many
+    /// frames are locked, and whether a commit landed.
+    Yes {
+        clip: String,
+        frames: Value,
+        n: u64,
+        landed: bool,
+    },
+    /// Its clip isn't in the corpus yet: tried again later.
+    Wait(String),
+    /// It can't be locked: why.
+    No(String),
+}
+
+/// The owner's yeses to looks, locked by the runner itself (owner,
+/// yes-on-a-look-locks-it): each quest-log row a yes marked `confirmed`
+/// (crate::approved::confirm: CONFIRM on the page, or a typed plain yes)
+/// gets `gp mechanic approve` on a worktree of the games tip, and the
+/// approved.toml it writes lands through `gp model gate`, no card (the
+/// yes was the owner's) and no worker. The row goes to done with the
+/// frames it locked (`locked`); a clip not in the corpus yet waits for the
+/// clip keeping and is tried again; any other failure sends the row to
+/// next with why.
+fn run_confirms(ctx: &Arc<Ctx>) {
+    let now = gp_mcp::asks::now_ms();
+    for game in crate::next::games_in(&ctx.games) {
+        let Ok(qf) = crate::mechanic::session::queue_file(&ctx.paths, &game) else {
+            continue;
+        };
+        for r in crate::mechanic::session::read_queue(&qf) {
+            let c = &r["confirmed"];
+            let Some(row) = r["mechanic"].as_str().filter(|_| c.is_object()) else {
+                continue;
+            };
+            if c["again_ms"].as_u64().is_some_and(|t| t > now) {
+                continue;
+            }
+            let key = format!("{game}/{row}");
+            if !LOCKING
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .insert(key.clone())
+            {
+                continue;
+            }
+            // Counted as a yes, so a move onto a new gp waits for it.
+            YESES_RUNNING.fetch_add(1, Ordering::SeqCst);
+            if super::reload::sealed() {
+                YESES_RUNNING.fetch_sub(1, Ordering::SeqCst);
+                LOCKING
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .remove(&key);
+                return;
+            }
+            let (ctx, game, row, qf) = (ctx.clone(), game.clone(), row.to_owned(), qf.clone());
+            std::thread::spawn(move || {
+                struct Ran(String);
+                impl Drop for Ran {
+                    fn drop(&mut self) {
+                        YESES_RUNNING.fetch_sub(1, Ordering::SeqCst);
+                        LOCKING
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner())
+                            .remove(&self.0);
+                    }
+                }
+                let _ran = Ran(key);
+                let out = lock_look(&ctx, &game, &row);
+                let _ = settle_lock(&qf, &row, &out, gp_mcp::asks::now_ms());
+            });
+        }
+    }
+}
+
+/// `gp mechanic approve GAME ROW` on a worktree of the games tip, and its
+/// approved.toml landed through the model gate.
+fn lock_look(ctx: &Ctx, game: &str, row: &str) -> Locked {
+    let home = &ctx.paths.home;
+    let gp = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("gp"));
+    let _one = ONE.lock().unwrap_or_else(|e| e.into_inner());
+    let locks = loop_state::loop_dir(home).join("locks");
+    let wt = locks.join(format!("{game}-{row}"));
+    let patch = locks.join(format!("{game}-{row}.patch"));
+    let games = &ctx.games;
+    let w = wt.to_string_lossy().into_owned();
+    let clear = || {
+        let _ = crate::gate::git(games, &["worktree", "remove", "--force", &w]);
+        let _ = fs::remove_dir_all(&wt);
+        let _ = crate::gate::git(games, &["worktree", "prune"]);
+    };
+    clear();
+    let _ = fs::create_dir_all(&locks);
+    if let Err(e) = crate::gate::git(games, &["worktree", "add", "--detach", &w, "HEAD"]) {
+        return Locked::No(format!("no worktree of the games tip: {e:#}"));
+    }
+    let out = approve_and_gate(ctx, &gp, game, row, &wt, &patch);
+    clear();
+    let _ = fs::remove_file(&patch);
+    out
+}
+
+/// [`lock_look`]'s work in the worktree `wt`: the approve, its diff as
+/// `patch`, and the gate.
+fn approve_and_gate(
+    ctx: &Ctx,
+    gp: &Path,
+    game: &str,
+    row: &str,
+    wt: &Path,
+    patch: &Path,
+) -> Locked {
+    let (home, games) = (&ctx.paths.home, &ctx.games);
+    let o = Command::new(gp)
+        .args(["--json", "mechanic", "approve", game, row, "--games"])
+        .arg(wt)
+        .current_dir(wt)
+        .env("GP_HOME", home)
+        .env("GP_GAMES_DIR", wt)
+        .env("GP_NO_HINTS", "1")
+        .stdin(Stdio::null())
+        .output();
+    let o = match o {
+        Ok(o) => o,
+        Err(e) => return Locked::No(format!("gp mechanic approve couldn't start: {e}")),
+    };
+    if !o.status.success() {
+        let why = String::from_utf8_lossy(&o.stderr);
+        let why = why.trim().trim_start_matches("gp: ").to_owned();
+        return if why.contains("import it first") || why.contains("the corpus has no clip") {
+            Locked::Wait(why)
+        } else {
+            Locked::No(why)
+        };
+    }
+    let v: Value = serde_json::from_slice(&o.stdout).unwrap_or(Value::Null);
+    let clip = v["clip"].as_str().unwrap_or("").to_owned();
+    let frames = v["frames"].clone();
+    let n = v["frames_locked"].as_u64().unwrap_or(0);
+    let _ = crate::gate::git(wt, &["add", "-A"]);
+    let diff = match crate::gate::git(wt, &["diff", "--cached", "--binary"]) {
+        Ok(d) => d,
+        Err(e) => return Locked::No(format!("{e:#}")),
+    };
+    if diff.trim().is_empty() {
+        return Locked::Yes {
+            clip,
+            frames,
+            n,
+            landed: false,
+        };
+    }
+    if let Err(e) = fs::write(patch, format!("{diff}\n")) {
+        return Locked::No(format!("the patch couldn't be written: {e}"));
+    }
+    let [a, b] = [0, 1].map(|i| frames[i].as_u64().unwrap_or(0));
+    let msg = format!(
+        "{game}: lock the look the owner said yes to on {row} ({clip} frames {a}-{b}, {n} frames). Expect: the model gate fails a change that draws one of those frames further from the original. Checked: gp mechanic approve on the games tip, by gp serve's runner on the owner's yes"
+    );
+    let dir = crate::labels::game_folder(games, game).unwrap_or_else(|| games.join(game));
+    let gated = Command::new(gp)
+        .args(["--json", "model", "gate"])
+        .arg(&dir)
+        .arg("--patch")
+        .arg(patch)
+        .arg("-m")
+        .arg(&msg)
+        .current_dir(games)
+        .env("GP_HOME", home)
+        .env("GP_GAMES_DIR", games)
+        .env("GP_NO_HINTS", "1")
+        .stdin(Stdio::null())
+        .output();
+    match gate_said(gated) {
+        ("landed", ..) => Locked::Yes {
+            clip,
+            frames,
+            n,
+            landed: true,
+        },
+        (_, lines, _) => Locked::No(format!(
+            "the model gate didn't land it: {}",
+            lines.last().map_or("no reason given", String::as_str)
+        )),
+    }
+}
+
+/// Row `row` of the quest log `qf` after its confirmed look was locked as
+/// `out`. A row whose yes was taken back (no `confirmed`) is left as it is.
+fn settle_lock(qf: &Path, row: &str, out: &Locked, now: u64) -> anyhow::Result<()> {
+    use crate::mechanic::session::{read_queue, write_queue};
+    let mut q = read_queue(qf);
+    let Some(o) = q
+        .iter_mut()
+        .find(|r| r["mechanic"] == json!(row) && r["confirmed"].is_object())
+        .and_then(Value::as_object_mut)
+    else {
+        return Ok(());
+    };
+    let tries = o["confirmed"]["tries"].as_u64().unwrap_or(0) + 1;
+    let failed = |why: &str| {
+        format!(
+            "You said yes to this look, but it couldn't be locked: {}. The loop takes it up again.",
+            crate::next::cut(why.trim_end_matches('.'), 400)
+        )
+    };
+    match out {
+        Locked::Yes {
+            clip,
+            frames,
+            n,
+            landed,
+        } => {
+            let [a, b] = [0, 1].map(|i| frames[i].as_u64().unwrap_or(0));
+            let how = if *landed {
+                "Locked on your yes"
+            } else {
+                "Already locked as you said yes to it"
+            };
+            let note = format!(
+                "{how}: {clip} frames {a}-{b} ({n} frames); the model gate fails a change that draws one further from the original."
+            );
+            let target = o.get("target").and_then(Value::as_str).map(str::to_owned);
+            let (status, note) = match target {
+                Some(t) => {
+                    o.insert("awaiting_measure".into(), json!(now));
+                    (
+                        "in line",
+                        format!("{note} It closes itself when its target is met ({t})."),
+                    )
+                }
+                None => ("done", note),
+            };
+            o.insert("status".into(), json!(status));
+            o.insert("note".into(), json!(note));
+            o.insert(
+                "locked".into(),
+                json!({"clip": clip, "frames": frames, "frames_locked": n, "at_ms": now}),
+            );
+            o.remove("confirmed");
+            o.remove("clip");
+        }
+        Locked::Wait(why) if tries < LOCK_TRIES => {
+            let c = &mut o["confirmed"];
+            c["tries"] = json!(tries);
+            c["again_ms"] = json!(now + LOCK_AGAIN_MS);
+            c["why"] = json!(why);
+            let why = crate::next::cut(why.trim_end_matches('.'), 300);
+            let note = format!(
+                "You said yes to this look: it locks once its clip is in the corpus, which the loop takes clips into every few minutes ({why})."
+            );
+            o.insert("note".into(), json!(note));
+        }
+        Locked::Wait(why) | Locked::No(why) => {
+            o.insert("status".into(), json!("next"));
+            o.insert("note".into(), json!(failed(why)));
+            o.remove("confirmed");
+        }
+    }
+    o.insert("changed_ms".into(), json!(now));
+    write_queue(qf, &q)
 }
 
 /// The quest-log row a corpus clip's ID names: its session,
@@ -1449,7 +1732,7 @@ pub(crate) fn brief(setup: &Setup, step: &Value, wt: &Path, branch: &str, before
             },
             format!("First: {gp} mechanic show {game} {row} (the item, its notes and talk; before the row has a session it prints the row's note). Your first gp_run mechanic busy or mechanic log makes the row's session; mechanic start serves a page and isn't a worker's."),
             format!("At every step say where you are on the person's page: {gp} mechanic busy {game} {row} \"WHAT YOU ARE DOING. Next: WHAT COMES NEXT\"; put what you found with {gp} mechanic log {game} {row} \"...\"."),
-            format!("When you ask the person to judge something they can see, give the row the clip that shows it: gp_run mechanic queue with game {game}, mechanic {row}, status \"asking you\", the question as note, clip N (or ROW/N, or a corpus clip's id), frames A-B and look THEME (the theme it is about, or game). The row and its card then have LOOK AT IT, which sets it up on their screens, the original beside the model. When they say yes to a look in the game's own pictures, lock it: gp_run mechanic approve with game {game} and mechanic {row} (the clip must be in the corpus), and the model gate then fails a change that draws it further from the original."),
+            format!("When you ask the person to judge something they can see, give the row the clip that shows it: gp_run mechanic queue with game {game}, mechanic {row}, status \"asking you\", the question as note, clip N (or ROW/N, or a corpus clip's id), frames A-B and look THEME (the theme it is about, or game). The row and its card then have LOOK AT IT, which sets it up on their screens, the original beside the model, and a look in the game's own pictures (look game) has CONFIRM: their CONFIRM, or a plain yes typed, is locked by gp serve's runner with no worker. When they say yes to such a look in other words, lock it: gp_run mechanic approve with game {game} and mechanic {row} (the clip must be in the corpus), and the model gate then fails a change that draws it further from the original."),
             format!("Land a change with git diff > a patch file in your worktree, then gp_run model gate with game {game}, patch FILE, message \"{game}: WHAT CHANGES. Expect: WHAT THE PERSON SEES. Checked: HOW\" and dry_run first; then the same without dry_run puts a card on the person's page and the loop runs it on their YES. Don't wait for it: say in your report that the card is up, and stop. Never run a gate from your shell, and never land onto your own branch."),
             format!("A row with a target (the TARGET line of mechanic show, a measure on the scoreboard) closes itself when gp serve's scoreboard measures it there; you don't set it done, and --status done is refused before. Without one, give it one as you start: gp_run mechanic queue with game {game}, mechanic {row}, target \"LINE sprites at least N of M\" (a line of {game}/scoreboard.toml), or measure_needed \"WHAT WOULD MEASURE IT\" when no line can."),
             format!("When an item with no target is done: {gp} mechanic queue {game} {row} --status done --note \"WHAT LANDED\". A row with a target whose change is on a card: --status \"in line\"; the YES lands it and the measure closes it. Only a look asks the person: --status \"asking you\" with a clip and frames for them to watch (above), or a card for their YES. The person has handed you every other choice (the tools, the routing, how to do the work): pick, say why in the note, and go on; a question in your report doesn't reach them."),
@@ -2373,6 +2656,73 @@ mod tests {
                 "g: took 1 clip into the corpus on its own: g.walk.001. Held out, since it doesn't play together with the original yet (why is on its quest-log row): g.drink.001."
             ]
         );
+    }
+
+    #[test]
+    fn a_confirmed_look_locks_with_no_worker_or_waits_for_its_clip() {
+        let t = tempfile::tempdir().unwrap();
+        let f = t.path().join("mechanics").join("g").join("queue.json");
+        fs::create_dir_all(f.parent().unwrap()).unwrap();
+        let clip = json!({"id": "g.l1.001", "from": 10, "to": 12, "look": "game"});
+        let q = vec![
+            json!({"mechanic": "l1", "status": "asking you", "note": "Does level 1 look right?", "clip": clip}),
+            json!({"mechanic": "demo", "status": "asking you", "note": "And the demo?", "clip": {"n": 1, "look": "game"}}),
+            json!({"mechanic": "theme", "status": "asking you", "note": "The mug?", "clip": {"n": 1, "look": "last-call"}}),
+        ];
+        crate::mechanic::session::write_queue(&f, &q).unwrap();
+        let row = |m: &str| {
+            crate::mechanic::session::read_queue(&f)
+                .into_iter()
+                .find(|r| r["mechanic"] == json!(m))
+                .unwrap()
+        };
+        // The yes: in line, confirmed, the question kept as asked.
+        crate::approved::confirm(&f, "l1", "CONFIRM", false).unwrap();
+        // A typed yes: its turn has set the row agent working first.
+        let mut q = crate::mechanic::session::read_queue(&f);
+        q[1]["status"] = json!("agent working");
+        crate::mechanic::session::write_queue(&f, &q).unwrap();
+        assert!(crate::approved::confirm(&f, "demo", "yes", false).is_err());
+        crate::approved::confirm(&f, "demo", "yes", true).unwrap();
+        assert!(crate::approved::confirm(&f, "theme", "yes", true).is_err());
+        let l1 = row("l1");
+        assert_eq!(l1["status"], "in line");
+        assert_eq!(l1["confirmed"]["said"], "CONFIRM");
+        assert_eq!(l1["asked"], "Does level 1 look right?");
+        // Locked: done with the frames it locked, its clip and yes gone.
+        let yes = Locked::Yes {
+            clip: "g.l1.001".into(),
+            frames: json!([10, 12]),
+            n: 3,
+            landed: true,
+        };
+        settle_lock(&f, "l1", &yes, 1000).unwrap();
+        let l1 = row("l1");
+        assert_eq!(l1["status"], "done");
+        assert_eq!(l1["locked"]["frames"], json!([10, 12]));
+        assert!(l1.get("confirmed").is_none() && l1.get("clip").is_none());
+        assert!(
+            l1["note"]
+                .as_str()
+                .unwrap()
+                .starts_with("Locked on your yes: g.l1.001 frames 10-12 (3 frames)")
+        );
+        // A clip not in the corpus yet: tried again after a while.
+        let wait = Locked::Wait("clip 1 of demo isn't in the corpus".into());
+        settle_lock(&f, "demo", &wait, 1000).unwrap();
+        let demo = row("demo");
+        assert_eq!(demo["status"], "in line");
+        assert_eq!(demo["confirmed"]["again_ms"], json!(1000 + LOCK_AGAIN_MS));
+        assert_eq!(demo["confirmed"]["tries"], 1);
+        // Any other failure: next, with why, for the loop.
+        settle_lock(&f, "demo", &Locked::No("the gate failed".into()), 2000).unwrap();
+        let demo = row("demo");
+        assert_eq!(demo["status"], "next");
+        assert!(demo.get("confirmed").is_none());
+        assert!(demo["note"].as_str().unwrap().contains("the gate failed"));
+        // A row whose yes is gone is left as it is.
+        settle_lock(&f, "theme", &yes, 3000).unwrap();
+        assert_eq!(row("theme")["status"], "asking you");
     }
 
     #[test]

@@ -548,6 +548,17 @@ beside the model, in that theme (game for the game's own pictures), at
 those frames, played in a loop (one frame: stood still there). The person
 judges and answers in the same item.
 
+A row asking about a look in the game's own pictures (`look` game) also
+has CONFIRM: IT LOOKS RIGHT in the quest log and in YOUR TURN. CONFIRM
+(`POST /api/confirm` with the row), or a plain yes typed as the answer
+("yes", "looks right", "lock it"), is the owner's yes: the row goes in line
+with `confirmed`, and gp serve's runner locks it with no worker, running
+`gp mechanic approve` on a worktree of the games tip and landing its
+approved.toml through `gp model gate`. The row is then done with the frames
+it locked (`locked`). A clip not in the corpus yet waits for the clip
+keeping and is tried again every two minutes; any other failure sends the
+row to next with why.
+
 A card is one line; a click on its question opens what it does. The yeses the runner lands in turn say which
 runs now and which wait (RUNNING NOW, 1 OF 3; WAITS, 2 OF 3), and one it
 finished says LANDED, DONE or FAILED with its last line, then leaves a
@@ -578,3 +589,4 @@ minute later.
 | `GET /api/screen/clip?n=N&mechanic=M` | A clip's start and length, for the screen to play it |
 | `GET /api/screen/work-clip?id=ID` | A corpus clip's play from power-on, its start and length, for the screen to follow a refine on it |
 | `GET /api/paths/SHA` | A stored path's log, for PLAY FROM HERE |
+| `POST /api/confirm` | `{mechanic}`: CONFIRM, the owner's yes to a row's look in the game's own pictures, which gp serve's runner locks |

@@ -157,6 +157,11 @@ pub(crate) fn row_steps(paths: &gp_evidence::Paths, games: Option<&Path>) -> Vec
                 continue;
             };
             let status = r["status"].as_str().unwrap_or("");
+            // The owner's yes to a look waits for gp serve's runner to lock
+            // it (serve/runner.rs, run_confirms): no worker's.
+            if r["confirmed"].is_object() {
+                continue;
+            }
             // The person's turn is the last in the row's talk: they answered
             // or asked, so the row is the agent's whatever its status says.
             let talk = std::fs::read_to_string(

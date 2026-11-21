@@ -722,6 +722,37 @@ function judgeButton(r) {
   return b;
 }
 
+/** Whether row `r` asks the person to confirm a look a yes locks: asking
+ * them, with a clip in the game's own pictures (crate::approved::confirmable). */
+const confirmable = (r) => r?.status === "asking you" && !r.confirmed && r.clip?.look === "game"
+  && (typeof r.clip.id === "string" || typeof r.clip.n === "number");
+
+/** A CONFIRM button for row `r`, or null: the person's yes to the look,
+ * which gp serve's runner locks (gp mechanic approve, through the model
+ * gate) with no worker. */
+function confirmButton(r) {
+  if (!confirmable(r)) return null;
+  const b = el("button", "judge confirm", "CONFIRM: IT LOOKS RIGHT");
+  b.type = "button";
+  b.title = `Your yes to ${judgeWords(r).toLowerCase()}: the loop locks these frames, and the model gate then fails a change that draws them further from the original`;
+  b.addEventListener("click", async (e) => {
+    e.stopPropagation();
+    const btn = e.currentTarget;
+    btn.blur();
+    btn.disabled = true;
+    try {
+      await api("api/confirm", { mechanic: r.mechanic });
+      note(`${r.mechanic}: your yes is in. The loop locks the look now, with no worker.`, 6000);
+      turnDrawn = "";
+      await refreshLists(true);
+    } catch (err) {
+      btn.disabled = false;
+      fault(`Your yes didn't save: ${err.message ?? err}`, 8000);
+    }
+  });
+  return b;
+}
+
 /** A clip's play from power-on on both screens, from `c.start` for
  * `c.frames`, stood at `f`. */
 async function showClipLog(c, f) {
@@ -1260,6 +1291,8 @@ function queueRow(r, g, open) {
   if (r.asked) li.append(noteLine("YOU ASKED", r.asked));
   if (r.note) li.append(noteLine(r.by === "person" && !r.asked ? "YOU WROTE" : "AGENT WROTE", r.note));
   if (r.clip) li.append(judgeButton(r));
+  const yes = confirmButton(r);
+  if (yes) li.append(yes);
   const turns = talkOf(r.mechanic);
   if (turns.length) li.append(talkLines(turns));
   li.append(commentBox(li, r.mechanic, [], `A comment on ${r.mechanic} for your agent`));
@@ -1656,6 +1689,8 @@ function drawYourTurn() {
     let clips = [];
     if (r.clip) {
       li.append(judgeButton(r));
+      const yes = confirmButton(r);
+      if (yes) li.append(yes);
       li.title = `Click: set up ${judgeWords(r).toLowerCase()} on the screens above`;
       li.addEventListener("click", () => void judgeOn(r));
       if (!r.clip.id && !r.clip.mechanic) clips = [r.clip.n];
