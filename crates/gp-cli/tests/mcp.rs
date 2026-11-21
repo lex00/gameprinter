@@ -60,7 +60,12 @@ fn connect_bare(home: &Path, work: &Path) -> Client {
 }
 
 /// [`connect_bare`] with the command to start from.
-fn connect_cmd(mut cmd: Command, work: &Path) -> Client {
+fn connect_cmd(cmd: Command, work: &Path) -> Client {
+    connect_caps(cmd, work, json!({}))
+}
+
+/// [`connect_cmd`] for a client with these capabilities.
+fn connect_caps(mut cmd: Command, work: &Path, capabilities: Value) -> Client {
     let mut child = cmd
         .arg("mcp")
         .arg("--repo")
@@ -80,12 +85,14 @@ fn connect_cmd(mut cmd: Command, work: &Path) -> Client {
         next: 0,
         transcript: Vec::new(),
         progress: Vec::new(),
+        forms: Vec::new(),
+        answer: None,
     };
     let init = c.request(
         "initialize",
         json!({
             "protocolVersion": "2025-11-25",
-            "capabilities": {},
+            "capabilities": capabilities,
             "clientInfo": { "name": "gp-cli test", "version": "0" },
         }),
     );
@@ -113,6 +120,10 @@ struct Client {
     transcript: Vec<String>,
     /// Progress notifications received.
     progress: Vec<Value>,
+    /// The forms the server asked the person (elicitation/create params).
+    forms: Vec<Value>,
+    /// What the person answers each form (an ElicitResult); none closes it.
+    answer: Option<Value>,
 }
 
 impl Client {
@@ -136,7 +147,17 @@ impl Client {
             );
             let msg: Value = serde_json::from_str(&line)
                 .unwrap_or_else(|e| panic!("not JSON-RPC ({e}): {line}"));
-            if msg["id"] == id {
+            // The server's own request: a form for the person.
+            if msg["method"] == "elicitation/create" {
+                self.forms.push(msg["params"].clone());
+                let result = self
+                    .answer
+                    .clone()
+                    .unwrap_or_else(|| json!({"action": "cancel"}));
+                self.send(&json!({ "jsonrpc": "2.0", "id": msg["id"], "result": result }));
+                continue;
+            }
+            if msg.get("method").is_none() && msg["id"] == id {
                 return msg;
             }
             if msg["method"] == "notifications/progress" {
@@ -210,6 +231,8 @@ fn an_agent_edits_previews_and_validates_moss_hop() {
         next: 0,
         transcript: Vec::new(),
         progress: Vec::new(),
+        forms: Vec::new(),
+        answer: None,
     };
 
     let init = c.request(
@@ -645,6 +668,69 @@ fn an_agent_lists_and_runs_any_command() {
     finish(c);
 }
 
+/// With no page open, a client that shows forms gets the person's yes as a
+/// form in the card's own words, the same each time, whatever the agent
+/// set (questions-as-elicitation): closed, the call doesn't run and the ask
+/// stays; a yes runs it once; a no refuses it, and the same call after.
+#[test]
+fn the_persons_yes_comes_as_a_form() {
+    let d = tempfile::tempdir().unwrap();
+    let (home, work, games) = (
+        d.path().join("home"),
+        d.path().join("work"),
+        d.path().join("games"),
+    );
+    fs::create_dir_all(&games).unwrap();
+    let mut cmd = gp(&home);
+    cmd.env("GP_GAMES_DIR", &games);
+    let mut c = connect_caps(cmd, &work, json!({"elicitation": {"form": {}}}));
+    let call = json!({"command": "theme generate", "args": {"game": "nosuch", "style": "plain"}});
+
+    // Closed unanswered: nothing runs, and the ask is kept.
+    let (v, err) = c.call("gp_run", call.clone());
+    assert!(err, "{v}");
+    assert!(
+        v["refused"].as_str().unwrap().contains("closed the form"),
+        "{v}"
+    );
+    assert!(v["ask_id"].is_string(), "{v}");
+    assert_eq!(c.forms.len(), 1, "{v}");
+    let form = c.forms[0].clone();
+    let message = form["message"].as_str().unwrap();
+    assert!(
+        message.starts_with("Pay an image service (Runway)"),
+        "{form}"
+    );
+    assert!(message.ends_with("Do you say yes to this?"), "{form}");
+    let schema = &form["requestedSchema"];
+    assert_eq!(schema["required"], json!(["yes"]), "{form}");
+    assert_eq!(schema["properties"]["yes"]["type"], "boolean", "{form}");
+
+    // Yes: it runs once (and gp refuses the game that isn't there).
+    c.answer = Some(json!({"action": "accept", "content": {"yes": true}}));
+    let (v, _) = c.call("gp_run", call.clone());
+    assert!(v.get("refused").is_none(), "{v}");
+    assert_eq!(v["exit"], 2, "{v}");
+    assert!(v["yes"].as_str().unwrap().contains("in the form"), "{v}");
+    assert_eq!(c.forms.len(), 2);
+    assert_eq!(c.forms[1]["message"], form["message"], "the same words");
+
+    // No, with the agent's confirmed_by_person set: the form still asks,
+    // and the no holds for the same call after, with no form.
+    c.answer = Some(json!({"action": "decline"}));
+    let mut confirmed = call.clone();
+    confirmed["confirmed_by_person"] = json!(true);
+    let (v, err) = c.call("gp_run", confirmed);
+    assert!(err, "{v}");
+    assert!(v["refused"].as_str().unwrap().contains("said no"), "{v}");
+    assert_eq!(c.forms.len(), 3);
+    let (v, err) = c.call("gp_run", call);
+    assert!(err, "{v}");
+    assert!(v["refused"].as_str().unwrap().contains("said no"), "{v}");
+    assert_eq!(c.forms.len(), 3, "a no isn't asked again");
+    finish(c);
+}
+
 /// Starts `gp mcp` on Moss Hop's lifted assets and initializes a session.
 fn connect(home: &Path, work: &Path, rom: &Path, lifted: &Path) -> Client {
     let mut child = gp(home)
@@ -670,6 +756,8 @@ fn connect(home: &Path, work: &Path, rom: &Path, lifted: &Path) -> Client {
         next: 0,
         transcript: Vec::new(),
         progress: Vec::new(),
+        forms: Vec::new(),
+        answer: None,
     };
     let init = c.request(
         "initialize",

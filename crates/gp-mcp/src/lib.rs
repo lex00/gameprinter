@@ -23,6 +23,7 @@ pub mod critic;
 pub mod edit;
 pub mod edit_log;
 pub mod editor_trip;
+pub mod elicit;
 pub mod exchange;
 pub mod fork;
 pub mod generate;

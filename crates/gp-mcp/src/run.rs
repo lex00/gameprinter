@@ -23,6 +23,7 @@ use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
 use crate::asks;
+use crate::elicit;
 use crate::held;
 use crate::policy::{self, Decision, Road};
 use crate::steps;
@@ -995,6 +996,18 @@ fn the_yes(
         }
         v
     };
+    let by_form = |v: &Value| match form_yes(home, path, v) {
+        FormYes::Yes(note) => Ok(note),
+        FormYes::Refused(words) => Err(refusal(words, Some(v))),
+        FormYes::NoForm(_) if a.confirmed_by_person => Ok(ON_YOUR_WORD.to_owned()),
+        FormYes::NoForm(why) => Err(refusal(
+            format!(
+                "gp {path} needs the person's yes first: {}. The form asking them couldn't be shown ({why}), and no page is open for this home (gp serve isn't running), so there is no card: if they say yes to this exact action, call again with confirmed_by_person: true. The ask is kept (ask_id), so if they open the page they can answer it there.",
+                ask.before()
+            ),
+            Some(v),
+        )),
+    };
     let found = match found {
         // A yes to a plan that has changed since is no yes to this one.
         asks::Found::Yes(v)
@@ -1013,7 +1026,7 @@ fn the_yes(
         )),
         asks::Found::No(v) => Err(refusal(
             format!(
-                "gp {path}: the person said no to this on the page. Don't run it; ask them what they would like instead."
+                "gp {path}: the person said no to this (on the page, or in the form their client showed). Don't run it; ask them what they would like instead."
             ),
             Some(&v),
         )),
@@ -1023,9 +1036,12 @@ fn the_yes(
             ),
             Some(&v),
         )),
-        found if !served && a.confirmed_by_person => {
+        // No page, and a client that shows forms: the person answers the
+        // ask's own words in a form, whatever the agent set.
+        asks::Found::Open(v) if elicit::can_ask() => by_form(&v),
+        found if !served && a.confirmed_by_person && !elicit::can_ask() => {
             let _ = found;
-            Ok("no page is open for this home (gp serve isn't running), so this ran on your word that the person said yes to this exact action, as before; with the page open, their YES on the page's card is needed".to_owned())
+            Ok(ON_YOUR_WORD.to_owned())
         }
         found => {
             // A landing's card names the clip that shows it.
@@ -1070,6 +1086,7 @@ fn the_yes(
                 )
             };
             match made {
+                Ok(v) if !served && elicit::can_ask() => by_form(&v),
                 Ok(v) => Err(refusal(words, Some(&v))),
                 Err(e) => Err(refusal(
                     format!("{words} (The ask couldn't be written: {e})"),
@@ -1077,6 +1094,59 @@ fn the_yes(
                 )),
             }
         }
+    }
+}
+
+/// The note on a call that ran with no page open on the agent's
+/// confirmed_by_person.
+const ON_YOUR_WORD: &str = "no page is open for this home (gp serve isn't running), so this ran on your word that the person said yes to this exact action, as before; with the page open, their YES on the page's card is needed";
+
+/// What the person did with the form asking their yes to ask `v`, with no
+/// page open (questions-as-elicitation).
+#[derive(Debug, PartialEq)]
+pub enum FormYes {
+    /// They said yes: the yes is recorded and used now; the note says so.
+    Yes(String),
+    /// They said no or closed it: the refusal's words.
+    Refused(String),
+    /// No form could be shown (why).
+    NoForm(String),
+}
+
+/// Asks the person's yes to ask `v` (gp `path`) in a form: its card's own
+/// words and one switch, the same whichever agent asks. A yes is written to
+/// the ask as the page's YES would be, and used at once; a no, or a form
+/// sent with the switch off, is the page's NO; a form closed unanswered
+/// leaves the ask open.
+pub fn form_yes(home: &Path, path: &str, v: &Value) -> FormYes {
+    let id = v["id"].as_str().unwrap_or("");
+    let (message, schema) = elicit::yes_form(v["says"].as_str().unwrap_or(""));
+    match elicit::ask(&message, schema) {
+        elicit::Answer::Sent(f) if elicit::said_yes(&f) => {
+            if let Err(e) = asks::answer(home, id, asks::Answer::Yes) {
+                return FormYes::Refused(format!(
+                    "gp {path}: the person said yes in the form, but it couldn't be written to the ask: {e}"
+                ));
+            }
+            match asks::find(home, Some(id), v["key"].as_str().unwrap_or("")) {
+                asks::Found::Yes(_) => FormYes::Yes(format!(
+                    "the person said yes to this in the form their client showed (ask {id}); that yes is used now, so another run needs another yes"
+                )),
+                _ => FormYes::Refused(format!(
+                    "gp {path}: the person said yes in the form, but the yes couldn't be used (ask {id})"
+                )),
+            }
+        }
+        elicit::Answer::Sent(_) | elicit::Answer::Declined => {
+            let _ = asks::answer(home, id, asks::Answer::No);
+            FormYes::Refused(format!(
+                "gp {path}: the person said no to this in the form their client showed. Don't run it; ask them what they would like instead."
+            ))
+        }
+        elicit::Answer::Closed => FormYes::Refused(format!(
+            "gp {path}: the person closed the form asking their yes without answering, so it didn't run. The ask is kept (ask_id); when they want it, call gp_run again with the same command and args, and the form asks them again."
+        )),
+        elicit::Answer::NoForm(why) => FormYes::NoForm(why),
     }
 }
 
@@ -1174,6 +1244,33 @@ fn held_answer(config: &Config, path: &str, built: &Built, a: &RunArgs) -> Optio
             "refused": format!("gp {path}: the person said no on the page to the change this call makes to what is already in their games. Don't run it again; ask them what they would like instead."),
             "ask_id": v["id"],
         }))),
+        // No page, and a client that shows forms: the person answers the
+        // held change's card in a form.
+        asks::Found::Open(v) if !served && elicit::can_ask() => match form_yes(home, path, &v) {
+            FormYes::Yes(_) => Some(put(
+                &v,
+                "the person said yes to this change in the form their client showed",
+            )),
+            FormYes::Refused(words) => Some(Reply::refused(json!({
+                "refused": words,
+                "ask_id": v["id"],
+                "would_change": held::each_in_words(&v["held"]),
+            }))),
+            FormYes::NoForm(_) if a.confirmed_by_person => match asks::mark_used(home, &v) {
+                Ok(()) => Some(put(
+                    &v,
+                    "no page is open for this home and no form could be shown, so this went in on your word that the person said yes to this change after you showed it to them",
+                )),
+                Err(e) => Some(Reply::error(e)),
+            },
+            FormYes::NoForm(why) => Some(Reply::refused(json!({
+                "refused": format!("gp {path}'s change to what is already in the person's games waits for their yes, and the form asking them couldn't be shown ({why}). No page is open for this home: show them what would change (the held change's diff, in {}), and if they say yes to it here, call again with confirmed_by_person: true.", v["held"]["dir"].as_str().unwrap_or("?")),
+                "ask_id": v["id"],
+                "would_change": held::each_in_words(&v["held"]),
+                "diff": held::diff_shown(&v["held"]),
+                "page_open": served,
+            }))),
+        },
         asks::Found::Open(v) if !served && a.confirmed_by_person => match asks::mark_used(home, &v)
         {
             Ok(()) => Some(put(
@@ -1229,6 +1326,8 @@ fn held_refusal(
     );
     let then = if served {
         "Tell the person in plain words what would change (would_change, diff) and that it waits on their page as a card with YES and NO; then call next with wait_s until waits_for_yes shows this ask (ask_id) answered, and call gp_run again with ask_id (or the same command and args): a yes puts the held change in place without running the command again."
+    } else if elicit::can_ask() {
+        "No page is open for this home (gp serve isn't running), so there is no card, but the person's client shows forms: call gp_run again with the same command and args, and a form asks them, in the card's words, whether the held change goes in; their yes puts it in place without running the command again."
     } else {
         "No page is open for this home (gp serve isn't running), so there is no card: show the person what would change (would_change, diff), and if they say yes to that change here, call gp_run again with the same command and args and confirmed_by_person: true, which puts the held change in place without running the command again."
     };

@@ -307,7 +307,20 @@ fn make_assets(
                 .filter_map(toml::Value::as_str)
                 .collect();
             let (roms, _) = crate::registry::roms_at_hand(config);
-            let rom = accepts.iter().find_map(|h| roms.get(*h)).cloned();
+            // Not at hand: a client that shows forms asks the person where
+            // their ROM is, in the same words every time.
+            let mut asked = String::new();
+            let rom = match accepts.iter().find_map(|h| roms.get(*h)).cloned() {
+                Some(r) => Some(r),
+                None if how == Some("rom") => match rom_by_form(config, title, &accepts) {
+                    Ok(r) => r,
+                    Err(why) => {
+                        asked = format!("{why}. ");
+                        None
+                    }
+                },
+                None => None,
+            };
             let map_arg = map
                 .as_ref()
                 .map(|p| format!(" --map {}", p.display()))
@@ -335,7 +348,7 @@ fn make_assets(
                     false,
                     found,
                     Some(format!(
-                        "this copy needs the person's own ROM of {title}, which isn't in $GP_ROM_DIR: ask them for it, add it with gp roms add FILE, then lift its assets with gp assets lift ROM{map_arg}"
+                        "{asked}this copy needs the person's own ROM of {title}, which isn't in $GP_ROM_DIR: ask them for it, add it with gp roms add FILE, then lift its assets with gp assets lift ROM{map_arg}"
                     )),
                 ),
             }
@@ -345,6 +358,39 @@ fn make_assets(
             found,
             Some("its template.toml doesn't say how its assets are made (source.how), so the tools can't make them; start the server with --assets".into()),
         ),
+    }
+}
+
+/// The person's own ROM of `title`, asked for in a form (crate::elicit)
+/// and added to their ROM folder with gp roms add: Ok(Some(path in the ROM
+/// folder)) when it is one of `accepts`, Ok(None) when no form can be
+/// shown, else why there is none.
+fn rom_by_form(config: &Config, title: &str, accepts: &[&str]) -> Result<Option<String>, String> {
+    use crate::elicit::{self, Answer};
+    if !elicit::can_ask() {
+        return Ok(None);
+    }
+    let (message, schema) = elicit::rom_form(title);
+    let path = match elicit::ask(&message, schema) {
+        Answer::Sent(f) => elicit::sent_path(&f),
+        Answer::Declined | Answer::Closed => None,
+        Answer::NoForm(_) => return Ok(None),
+    };
+    let Some(path) = path else {
+        return Err("the person didn't give their ROM's path in the form".into());
+    };
+    let add: [&std::ffi::OsStr; 3] = ["roms".as_ref(), "add".as_ref(), path.as_ref()];
+    if let Err(e) = crate::run_gp(config, &add) {
+        return Err(format!(
+            "gp roms add {path} (the path the person gave in the form) failed: {e}"
+        ));
+    }
+    let (roms, _) = crate::registry::roms_at_hand(config);
+    match accepts.iter().find_map(|h| roms.get(*h)).cloned() {
+        Some(r) => Ok(Some(r)),
+        None => Err(format!(
+            "the file the person gave in the form ({path}) was added with gp roms add, but it isn't a ROM of {title} this copy takes"
+        )),
     }
 }
 
