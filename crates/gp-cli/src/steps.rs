@@ -198,13 +198,12 @@ pub(crate) fn row_steps(paths: &gp_evidence::Paths, games: Option<&Path>) -> Vec
             } else {
                 format!("Work on {row}: {}", crate::next::cut(note, 200))
             };
-            // A row of the tool's work holds the tool too: one worker on
-            // gameprinter at a time.
+            // A row of the tool's work holds only its row: each worker has a
+            // gameprinter worktree of its own, and the tool gate merges each
+            // patch onto the tip (a conflict sends the row back to be redone
+            // there), so tool rows run side by side up to the runner's limit.
             let tools = r["repo"] == json!("tools");
-            let mut touches = vec![format!("row:{g}/{row}")];
-            if tools {
-                touches.push("tools".into());
-            }
+            let touches = vec![format!("row:{g}/{row}")];
             // A tool row lands through the tool gate.
             let cli = if r["repo"] == json!("tools") {
                 format!("{cli}, gp tool gate --patch FILE")
