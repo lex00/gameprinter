@@ -3,8 +3,9 @@
 //! seconds, while the home's `loop.toml` has the runner on and the loop
 //! isn't halted, it reads the open steps (crate::steps, as `gp loop steps`
 //! gives them) and starts a worker on each open step of the agent's that
-//! no worker has had, that touches nothing a live worker's step touches,
-//! up to the owner's `max_workers`.
+//! no worker has had in the last AGAIN_AFTER_MS (a step still open after
+//! its worker ended gets another, up to MAX_RUNS), that touches nothing a
+//! live worker's step touches, up to the owner's `max_workers`.
 //!
 //! A worker is the clip agent's command (`gp serve --clip-agent CMD`, else
 //! `$GP_CLIP_AGENT`; serve/clip_agent.rs), started in a git worktree of its
@@ -140,19 +141,43 @@ fn id_ok(id: &str) -> bool {
 /// that no worker has had (whatever became of it: a step done or stopped
 /// isn't started again while the facts it was decided from hold) and that
 /// touch nothing a live worker's step touches, up to `max` live at once.
+/// How long after a step's worker ended, with the step still open, a new
+/// worker takes it up again: the row came back to the loop (a failed card
+/// set it to next, a worker stopped short) and nothing else would move it.
+pub(crate) const AGAIN_AFTER_MS: u64 = 15 * 60 * 1000;
+
+/// The most workers one step gets: past these the step waits for its row
+/// to change (a new note makes a new step id) or for the person.
+pub(crate) const MAX_RUNS: u64 = 3;
+
+/// The runs a worker's record counts (records before the count had one).
+fn runs(w: &Value) -> u64 {
+    w["runs"].as_u64().unwrap_or(1)
+}
+
 pub(crate) fn plan(
     open: &[Value],
     workers: &[Value],
     live: &BTreeSet<String>,
     max: usize,
+    now_ms: u64,
 ) -> Vec<Value> {
-    let had: BTreeSet<&str> = workers
-        .iter()
-        .filter_map(|w| w["step"]["id"].as_str())
-        .collect();
     let is_live = |w: &&Value| {
         w["step"]["id"].as_str().is_some_and(|id| live.contains(id)) || loop_state::holds(w)
     };
+    // A step an ended worker had waits a while, then gets another, up to
+    // MAX_RUNS: its row is still open, so the work isn't done.
+    let had: BTreeSet<&str> = workers
+        .iter()
+        .filter(|w| {
+            let ended = w["last_ms"]
+                .as_u64()
+                .or_else(|| w["started_ms"].as_u64())
+                .unwrap_or(0);
+            is_live(w) || runs(w) >= MAX_RUNS || now_ms.saturating_sub(ended) < AGAIN_AFTER_MS
+        })
+        .filter_map(|w| w["step"]["id"].as_str())
+        .collect();
     let mut taken: BTreeSet<String> = workers
         .iter()
         .filter(is_live)
@@ -951,6 +976,7 @@ fn look(ctx: &Ctx) {
         &loop_state::workers(home),
         &running_ids(),
         s.runner.max_workers as usize,
+        gp_mcp::asks::now_ms(),
     );
     let setup = Setup {
         home: home.clone(),
@@ -977,6 +1003,9 @@ pub(crate) fn spawn(setup: Setup, step: Value) -> std::thread::JoinHandle<()> {
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .insert(id.clone(), flag.clone());
+    let before = fs::read(file(&setup.home, &id))
+        .ok()
+        .and_then(|b| serde_json::from_slice::<Value>(&b).ok());
     let mut rec = json!({
         "step": step,
         "state": "working",
@@ -984,6 +1013,7 @@ pub(crate) fn spawn(setup: Setup, step: Value) -> std::thread::JoinHandle<()> {
         "worker": format!("loop-{id}"),
         "started_ms": gp_mcp::asks::now_ms(),
         "tries": 0,
+        "runs": before.as_ref().map_or(0, runs) + 1,
     });
     write(&setup.home, &rec);
     std::thread::spawn(move || {
@@ -1612,7 +1642,7 @@ mod tests {
         let mut engine = s("s000000000009", "agent", &["game:a"]);
         engine["journey"] = json!("porting a game");
         let open = [engine, s("s000000000008", "agent", &["row:a/r"])];
-        let got = plan(&open, &[], &BTreeSet::new(), 5);
+        let got = plan(&open, &[], &BTreeSet::new(), 5, 0);
         assert_eq!(got.len(), 1);
         assert_eq!(got[0]["id"], json!("s000000000008"));
     }
@@ -1633,18 +1663,47 @@ mod tests {
         };
         let none = BTreeSet::new();
         assert_eq!(
-            ids(plan(&open, &[], &none, 2)),
+            ids(plan(&open, &[], &none, 2, 0)),
             ["s000000000001", "s000000000003"]
         );
-        // A step a worker had is not started again; a live worker's touches
-        // and count hold.
+        // A step a worker just had is not started again; a live worker's
+        // touches and count hold.
+        let now = 100 * AGAIN_AFTER_MS;
         let workers = [
-            json!({"step": s("s000000000001", "agent", &["game:a"]), "state": "done"}),
+            json!({"step": s("s000000000001", "agent", &["game:a"]), "state": "done", "last_ms": now - 1}),
             json!({"step": s("s000000000009", "agent", &["game:b"]), "state": "working"}),
         ];
         let live: BTreeSet<String> = ["s000000000009".to_owned()].into();
-        assert_eq!(ids(plan(&open, &workers, &live, 2)), ["s000000000004"]);
-        assert!(plan(&open, &workers, &live, 1).is_empty());
+        assert_eq!(ids(plan(&open, &workers, &live, 2, now)), ["s000000000004"]);
+        assert!(plan(&open, &workers, &live, 1, now).is_empty());
+    }
+
+    #[test]
+    fn a_step_still_open_after_its_worker_ended_gets_another_up_to_the_most_runs() {
+        let open = [s("s000000000001", "agent", &["row:a/r"])];
+        let now = 100 * AGAIN_AFTER_MS;
+        let ended = |runs: u64, ago: u64| {
+            [
+                json!({"step": s("s000000000001", "agent", &["row:a/r"]), "state": "done",
+                "last_ms": now - ago, "runs": runs}),
+            ]
+        };
+        let none = BTreeSet::new();
+        // Ended a while ago, its row still open: taken up again.
+        assert_eq!(
+            plan(&open, &ended(1, AGAIN_AFTER_MS), &none, 2, now).len(),
+            1
+        );
+        // Ended just now: it waits.
+        assert!(plan(&open, &ended(1, 1000), &none, 2, now).is_empty());
+        // At the most runs: it waits for its row to change.
+        assert!(plan(&open, &ended(MAX_RUNS, AGAIN_AFTER_MS), &none, 2, now).is_empty());
+        // A record from before the count is one run.
+        let old = [
+            json!({"step": s("s000000000001", "agent", &["row:a/r"]), "state": "stopped",
+            "started_ms": now - AGAIN_AFTER_MS}),
+        ];
+        assert_eq!(plan(&open, &old, &none, 2, now).len(), 1);
     }
 
     #[test]
