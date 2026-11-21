@@ -111,6 +111,18 @@ pub enum LoopCmd {
         #[arg(long, default_value = "main")]
         onto: String,
     },
+    /// The gp plugin's hooks for Claude Code (plugin/hooks/hooks.json,
+    /// docs/plugin.md): reads the hook's JSON on stdin and prints its
+    /// answer. session-start puts the loop's state and gp progress --next in
+    /// the session; pre-tool-use refuses a hand edit in a game's folder of
+    /// a games checkout; stop refuses the first stop while a yes waits to be
+    /// used or a card raised in the last half hour waits for the person. A
+    /// worker the runner started (GP_STEP) gets none of them. Reads only.
+    Hook {
+        /// The hook's event.
+        #[arg(value_enum)]
+        event: crate::loop_hook::HookEvent,
+    },
 }
 
 /// A worker setting as the text says it: empty is the person's own.
@@ -287,6 +299,7 @@ pub(crate) fn run(cmd: &LoopCmd, paths: &gp_evidence::Paths) -> Result<Outcome> 
             };
             Ok(clean_outcome(home, *dry_run, &done, &skipped))
         }
+        LoopCmd::Hook { event } => crate::loop_hook::run(*event, paths),
         LoopCmd::Steps => {
             let v = steps_json(paths, None);
             let text = steps_text(&v);

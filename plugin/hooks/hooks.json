@@ -1,0 +1,39 @@
+{
+  "description": "Game Printer's loop rules (docs/plugin.md): the session starts with the loop's state, a hand edit in a game's folder is refused, and a stop waits for a yes not used or a card just raised.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/bin/gp\" loop hook session-start",
+            "timeout": 60
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/bin/gp\" loop hook pre-tool-use",
+            "timeout": 20
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/bin/gp\" loop hook stop",
+            "timeout": 20
+          }
+        ]
+      }
+    ]
+  }
+}

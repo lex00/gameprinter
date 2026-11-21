@@ -1,0 +1,15 @@
+{
+  "name": "gameprinter",
+  "owner": {
+    "name": "lex00"
+  },
+  "description": "Game Printer's plugin, released with gp (docs/plugin.md).",
+  "plugins": [
+    {
+      "name": "gp",
+      "source": "./plugin",
+      "version": "0.1.1",
+      "description": "The gp MCP server, the skills, a porter subagent, /gp:port and the loop's hooks, the same for everyone who ports a ROM."
+    }
+  ]
+}

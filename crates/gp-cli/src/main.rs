@@ -93,6 +93,7 @@ mod localize;
 mod localize_z80;
 mod lockstep;
 mod loop_cmd;
+mod loop_hook;
 mod mcp;
 mod mechanic;
 mod mechanics;

@@ -1,0 +1,11 @@
+---
+description: Port a game from a ROM you own, one loop step at a time
+argument-hint: "[GAME or ROM file]"
+---
+
+Port a game into Game Printer with the gp plugin's setup: $ARGUMENTS
+
+1. Call the gp MCP server's `next` tool (with `game` when a game was named) and tell the person in a few lines where things stand.
+2. When nothing names the game yet and a ROM file was given, start it as the site's "Bring in a game" page says, through `gp_run`: `roms add`, `roms scan`, then `game new GAME --rom ROM --genre G`.
+3. Hand the step `next` gives the agent to the porter subagent, with the game, the row and the step's id. Keep talking with the person while it works.
+4. When the porter reports, call `next` again and offer its next step. Stop and ask before anything in `waits_for_yes`; a landing, a publish or a paid call runs only on the person's YES on their page.

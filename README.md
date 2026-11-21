@@ -61,7 +61,7 @@ The docs site's pages, in `site/src/content/docs/`, are for people using the too
 | [contribute.md](site/src/content/docs/contribute.md) | Changing the tool |
 | [rom-rules.md](site/src/content/docs/rom-rules.md) | What may and may not happen with a ROM |
 
-The files in [docs/](docs/) are for contributors and agents. A good place to start is [CLI.md](CLI.md), every `gp` command, generated from the code. For taking a task and landing it, read [docs/workers.md](docs/workers.md) and [docs/gate.md](docs/gate.md). For the page and game modules, read [docs/modules.md](docs/modules.md), [docs/web.md](docs/web.md) and [docs/mechanic-page.md](docs/mechanic-page.md).
+The files in [docs/](docs/) are for contributors and agents. A good place to start is [CLI.md](CLI.md), every `gp` command, generated from the code. For taking a task and landing it, read [docs/workers.md](docs/workers.md) and [docs/gate.md](docs/gate.md); everyone who ports a ROM gets the same agent setup from the gp plugin for Claude Code ([docs/plugin.md](docs/plugin.md)), while other harnesses read the same tools and rules in [AGENTS.md](AGENTS.md). For the page and game modules, read [docs/modules.md](docs/modules.md), [docs/web.md](docs/web.md) and [docs/mechanic-page.md](docs/mechanic-page.md).
 
 ## Licence
 

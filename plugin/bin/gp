@@ -1,0 +1,13 @@
+#!/bin/sh
+# The gp plugin's way to the gp program (docs/plugin.md). Agent apps don't
+# read the shell's PATH, so this looks where gp is installed: $GP_PLUGIN_GP,
+# gp on PATH, then the published build, the hand install and Homebrew's.
+for g in "$GP_PLUGIN_GP" "$(command -v gp 2>/dev/null)" "$HOME/.gameprinter/bin/gp" \
+    "$HOME/.local/bin/gp" /opt/homebrew/bin/gp /usr/local/bin/gp; do
+    # Skip this script itself: the plugin's bin/ may be on PATH too.
+    if [ -n "$g" ] && [ -x "$g" ] && ! [ "$g" -ef "$0" ]; then
+        exec "$g" "$@"
+    fi
+done
+echo "the gp plugin found no gp: install it (https://github.com/lex00/gameprinter, the install page) or set GP_PLUGIN_GP to its path" >&2
+exit 2

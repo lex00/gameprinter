@@ -1,0 +1,18 @@
+{
+  "name": "gp",
+  "version": "0.1.1",
+  "description": "Game Printer's agent setup for porting a ROM you own: the gp MCP server, the skills, a porter subagent, /gp:port and the loop's hooks. Released with gp; the versions match.",
+  "author": {
+    "name": "lex00"
+  },
+  "homepage": "https://github.com/lex00/gameprinter",
+  "repository": "https://github.com/lex00/gameprinter",
+  "license": "Apache-2.0",
+  "keywords": ["game-printer", "porting", "nes", "arcade", "mcp"],
+  "mcpServers": {
+    "gp": {
+      "command": "sh",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/bin/gp", "mcp"]
+    }
+  }
+}
