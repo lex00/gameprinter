@@ -2,7 +2,7 @@
 
 A sealed run measures the model on play no worker has seen, so no worker's tool reads one. Sealed runs are kept under `$GP_HOME/sealed/GAME/`: each `.log` there, with the `.toml` beside it saying where it starts (its stored path and start frame), and the clips the old mechanic page sealed under `sealed-run/clips/`. The code is `crates/gp-cli/src/sealed.rs`, ported from game-printer's sealed.rs and the "Sealed runs" part of its docs/contributing-mechanics.md.
 
-gameprinter's mechanic page doesn't seal a run yet; a sealed run is put under `$GP_HOME/sealed/GAME/` by hand, or comes from the old home.
+The screen page seals a run: while recording, STOP AND SEAL keeps the recording under `$GP_HOME/sealed/GAME/sealed-run/clips/` with the part it plays as its note (docs/mechanic-page.md). A sealed run can also be put under `$GP_HOME/sealed/GAME/` by hand, or come from the old home. Each one is a held-out line on the game's scoreboard, which gp serve scores with `gp sealed score` (docs/loop.md, "The scoreboard").
 
 ## The guard
 

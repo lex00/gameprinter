@@ -959,6 +959,7 @@ function startRecording() {
   markTarget();
   $("record").classList.add("on");
   $("record").textContent = "STOP AND SEND";
+  $("record-seal").hidden = false;
   // The play so far goes up as the recording starts, so sending later
   // waits on no replay (app.js's warmPath).
   warming = sendPath(player.inputLog(0), recording.start).catch(() => undefined);
@@ -967,17 +968,22 @@ function startRecording() {
 
 /** Ends the recording; with `send`, hands the clip to the open mechanic
  * as CLIPS's hand-off does: the play as a path, the clip on it (POST
- * api/clips), then a turn in the talk naming it (POST api/talk). */
-async function stopRecording(send = true) {
+ * api/clips), then a turn in the talk naming it (POST api/talk). With
+ * `seal`, it is a held-out run instead (docs/sealed.md): only the play up
+ * to its start goes to the shared paths, the run itself to the sealed
+ * store, no row and no agent hears of it, and the scoreboard scores it. */
+async function stopRecording(send = true, seal = false) {
   const r = recording;
   recording = null;
   $("record").classList.remove("on");
   $("record").textContent = "RECORD";
+  $("record-seal").hidden = true;
   if (!r || !send) { markTarget(); return; }
   const log = player.inputLog(0);
   r.end = player.frame(0);
   const frames = r.end - r.start;
   if (frames < 10) { note("Too short to keep: under 10 frames."); return; }
+  if (seal) { await sealRecording(r, log); return; }
   sending = true;
   $("record").disabled = true;
   const mechanic = clipFor ?? session?.mechanic ?? null;
@@ -990,10 +996,7 @@ async function stopRecording(send = true) {
     const inputs = head + all.slice(r.start).join("\n") + "\n";
     // The draws the original made over the clip, when they were recorded
     // from before it started: kept with it, so it replays the same.
-    let kept;
-    if (draws.from !== null && draws.from <= r.start) {
-      kept = "gp-draws 0\n" + softLines(draws.sites) + draws.log.filter(([f]) => f > r.start && f <= r.end).map(([f, site, v]) => `${f} ${site} ${v}\n`).join("");
-    }
+    const kept = drawsOver(r);
     const { n, again } = await api("api/clips", { path, start: r.start, inputs, note: "", mechanic, draws: kept });
     await api("api/talk", { text: `Here is clip ${n}.`, clips: [n], mechanic });
     saved = { mechanic, n };
@@ -1003,6 +1006,39 @@ async function stopRecording(send = true) {
     await refreshLists(true);
   } catch (e) {
     fault(`The clip didn't reach your agent: ${e.message ?? e}`, 10000);
+  } finally {
+    sending = false;
+    clipFor = null;
+    markTarget();
+    $("record").disabled = mode !== "live" || show.view === "solo";
+  }
+}
+
+/** The draws the original made over a recording, when they were recorded
+ * from before it started, as a clip keeps them. */
+function drawsOver(r) {
+  if (draws.from === null || draws.from > r.start) return undefined;
+  return "gp-draws 0\n" + softLines(draws.sites) + draws.log.filter(([f]) => f > r.start && f <= r.end).map(([f, site, v]) => `${f} ${site} ${v}\n`).join("");
+}
+
+/** STOP AND SEAL: the recording kept as a held-out run. The person names
+ * the part it plays (level 1, say), which the scoreboard shows it as. */
+async function sealRecording(r, log) {
+  const name = (window.prompt("A held-out run no worker sees. Which part does it play (for example: level 1)?", "") ?? "").trim();
+  sending = true;
+  $("record").disabled = true;
+  try {
+    const { head, frames: all } = splitLog(log);
+    if (warming) { line("Sealing your run."); await warming; warming = null; }
+    line("Sealing your run.");
+    const path = await sendPath(head + all.slice(0, r.start).map((l) => l + "\n").join(""));
+    const inputs = head + all.slice(r.start).join("\n") + "\n";
+    const { n, again } = await api("api/clips", { path, start: r.start, inputs, note: name, sealed: true, draws: drawsOver(r) });
+    note(again
+      ? `Sealed already as held-out run ${n}: no worker sees it.`
+      : `Sealed as held-out run ${n}${name ? ` (${name})` : ""}: no worker sees it, and the scoreboard scores it on the model within a few minutes.`, 15000);
+  } catch (e) {
+    fault(`The run wasn't sealed: ${e.message ?? e}`, 10000);
   } finally {
     sending = false;
     clipFor = null;
@@ -1910,7 +1946,7 @@ async function refreshScoreboard() {
     if (r.ok) v = await r.json();
   } catch (e) { /* the next look */ }
   const lines = v?.lines ?? [];
-  const key = JSON.stringify([v?.error ?? null, lines]);
+  const key = JSON.stringify([v?.error ?? null, lines, v?.held_out ?? []]);
   if (key === scoreDrawn) return;
   scoreDrawn = key;
   $("scoreboard").hidden = !v || (lines.length === 0 && !v.error);
@@ -1955,6 +1991,26 @@ async function refreshScoreboard() {
       }
     }
     cell(tr, l.approved?.length ? l.approved.join(", ") : "none", "");
+  }
+  // The held-out runs: sealed plays the model is never tuned on, each with
+  // its game state straight through and with resync (gp sealed score).
+  const held = v?.held_out ?? [];
+  if (!held.length) {
+    const td = body.insertRow().insertCell();
+    td.colSpan = 5;
+    td.className = "held-none";
+    td.textContent = "HELD OUT: no sealed runs yet. While recording a whole level, STOP AND SEAL keeps it as one no worker sees.";
+  }
+  for (const r of held) {
+    const tr = body.insertRow();
+    tr.className = "held";
+    const when = r.measured_ms ? `scored ${ago(r.measured_ms)}` : "not scored yet";
+    const why = r.error ? `; the last score failed: ${r.error}` : r.measuring ? "; being scored now" : r.stale ? "; out of date, scored again soon" : "";
+    cell(tr, `HELD OUT: ${r.name}`, "", `sealed run ${r.run}, never seen by a worker; ${when}${why}`);
+    const st = cell(tr, r.straight ? `${r.straight.pct}%` : "not scored yet", r.straight?.moved ?? "", r.straight ? `${r.straight.together} of ${r.straight.frames} frames together straight through` : "");
+    if (r.stale || r.measuring) st.classList.add("old");
+    const rest = cell(tr, r.resync ? `with resync ${r.resync.pct}%${r.longest ? `, longest together ${r.longest} s` : ""}` : "", r.resync?.moved ?? "", "frames together when the model is put back on the original after each split; a sealed run's pictures aren't checked");
+    rest.colSpan = 3;
   }
 }
 
@@ -2321,6 +2377,10 @@ function wire() {
   $("record").addEventListener("click", (e) => {
     e.currentTarget.blur();
     if (recording) void stopRecording(true); else startRecording();
+  });
+  $("record-seal").addEventListener("click", (e) => {
+    e.currentTarget.blur();
+    if (recording) void stopRecording(true, true);
   });
   $("clip-play").addEventListener("click", (e) => { e.currentTarget.blur(); playClip(!clip?.playing); });
   $("clip-scrub").addEventListener("input", (e) => { playClip(false); seekClip(Number(e.target.value), true); });

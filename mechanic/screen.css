@@ -27,6 +27,8 @@ select { padding: 1px 4px; }
 #opacity { width: 120px; accent-color: var(--accent); }
 #opacity-at { min-width: 4ch; color: var(--fg); }
 #record.on { color: var(--rec); border-color: var(--rec); }
+#record-seal { color: var(--gold); border-color: var(--gold); }
+#record-seal[hidden] { display: none; }
 #follow-on.on { background: var(--accent); color: var(--bg); border-color: var(--accent); }
 /* Which the screen is doing: following the agent's work, or the person's. */
 #follow { margin: 0; padding: 3px 10px; font: bold 13px var(--mono); text-align: center; max-width: 100ch; border: 2px solid var(--panel); }

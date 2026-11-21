@@ -170,15 +170,7 @@ fn measuring_gp(home: &Path) -> PathBuf {
 /// change to any of them makes the line out of date.
 pub(crate) fn key_of(home: &Path, game_dir: &Path, game: &str, clip: &str, gp: &Path) -> String {
     let mut h = sha2::Sha256::new();
-    let st = status(home, game);
-    match st["model"]["hash"].as_str() {
-        Some(m) => h.update(format!("model {m}\n")),
-        None => h.update(std::fs::read(game_dir.join(gp_model::MODEL_FILE)).unwrap_or_default()),
-    }
-    // The game's own hooks, which the picture check builds its module from.
-    if let Ok(Some(code)) = crate::package::hook_code(game_dir) {
-        h.update(format!("hooks {code}\n"));
-    }
+    hash_model(&mut h, home, game_dir, game);
     if let Ok(clips) = corpus_clips(game_dir)
         && let Some(c) = clips.iter().find(|c| field(c, "id") == clip)
     {
@@ -190,6 +182,26 @@ pub(crate) fn key_of(home: &Path, game_dir: &Path, game: &str, clip: &str, gp: &
             }
         }
     }
+    hash_gp(&mut h, gp);
+    hex::encode(h.finalize())[..16].to_owned()
+}
+
+/// The model a measure is of: the one the gate last landed (its hash in
+/// the status), else model.toml; and the game's own hooks, which the
+/// picture check and `gp sealed score` build its module from.
+fn hash_model(h: &mut sha2::Sha256, home: &Path, game_dir: &Path, game: &str) {
+    let st = status(home, game);
+    match st["model"]["hash"].as_str() {
+        Some(m) => h.update(format!("model {m}\n")),
+        None => h.update(std::fs::read(game_dir.join(gp_model::MODEL_FILE)).unwrap_or_default()),
+    }
+    if let Ok(Some(code)) = crate::package::hook_code(game_dir) {
+        h.update(format!("hooks {code}\n"));
+    }
+}
+
+/// The gp that measures, by its size and time.
+fn hash_gp(h: &mut sha2::Sha256, gp: &Path) {
     let m = std::fs::metadata(gp).ok();
     let t = m
         .as_ref()
@@ -197,7 +209,64 @@ pub(crate) fn key_of(home: &Path, game_dir: &Path, game: &str, clip: &str, gp: &
         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
         .map_or(0, |d| d.as_millis());
     h.update(format!("gp {} {t}\n", m.map_or(0, |m| m.len())));
+}
+
+/// The held-out runs of a game: the sealed runs filed under
+/// `$GP_HOME/sealed/FOLDER/` for the game's folder name or a source ID its
+/// roms.toml lists ([`crate::sealed::named_runs`]). Their presses are never
+/// read here; `gp sealed score` alone plays them.
+pub(crate) fn held_runs(home: &Path, games: &Path, game: &str) -> Vec<crate::sealed::Named> {
+    let dir = games.join(game);
+    crate::sealed::named_runs(home, |f| {
+        f == game || crate::labels::game_folder(games, f).is_some_and(|d| d == dir)
+    })
+}
+
+/// A held-out run's line key in the cache: FOLDER/RUN.
+fn held_id(r: &crate::sealed::Named) -> String {
+    format!("{}/{}", r.folder, r.run)
+}
+
+/// What a held-out run's measure depends on: the model, the run's files
+/// (hashed, never shown) and the gp that measures.
+pub(crate) fn held_key(
+    home: &Path,
+    game_dir: &Path,
+    game: &str,
+    r: &crate::sealed::Named,
+    gp: &Path,
+) -> String {
+    let mut h = sha2::Sha256::new();
+    hash_model(&mut h, home, game_dir, game);
+    h.update(format!("sealed {}\n", r.run));
+    h.update(std::fs::read(&r.log).unwrap_or_default());
+    h.update(std::fs::read(r.log.with_extension("toml")).unwrap_or_default());
+    hash_gp(&mut h, gp);
     hex::encode(h.finalize())[..16].to_owned()
+}
+
+/// One score of a held-out run, as `gp sealed score` gives it: frames
+/// together of frames straight through and with resync, and the longest
+/// stretch in seconds.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub(crate) struct Held {
+    pub straight: [u64; 2],
+    pub resync: [u64; 2],
+    #[serde(default)]
+    pub longest: String,
+}
+
+/// A held-out run's kept score.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub(crate) struct HeldEntry {
+    pub key: String,
+    pub measured_ms: u64,
+    #[serde(default)]
+    pub now: Option<Held>,
+    #[serde(default)]
+    pub before: Option<Held>,
+    #[serde(default)]
+    pub error: Option<String>,
 }
 
 /// One measure of a line.
@@ -234,6 +303,9 @@ pub(crate) struct Cache {
     /// By clip id.
     #[serde(default)]
     pub lines: BTreeMap<String, Entry>,
+    /// The held-out runs' scores, by FOLDER/RUN.
+    #[serde(default)]
+    pub held: BTreeMap<String, HeldEntry>,
 }
 
 fn cache_file(home: &Path, game: &str) -> PathBuf {
@@ -284,6 +356,39 @@ pub(crate) fn record(
         Err(why) => e.error = Some(why),
     }
     write_cache(home, game, &c)
+}
+
+/// Keeps a held-out run's score under `key`, as [`record`] keeps a line's.
+pub(crate) fn record_held(
+    home: &Path,
+    game: &str,
+    id: &str,
+    key: &str,
+    got: Result<Held, String>,
+) -> std::io::Result<()> {
+    let mut c = read_cache(home, game);
+    let e = c.held.entry(id.to_owned()).or_default();
+    e.key = key.to_owned();
+    e.measured_ms = gp_mcp::asks::now_ms();
+    match got {
+        Ok(n) => {
+            if e.now.as_ref().is_some_and(|old| *old != n) {
+                e.before = e.now.take();
+            }
+            e.now = Some(n);
+            e.error = None;
+        }
+        Err(why) => e.error = Some(why),
+    }
+    write_cache(home, game, &c)
+}
+
+/// A share of frames as a percent to a tenth.
+fn pct(f: [u64; 2]) -> f64 {
+    if f[1] == 0 {
+        return 0.0;
+    }
+    (f[0] as f64 * 1000.0 / f[1] as f64).round() / 10.0
 }
 
 /// How `now` moved from `before`, as frames matched of frames: up, down or
@@ -384,7 +489,39 @@ pub(crate) fn board(home: &Path, games: &Path, game: &str) -> Option<Value> {
             })
         })
         .collect();
-    Some(json!({"game": game, "lines": rows, "error": null}))
+    let held: Vec<Value> = held_runs(home, games, game)
+        .iter()
+        .map(|r| {
+            let id = held_id(r);
+            let e = cache.held.get(&id);
+            let now = e.and_then(|e| e.now.clone());
+            let before = e.and_then(|e| e.before.clone());
+            let share = |f: fn(&Held) -> [u64; 2]| -> Value {
+                match &now {
+                    Some(n) => json!({
+                        "together": f(n)[0],
+                        "frames": f(n)[1],
+                        "pct": pct(f(n)),
+                        "moved": moved(f(n), before.as_ref().map(f)),
+                    }),
+                    None => Value::Null,
+                }
+            };
+            json!({
+                "name": if r.note.trim().is_empty() { format!("sealed run {}", r.run) } else { r.note.trim().to_owned() },
+                "run": r.run,
+                "folder": r.folder,
+                "straight": share(|n| n.straight),
+                "resync": share(|n| n.resync),
+                "longest": now.as_ref().map(|n| n.longest.clone()),
+                "measured_ms": e.map(|e| e.measured_ms),
+                "stale": e.is_none_or(|e| e.key != held_key(home, &dir, game, r, &gp)),
+                "measuring": busy.as_deref() == Some(&format!("{game}/sealed:{id}")),
+                "error": e.and_then(|e| e.error.clone()),
+            })
+        })
+        .collect();
+    Some(json!({"game": game, "lines": rows, "held_out": held, "error": null}))
 }
 
 /// The board as text lines, for `gp loop health`.
@@ -443,7 +580,143 @@ pub(crate) fn text(b: &Value) -> Vec<String> {
         }
         out.push(s);
     }
+    let held = b["held_out"].as_array().cloned().unwrap_or_default();
+    if held.is_empty() {
+        out.push(
+            "           held out: no sealed runs yet (STOP AND SEAL on the screen page keeps a recording no worker sees)"
+                .to_owned(),
+        );
+    }
+    for r in &held {
+        let share = |v: &Value| {
+            if v.is_null() {
+                "not scored yet".to_owned()
+            } else {
+                format!(
+                    "{}% ({} of {}){}",
+                    v["pct"].as_f64().unwrap_or(0.0),
+                    v["together"],
+                    v["frames"],
+                    word(&v["moved"])
+                )
+            }
+        };
+        let mut s = format!(
+            "           held out {} (sealed run {}): straight {}, resync {}",
+            r["name"].as_str().unwrap_or(""),
+            r["run"].as_str().unwrap_or(""),
+            share(&r["straight"]),
+            share(&r["resync"]),
+        );
+        if let Some(l) = r["longest"].as_str() {
+            s.push_str(&format!(", longest {l} s"));
+        }
+        if let Some(e) = r["error"].as_str() {
+            s.push_str(&format!(
+                " (the last score failed: {})",
+                crate::next::cut(e, 120)
+            ));
+        } else if r["stale"] == json!(true) && !r["straight"].is_null() {
+            s.push_str(" (out of date: gp serve scores it again)");
+        }
+        out.push(s);
+    }
     out
+}
+
+/// Scores one held-out run with `gp sealed score` (the coordinator's
+/// command; gp serve's measurer is the coordinator) and reads its numbers.
+fn measure_held(
+    gp: &Path,
+    games: &Path,
+    r: &crate::sealed::Named,
+    module: Option<&Path>,
+) -> Result<Held, String> {
+    use std::process::{Command, Stdio};
+    let mut cmd = Command::new(gp);
+    cmd.arg("--json")
+        .args(["sealed", "score", &r.folder, &r.run])
+        .arg("--games")
+        .arg(games);
+    if let Some(m) = module {
+        cmd.arg("--module").arg(m);
+    }
+    let out = cmd
+        .current_dir(games)
+        .env("GP_GAMES_DIR", games)
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|e| format!("{}: {e}", gp.display()))?;
+    let v: Value = serde_json::from_slice(&out.stdout).unwrap_or(Value::Null);
+    held_of(&v).ok_or_else(|| {
+        String::from_utf8_lossy(&out.stderr)
+            .lines()
+            .rev()
+            .find(|l| !l.trim().is_empty())
+            .map(str::to_owned)
+            .unwrap_or_else(|| "gp sealed score gave no numbers".into())
+    })
+}
+
+/// The numbers of `gp sealed score`'s JSON.
+fn held_of(v: &Value) -> Option<Held> {
+    let pair = |k: &str| -> Option<[u64; 2]> {
+        let s = &v["score"][k];
+        Some([s["together"].as_u64()?, s["frames"].as_u64()?])
+    };
+    Some(Held {
+        straight: pair("straight")?,
+        resync: pair("resync")?,
+        longest: v["longest"].as_str().unwrap_or("").to_owned(),
+    })
+}
+
+/// The held-out runs out of date, as (game, run, key), as
+/// [`out_of_date`] finds lines.
+pub(crate) fn held_out_of_date(
+    home: &Path,
+    games: &Path,
+    gp: &Path,
+) -> Vec<(String, crate::sealed::Named, String)> {
+    let now = gp_mcp::asks::now_ms();
+    let mut out = Vec::new();
+    for g in crate::next::games_in(games) {
+        if !matches!(lines(&games.join(&g)), Some(Ok(_))) {
+            continue;
+        }
+        let cache = read_cache(home, &g);
+        for r in held_runs(home, games, &g) {
+            let key = held_key(home, &games.join(&g), &g, &r, gp);
+            let due = cache.held.get(&held_id(&r)).is_none_or(|e| {
+                e.key != key || (e.error.is_some() && now.saturating_sub(e.measured_ms) > RETRY_MS)
+            });
+            if due {
+                out.push((g.clone(), r, key));
+            }
+        }
+    }
+    out
+}
+
+/// Scores every held-out run out of date once, one at a time, with `run`
+/// doing the score.
+pub(crate) fn refresh_held(
+    home: &Path,
+    games: &Path,
+    gp: &Path,
+    mut run: impl FnMut(&str, &crate::sealed::Named) -> Result<Held, String>,
+) {
+    for (g, r, key) in held_out_of_date(home, games, gp) {
+        let id = held_id(&r);
+        if let Ok(mut m) = MEASURING.lock() {
+            *m = Some(format!("{g}/sealed:{id}"));
+        }
+        let got = run(&g, &r);
+        if let Ok(mut m) = MEASURING.lock() {
+            *m = None;
+        }
+        let _ = record_held(home, &g, &id, &key, got);
+    }
 }
 
 /// Runs the picture check on one clip and reads its numbers.
@@ -650,6 +923,10 @@ pub(crate) fn start(home: PathBuf, games: PathBuf, modules: BTreeMap<String, Pat
                 } else {
                     measure(&gp, &games, g, &line.clip, module.as_deref())
                 }
+            });
+            refresh_held(&home, &games, &gp, |g, r| {
+                let module = module_for(&home, &games.join(g), g, &modules);
+                measure_held(&gp, &games, r, module.as_deref())
             });
             std::thread::sleep(LOOK);
         }
@@ -925,6 +1202,113 @@ level = "field"
             module_for(h, &g, "hop", &given),
             Some(PathBuf::from("/given.wasm"))
         );
+    }
+
+    #[test]
+    fn held_out_runs_are_scored_and_say_how_they_moved() {
+        let d = games();
+        let home = tempfile::tempdir().unwrap();
+        let h = home.path();
+        board_file(
+            d.path(),
+            "[[line]]\nname = \"the title\"\nclip = \"hop.title.001\"\n",
+        );
+        put(
+            &h.join("work/refine/hop/status.json"),
+            r#"{"model": {"hash": "m1"}}"#,
+        );
+        let gp = h.join("bin/gp");
+        put(&gp, "a gp");
+        // No sealed runs: the board says so.
+        let b = board(h, d.path(), "hop").unwrap();
+        assert_eq!(b["held_out"], json!([]));
+        assert!(text(&b).join("\n").contains("held out: no sealed runs yet"));
+        // The page's sealed clip 1 with a note, a log at the top, and
+        // another game's run, which isn't hop's.
+        let top = h.join("sealed/hop");
+        put(&top.join("sealed-run/clips/001.log"), "a log\n");
+        put(
+            &top.join("sealed-run/clips/001.toml"),
+            "start = 0\nnote = \"level 1\"\n",
+        );
+        put(&top.join("full-l2.log"), "another log\n");
+        put(&top.join("scores/1/kept.log"), "scores are not runs\n");
+        put(&h.join("sealed/other/x.log"), "not hop's\n");
+        let b = board(h, d.path(), "hop").unwrap();
+        let names: Vec<_> = b["held_out"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| (r["run"].clone(), r["name"].clone(), r["stale"].clone()))
+            .collect();
+        assert_eq!(
+            names,
+            vec![
+                (json!("full-l2"), json!("sealed run full-l2"), json!(true)),
+                (json!("1"), json!("level 1"), json!(true)),
+            ]
+        );
+        let mut scored = Vec::new();
+        refresh_held(h, d.path(), &gp, |g, r| {
+            scored.push(format!("{g} {} {}", r.folder, r.run));
+            Ok(Held {
+                straight: [50, 100],
+                resync: [80, 100],
+                longest: "4.0".into(),
+            })
+        });
+        assert_eq!(scored, vec!["hop hop full-l2", "hop hop 1"]);
+        refresh_held(h, d.path(), &gp, |_, _| panic!("scored again"));
+        // A landing: scored again, and the numbers say how they moved.
+        put(
+            &h.join("work/refine/hop/status.json"),
+            r#"{"model": {"hash": "m2"}}"#,
+        );
+        refresh_held(h, d.path(), &gp, |_, r| {
+            if r.run == "1" {
+                Ok(Held {
+                    straight: [70, 100],
+                    resync: [80, 100],
+                    longest: "6.0".into(),
+                })
+            } else {
+                Err("no module".into())
+            }
+        });
+        let b = board(h, d.path(), "hop").unwrap();
+        let one = &b["held_out"][1];
+        assert_eq!(
+            one["straight"],
+            json!({"together": 70, "frames": 100, "pct": 70.0, "moved": "up"})
+        );
+        assert_eq!(one["resync"]["moved"], json!("same"));
+        assert_eq!(one["stale"], json!(false));
+        let t = text(&b).join("\n");
+        assert!(
+            t.contains(
+                "held out level 1 (sealed run 1): straight 70% (70 of 100) up, resync 80% (80 of 100) same, longest 6.0 s"
+            ),
+            "{t}"
+        );
+        assert!(t.contains("the last score failed: no module"), "{t}");
+        // The run's file changed: out of date again.
+        put(&top.join("full-l2.log"), "changed\n");
+        put(&top.join("sealed-run/clips/001.log"), "changed\n");
+        assert_eq!(held_out_of_date(h, d.path(), &gp).len(), 2);
+    }
+
+    #[test]
+    fn a_sealed_score_s_json_gives_its_numbers() {
+        let v = json!({"run": "1", "score": {"straight": {"together": 3, "frames": 4}, "resync": {"together": 4, "frames": 4}}, "longest": "1.5"});
+        assert_eq!(
+            held_of(&v),
+            Some(Held {
+                straight: [3, 4],
+                resync: [4, 4],
+                longest: "1.5".into()
+            })
+        );
+        assert_eq!(held_of(&json!({"error": "x"})), None);
     }
 
     #[test]

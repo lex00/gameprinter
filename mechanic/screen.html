@@ -28,6 +28,7 @@
         <input type="range" id="opacity" min="0" max="100" value="50"><span id="opacity-at">50%</span>
       </label>
       <button type="button" id="record" title="R: record what you play on THE ORIGINAL as a clip for the outlined quest-log row; press again to send it to your agent">RECORD</button>
+      <button type="button" id="record-seal" hidden title="Keeps this recording as a held-out run: sealed, so no worker or agent ever sees it, and scored on the model on the scoreboard (docs/sealed.md). Record a whole level from its start for it">STOP AND SEAL</button>
       <span id="rec-to" title="The quest-log row a recording goes to: RECORD INTO THIS ROW on another row changes it"></span>
       <button type="button" id="follow-on" class="on" title="While your agent refines a clip, the screens show it (the original beside the model at the frames it fits) whenever you aren't playing or recording">FOLLOW THE WORK: ON</button>
     </div>
@@ -35,8 +36,9 @@
   <main>
     <!-- The game's scoreboard (docs/loop.md, "The scoreboard"): a line for
          each part of the game worked on now, from GAME/scoreboard.toml, as
-         gp serve last measured it (GET /api/scoreboard/GAME). Hidden when
-         the game has none. -->
+         gp serve last measured it (GET /api/scoreboard/GAME), and under
+         them the held-out runs (sealed plays, scored by gp sealed score).
+         Hidden when the game has none. -->
     <section id="scoreboard" hidden aria-label="The scoreboard">
       <table>
         <thead><tr>

@@ -410,7 +410,13 @@ Live, the person plays the original with the keyboard or a gamepad and the
 model follows on the frames the original read the pad on. RECORD (or R)
 starts a recording; pressing it again sends the clip to the mechanic open
 in the session and says so to the agent, as CLIPS's hand-off does (`POST
-api/paths`, `api/clips`, `api/talk`). A clip shows both games at a frame:
+api/paths`, `api/clips`, `api/talk`). While recording, STOP AND SEAL
+beside it keeps the recording as a held-out run instead: the page asks
+which part it plays (level 1, say), sends only the play up to its start
+to the shared paths and the run itself to `api/clips` with `sealed`, so
+it is kept under `$GP_HOME/sealed/GAME/sealed-run/clips/` with that name
+as its note, and no row and no agent hears of it (docs/sealed.md). The
+scoreboard then scores it. A clip shows both games at a frame:
 the original replayed in the player's second console to the clip's start
 and stepped from there, the model started at the clip's start from the
 original's state (`api/rebuild/start`) with the clip's presses, seeked to

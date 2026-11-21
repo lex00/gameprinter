@@ -530,6 +530,90 @@ fn games(home: &Path) -> Vec<String> {
     out
 }
 
+/// A sealed run as `gp sealed score` names it, for the scoreboard: `run`
+/// is what the command takes (N for the page's clip N, SESSION:N, or a
+/// log's name), `log` its file and `note` the words it was sealed with.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct Named {
+    pub folder: String,
+    pub run: String,
+    pub log: PathBuf,
+    pub note: String,
+}
+
+/// The sealed runs filed under `$GP_HOME/sealed/FOLDER/` for each folder
+/// there `of` says is the game's (its own name, or a source ID of it), by
+/// the names `gp sealed score` takes. Only the folders' listings and each
+/// run's note are read, never its presses.
+pub(crate) fn named_runs(home: &Path, of: impl Fn(&str) -> bool) -> Vec<Named> {
+    let mut out = Vec::new();
+    for folder in games(home).into_iter().filter(|f| of(f)) {
+        let top = sealed_root(home).join(&folder);
+        let logs = |d: &Path| -> Vec<PathBuf> {
+            let mut v: Vec<PathBuf> = fs::read_dir(d)
+                .into_iter()
+                .flatten()
+                .flatten()
+                .map(|e| e.path())
+                .filter(|p| p.is_file() && p.extension().is_some_and(|x| x == "log"))
+                .collect();
+            v.sort();
+            v
+        };
+        let note = |log: &Path| -> String {
+            fs::read_to_string(log.with_extension("toml"))
+                .ok()
+                .and_then(|t| toml::from_str::<toml::Table>(&t).ok())
+                .and_then(|t| t.get("note")?.as_str().map(str::to_owned))
+                .unwrap_or_default()
+        };
+        let mut push = |run: String, log: PathBuf| {
+            out.push(Named {
+                folder: folder.clone(),
+                run,
+                note: note(&log),
+                log,
+            });
+        };
+        for log in logs(&top) {
+            if let Some(stem) = log.file_stem().and_then(|s| s.to_str()) {
+                push(stem.to_owned(), log.clone());
+            }
+        }
+        let mut sessions: Vec<PathBuf> = fs::read_dir(&top)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.is_dir() && p.file_name().is_some_and(|n| n != SCORES))
+            .collect();
+        sessions.sort();
+        for s in sessions {
+            let name = s
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("")
+                .to_owned();
+            for log in logs(&s.join("clips")) {
+                let Some(n) = log
+                    .file_stem()
+                    .and_then(|x| x.to_str())
+                    .and_then(|x| x.parse::<u64>().ok())
+                else {
+                    continue;
+                };
+                let run = if name == SEALED_ROW {
+                    n.to_string()
+                } else {
+                    format!("{name}:{n}")
+                };
+                push(run, log);
+            }
+        }
+    }
+    out
+}
+
 /// The sealed run that frames from power-on (their own from `start`)
 /// play, if any.
 fn matching<'a>(
@@ -905,13 +989,14 @@ fn score(
         .with_context(|| format!("reading {}", model_file.display()))?;
     let model_hash = crate::corpus_score::model_key(&model_text);
     let st = &s.json["stretches"];
+    let longest =
+        gp_interp::lockstep::seconds(st["longest_any"].as_u64().unwrap_or(0), ctx.fps_milli);
     let line = format!(
-        "{} {run} model {} straight {} resync {} longest {} s\n",
+        "{} {run} model {} straight {} resync {} longest {longest} s\n",
         crate::open::now_rfc3339(),
         &model_hash[..model_hash.len().min(12)],
         crate::clip_score::percent(&s.json["straight"]),
         crate::clip_score::percent(&s.json["resync"]),
-        gp_interp::lockstep::seconds(st["longest_any"].as_u64().unwrap_or(0), ctx.fps_milli),
     );
     let ledger = top.join(LEDGER);
     let mut f = fs::OpenOptions::new()
@@ -921,7 +1006,7 @@ fn score(
         .with_context(|| format!("opening {}", ledger.display()))?;
     std::io::Write::write_all(&mut f, line.as_bytes())?;
     Ok(Outcome::ok(
-        json!({"run": run, "model": model_hash, "score": s.json, "ledger": ledger}),
+        json!({"run": run, "model": model_hash, "score": s.json, "longest": longest.to_string(), "ledger": ledger}),
         format!("{}\nadded a line to {}", s.text, ledger.display()),
     ))
 }
