@@ -27,8 +27,9 @@
 // The screen page shows only the screens, YOUR TURN and one status line
 // (owner, page-minimal). The loop's page, this same file at
 // screen.html?page=loop (LOOP_PAGE), shows the quest log (the rows `gp
-// mechanic queue GAME` prints), grouped NEEDS YOU, AGENT WORKING, UP NEXT,
-// DONE, the steps, the workers and the clips of every row, and the screens
+// mechanic queue GAME` prints), grouped NEEDS YOU, AGENT WORKING (a row
+// marked so, or one a live worker of the runner's is on), UP NEXT, IN LINE
+// and DONE (those two folded), the steps, the workers and the clips of every row, and the screens
 // only while a clip is open on them. A recording goes to the row outlined: the open one when it
 // starts. A row's RECORD INTO THIS ROW moves it there (api/pick when not
 // recording); a click elsewhere on the row only opens its details, the
@@ -1190,22 +1191,35 @@ for (const ev of ["pointerup", "pointercancel"]) {
 
 // The quest log's groups, in the order they show: what waits for the person
 // first. A row's group is said in words in its heading and on its badge.
+// IN LINE (parked behind a card or another row) and DONE stay folded until
+// opened.
 const GROUPS = [
   ["you", "NEEDS YOU"],
   ["working", "AGENT WORKING"],
   ["next", "UP NEXT"],
+  ["inline", "IN LINE"],
   ["done", "DONE"],
 ];
-// A row's group and badge come from its status; the triage's mark (NEEDS
-// YOU, THE TOOLS TRY) only counts on a row that isn't done.
+const FOLDED = { inline: "Rows parked behind a card or another row", done: "Finished rows, archived here" };
+// Whether a row is being worked: marked agent working, or a live worker of
+// the runner's is on it while its status stays next (the runner's worker
+// leaves the row's status as it was).
+function worked(r) {
+  return r.status === "agent working" || (r.status !== "done" && r.status !== "asking you" && !!workerOn(r));
+}
+// A row's group and badge come from its status and the runner's live
+// workers; the triage's mark (NEEDS YOU, THE TOOLS TRY) only counts on a
+// row that isn't done or worked.
 function groupOf(r) {
   if (r.status === "done") return "done";
-  if (r.status === "asking you" || r.triage?.by === "you") return "you";
-  if (r.status === "agent working") return "working";
+  if (r.status === "asking you" || (r.triage?.by === "you" && !worked(r))) return "you";
+  if (worked(r)) return "working";
+  if (r.status === "in line") return "inline";
   return "next";
 }
 function badgeOf(r) {
-  if (r.status !== "done" && r.status !== "agent working") {
+  if (worked(r)) return LABELS["agent working"];
+  if (r.status !== "done") {
     if (r.triage?.by === "you") return "NEEDS YOU";
     if (r.triage?.by === "tools") return "THE TOOLS TRY";
   }
@@ -1243,23 +1257,26 @@ function drawQueue() {
   const q = $("queue");
   if (pressing) return;
   const cardClips = asksNow.filter((a) => a.clip && !a.ran).map((a) => [askRow(a), a.clip]);
-  const key = JSON.stringify([session?.mechanic, rows, clipsBy.map((g) => [g.mechanic, (g.talk ?? []).length]), cardClips]);
+  const shown = rows.filter((r) => r.mechanic && !String(r.mechanic).startsWith("sealed"));
+  const live = shown.map((r) => workerOn(r)?.worker ?? null);
+  const key = JSON.stringify([session?.mechanic, rows, live, clipsBy.map((g) => [g.mechanic, (g.talk ?? []).length]), cardClips]);
   if (q.dataset.key === key) { markTarget(); return; }
   // Details opened stay open when the log is drawn again.
   const opened = new Set([...q.querySelectorAll("li[data-mechanic]")].filter((li) => [...li.querySelectorAll("details")].some((d) => d.open)).map((li) => li.dataset.mechanic));
   q.dataset.key = key;
   q.textContent = "";
-  try { q.classList.toggle("done-open", localStorage.getItem("gp-done-open") === "1"); } catch (e) { /* no storage */ }
-  const shown = rows.filter((r) => r.mechanic && !String(r.mechanic).startsWith("sealed"));
+  for (const g of Object.keys(FOLDED)) {
+    try { q.classList.toggle(`${g}-open`, localStorage.getItem(`gp-${g}-open`) === "1"); } catch (e) { /* no storage */ }
+  }
   for (const [g, title] of GROUPS) {
     const of = shown.filter((r) => groupOf(r) === g);
     if (!of.length) continue;
-    const head = el("li", `qgroup qgroup-${g}`, `${title} (${of.length})`);
-    if (g === "done") {
-      head.title = "Finished rows, archived here";
+    const head = el("li", `qgroup qgroup-${g}${FOLDED[g] ? " qgroup-folded" : ""}`, `${title} (${of.length})`);
+    if (FOLDED[g]) {
+      head.title = FOLDED[g];
       head.addEventListener("click", () => {
-        q.classList.toggle("done-open");
-        try { localStorage.setItem("gp-done-open", q.classList.contains("done-open") ? "1" : ""); } catch (e) { /* no storage */ }
+        q.classList.toggle(`${g}-open`);
+        try { localStorage.setItem(`gp-${g}-open`, q.classList.contains(`${g}-open`) ? "1" : ""); } catch (e) { /* no storage */ }
       });
     }
     q.append(head);
@@ -1274,10 +1291,12 @@ function drawQueue() {
 function queueRow(r, g, open) {
   const li = el("li", `qrow-${g}`);
   li.dataset.mechanic = r.mechanic;
-  li.append(el("span", `st st-${String(r.status ?? "").replace(/ /g, "-")}`, badgeOf(r)), el("span", "qname", r.mechanic));
+  const status = g === "working" ? "agent working" : String(r.status ?? "");
+  li.append(el("span", `st st-${status.replace(/ /g, "-")}`, badgeOf(r)), el("span", "qname", r.mechanic));
   if (g === "working") {
     li.classList.add("active");
-    li.append(el("span", "qworker", r.worker ? `ACTIVE: ${String(r.worker).toUpperCase()}` : "ACTIVE"));
+    const who = r.worker ?? workerOn(r)?.worker;
+    li.append(el("span", "qworker", who ? `ACTIVE: ${String(who).toUpperCase()}` : "ACTIVE"));
   }
   li.append(el("span", "qto", ""));
   const here = el("button", "qhere", "RECORD INTO THIS ROW");
@@ -1865,7 +1884,7 @@ function loopIdle() {
 
 function drawNowWork() {
   const box = $("now-work");
-  const working = rows.filter((r) => r.status === "agent working");
+  const working = rows.filter((r) => r.mechanic && worked(r));
   const wk = follow.work;
   // Whether an agent is there for each row, and when it last acted: a row
   // marked working with no live worker says so, with the runner's state.
@@ -2087,6 +2106,7 @@ async function refreshSteps() {
   openSteps = v.open ?? [];
   loopNow = v;
   drawWorkers(v);
+  drawQueue();
   drawNowWork();
   drawYourTurn();
   const key = JSON.stringify([v.halted?.id ?? null, (v.open ?? []).map((s) => s.id)]);

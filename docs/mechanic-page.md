@@ -433,7 +433,10 @@ so many of them, goes on with the original wherever it joins.
 
 On the loop's page, the quest log is grouped by state, each group a heading
 in words with its count: NEEDS YOU (triage asks the person, or the row is
-asking them), AGENT WORKING, UP NEXT, DONE. Each note says who wrote it:
+asking them), AGENT WORKING (marked agent working, or a live worker of the
+runner's is on the row, whose status stays next while it works), UP NEXT,
+IN LINE and DONE; IN LINE and DONE stay folded until their heading is
+clicked. Each note says who wrote it:
 YOU WROTE for a row the person made on the page, AGENT WROTE for the
 agent's; once the agent's note replaces the person's, their words stay as
 YOU ASKED (`asked` in `queue.json`, kept by `gp mechanic queue`). The

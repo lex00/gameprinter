@@ -231,11 +231,12 @@ body.loop-page main:has(#clipbar[hidden]) #screens { display: none; }
    the rest a click away. */
 .more { font: bold 11px var(--mono); padding: 0 6px; margin-left: 6px; color: var(--accent); border-color: var(--accent); background: transparent; }
 #quest #tell { margin: 0 0 8px; }
-/* Finished rows are archived: DONE stays folded until it is opened. */
-#queue .qgroup-done { cursor: pointer; }
-#queue .qgroup-done::after { content: " (click to show)"; color: var(--muted); font-weight: normal; }
-#queue.done-open .qgroup-done::after { content: " (click to hide)"; }
-#queue:not(.done-open) li.qrow-done { display: none; }
+/* Finished rows are archived and parked rows wait: DONE and IN LINE stay
+   folded until opened. */
+#queue .qgroup-folded { cursor: pointer; }
+#queue .qgroup-folded::after { content: " (click to show)"; color: var(--muted); font-weight: normal; }
+#queue.done-open .qgroup-done::after, #queue.inline-open .qgroup-inline::after { content: " (click to hide)"; }
+#queue:not(.done-open) li.qrow-done, #queue:not(.inline-open) li.qrow-inline { display: none; }
 /* The scoreboard at the top: a few lines, one per part of the game. */
 #scoreboard { width: min(900px, 100%); overflow-x: auto; }
 #scoreboard[hidden] { display: none; }
