@@ -663,7 +663,7 @@ async function openClip(n, mechanic, f) {
 async function openWorkClip(id, lo, hi, name) {
   const meta = await api(`api/screen/work-clip?id=${encodeURIComponent(id)}`);
   if (mode === "clip" && clip) backToClipless();
-  await showClipLog({ key: `work/${id}`, n: null, mechanic: null, work: id, name: name ?? `THE CLIP YOUR AGENT REFINES: ${id.toUpperCase()}`, says: `corpus clip ${id}`, note: meta.name ?? "", start: meta.start, frames: meta.frames, log: meta.log }, lo);
+  await showClipLog({ key: `work/${id}`, n: null, mechanic: null, work: id, name: name ?? `THE CLIP YOUR AGENT REFINES: ${id.toUpperCase()}`, says: `corpus clip ${id}`, note: meta.name ?? "", start: meta.start, frames: meta.frames, log: meta.log, draws: meta.draws ?? null, drawSites: meta.draw_sites ?? null }, lo);
   if (clip?.work === id) { clip.loop = [lo, Math.max(lo, hi)]; playClip(true); }
 }
 

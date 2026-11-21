@@ -1799,7 +1799,10 @@ fn screen_state(s: &Server) -> Result<Response> {
 
 /// `GET /api/screen/work-clip?id=ID`: a corpus clip of the game, as the
 /// screen plays it while it follows a refine: its play from power-on, the
-/// frame it starts at and its length.
+/// frame it starts at and its length, with the mapping's draw sites
+/// (`draw_sites`) for the screen to record the original's random draws at
+/// and hand to the model, as for a session clip (`draws` is null: a corpus
+/// clip keeps none of its own).
 fn screen_work_clip(s: &Server, req: &Request) -> Result<Response> {
     let Some(id) = req.param("id") else {
         return Ok(Response::error(400, "id is the corpus clip's"));
@@ -1815,12 +1818,17 @@ fn screen_work_clip(s: &Server, req: &Request) -> Result<Response> {
         Err(e) => return Ok(Response::error(404, &format!("{e:#}"))),
     };
     let frames = log.frames.len().saturating_sub(start);
+    // The mapping's draw sites, so the screen records the original's
+    // random draws from the replay and hands them to the model beside it.
+    let sites = super::live::draw_sites_of(rb);
     Ok(Response::json(&json!({
         "id": id,
         "name": c.recipe.name,
         "start": start,
         "frames": frames,
         "log": log.to_text(),
+        "draws": Value::Null,
+        "draw_sites": sites,
     })))
 }
 
