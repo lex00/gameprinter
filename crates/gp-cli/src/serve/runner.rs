@@ -1297,7 +1297,7 @@ pub(crate) fn brief(setup: &Setup, step: &Value, wt: &Path, branch: &str, before
             if step["repo"] == json!("tools") {
                 format!("The step is quest-log item {row} of {game}, and its work is in gameprinter itself: your worktree is of the gameprinter checkout. Land the change with gp tool gate --patch FILE -m MESSAGE.")
             } else {
-                format!("The step is quest-log item {row} of {game}. Your worktree is of the games checkout: make the change there.")
+                format!("The step is quest-log item {row} of {game}. Your worktree is of the games checkout: make the change there. A row about {game}'s own look (no theme named) is the port's fidelity work, not a theme: the model draws the original's pictures from the person's own ROM as it plays (gp needs their ROM file to run it), and the games repo holds no ROM bytes and no art copied from it, so making the model's screen match the original frame for frame is what an emulator does. A theme is new art of its own under {game}/themes/NAME, and only a row that names one is theme work.")
             },
             format!("First: {gp} mechanic show {game} {row} (the item, its notes and talk; before the row has a session it prints the row's note). Your first gp_run mechanic busy or mechanic log makes the row's session; mechanic start serves a page and isn't a worker's."),
             format!("At every step say where you are on the person's page: {gp} mechanic busy {game} {row} \"WHAT YOU ARE DOING. Next: WHAT COMES NEXT\"; put what you found with {gp} mechanic log {game} {row} \"...\"."),
