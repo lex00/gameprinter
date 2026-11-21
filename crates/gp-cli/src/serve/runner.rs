@@ -1483,18 +1483,25 @@ fn report_on_row(setup: &Setup, rec: &Value) {
         .map(|e| e.path())
         .filter(|p| p.extension().is_some_and(|x| x == "log"))
         .max_by_key(|p| fs::metadata(p).and_then(|m| m.modified()).ok());
-    let report = newest
+    let last: Option<Value> = newest
         .and_then(|p| fs::read_to_string(p).ok())
         .and_then(|t| {
             t.lines().rev().find_map(|l| {
                 let v: Value = serde_json::from_str(l).ok()?;
-                if v["type"] == json!("result") {
-                    v["result"].as_str().map(str::to_owned)
-                } else {
-                    None
-                }
+                (v["type"] == json!("result")).then_some(v)
             })
         });
+    // The worker's structured result (--json-schema), which code reads; the
+    // report's prose is for the person's log.
+    let result = last
+        .as_ref()
+        .map(|v| v["structured_output"].clone())
+        .filter(|r| r["outcome"].is_string());
+    let report = last
+        .as_ref()
+        .and_then(|v| v["result"].as_str().map(str::to_owned))
+        .filter(|r| !r.trim().is_empty())
+        .or_else(|| result.as_ref().map(note_of));
     let state = rec["state"].as_str().unwrap_or("?");
     let why = rec["why"].as_str().unwrap_or("no report");
     let said = report.clone().unwrap_or_else(|| why.to_owned());
@@ -1505,7 +1512,7 @@ fn report_on_row(setup: &Setup, rec: &Value) {
         ),
         None => format!("Worker loop-{id} ended ({state}): {said}"),
     };
-    let _ = settle_row(&setup.home, &game, &row, &said);
+    let _ = settle_row(&setup.home, &game, &row, &said, result.as_ref());
     let _ = Command::new(&setup.gp)
         .args(["mechanic", "log", &game, &row, &words])
         .env("GP_HOME", &setup.home)
@@ -1518,17 +1525,52 @@ fn report_on_row(setup: &Setup, rec: &Value) {
         .status();
 }
 
+/// The structured result a worker ends with (claude's --json-schema): the
+/// runner reads it, not the report's prose, for the row's note, so the
+/// same work gives the same note and the same next step.
+pub(crate) const WORKER_RESULT_SCHEMA: &str = r#"{"type":"object","additionalProperties":false,"required":["outcome","did","left"],"properties":{"outcome":{"type":"string","enum":["done","on a card","asking you","left","blocked"],"description":"done: nothing is left (a row with no target you set done yourself); on a card: a gate card waits for the person's YES; asking you: the row asks the person about a look with its clip; left: work is left for the next worker; blocked: the step can't go on"},"did":{"type":"string","description":"One or two sentences: what this step did and how it was checked"},"left":{"type":"string","description":"What is left for the next worker, or why it is blocked; empty when done"},"target_met":{"type":["boolean","null"],"description":"Whether the row's target measured as met, null when it has none"},"measures":{"type":"array","items":{"type":"string"},"description":"Measures taken, as LINE: VALUE"},"next_rows":{"type":"array","items":{"type":"string"},"description":"Rows this step proposed (gp mechanic propose), by name"}}}"#;
+
+/// A row's note from a worker's structured result: what is left, or for a
+/// row with nothing left what was done.
+fn note_of(result: &Value) -> String {
+    let s = |k: &str| result[k].as_str().map(str::trim).unwrap_or("").to_owned();
+    let (did, left) = (s("did"), s("left"));
+    let mut note = match result["outcome"].as_str().unwrap_or("") {
+        "done" | "on a card" | "asking you" => did,
+        "blocked" => format!("Blocked: {left}"),
+        _ if left.is_empty() => did,
+        _ => format!("Left: {left}"),
+    };
+    let rows: Vec<&str> = result["next_rows"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .collect();
+    if !rows.is_empty() {
+        note.push_str(&format!(" Proposed: {}.", rows.join(", ")));
+    }
+    note
+}
+
 /// A row its worker left marked `agent working` when it ended: no agent is
-/// on it any more, so it takes its status from the worker's report:
-/// `next` with what the report says is left, and the report's questions
-/// with them for the next worker to decide (only a look, with its clip on
-/// the row, asks the person, and a worker sets that itself). No row is
-/// closed on a note's or a report's wording: a row closes by its target's
-/// measure, or by its worker setting it done (`gp mechanic queue --status
-/// done`), so two runs of the same item end the same way whatever words
-/// their workers chose. Any other row the worker moved itself (done,
+/// on it any more, so it goes to `next`, with the note its worker's
+/// structured result makes when it gave one, else from its report: what
+/// the report says is left, and the report's questions with them for the
+/// next worker to decide (only a look, with its clip on the row, asks the
+/// person, and a worker sets that itself). No row is closed on a note's or
+/// a report's wording, nor on a result's outcome: a row closes by its
+/// target's measure, or by its worker setting it done (`gp mechanic queue
+/// --status done`), so two runs of the same item end the same way whatever
+/// words their workers chose. Any other row the worker moved itself (done,
 /// asking you, next ...) stays as it is.
-fn settle_row(home: &Path, game: &str, row: &str, report: &str) -> anyhow::Result<()> {
+fn settle_row(
+    home: &Path,
+    game: &str,
+    row: &str,
+    report: &str,
+    result: Option<&Value>,
+) -> anyhow::Result<()> {
     if !crate::mechanic::session::name_ok(game) {
         bail!("not a game name: {game}");
     }
@@ -1543,12 +1585,13 @@ fn settle_row(home: &Path, game: &str, row: &str, report: &str) -> anyhow::Resul
     // Only a look asks the owner, and a look comes with the clip the worker
     // put on the row itself (gp mechanic queue --clip): a question left in
     // a report is the next worker's to decide (owner, ask-only-about-looks).
-    let note = match asks_of(report) {
-        Some(a) => format!(
+    let note = match (result, asks_of(report)) {
+        (Some(res), _) => note_of(res),
+        (None, Some(a)) => format!(
             "The last worker asked: {a} It isn't the person's to answer: the next worker picks, says why in the note, and goes on. {}",
             left_of(report)
         ),
-        None => left_of(report),
+        (None, None) => left_of(report),
     };
     let status = "next";
     let Some(o) = r.as_object_mut() else {
@@ -1689,6 +1732,7 @@ pub(crate) fn brief(setup: &Setup, step: &Value, wt: &Path, branch: &str, before
         "A change lands only through a gate: gp model gate for a game, gp tool gate for the tool. A landing waits for the person's yes on their page; ask and wait, never work around it.".to_owned(),
         "The step is the whole item: do what it needs now, as far as a card for the person's yes. If what is left is a landing, make the patch, dry-run it and raise the card in this step; never leave it to another step. Don't answer the person with an explanation in place of the work: when they say they don't understand, do the next thing and tell them in one line what is on their page.".to_owned(),
         "When the step is done, or you can't do it, stop with a short report: what you did, what you checked, and what is left.".to_owned(),
+        "Your last answer is a structured result (its schema is given to you): outcome (done, on a card, asking you, left or blocked), did, left, and target_met, measures and next_rows where you have them. The runner reads it, not your prose, to make the row's note for the next worker; it closes no row (a row closes by its measure or your --status done).".to_owned(),
     ];
     if let Some((game, row)) = row_of(step) {
         b.push(String::new());
@@ -1823,6 +1867,9 @@ fn claude_args(setup: &Setup, wt: &Path, mcp: &Path) -> Vec<String> {
     if !own("--setting-sources") && !own("--bare") {
         a.extend(["--setting-sources".to_owned(), "project,local".to_owned()]);
     }
+    // It ends with a structured result, which makes its row's note.
+    a.push("--json-schema".into());
+    a.push(WORKER_RESULT_SCHEMA.into());
     // The home's themes, which a worker brings into the games checkout
     // (they are read there, never changed in place).
     let themes = setup.home.join("work").join("themes");
@@ -2406,6 +2453,7 @@ mod tests {
             "g",
             "a",
             "I made the clip.\nShould I model the initials screen? Or leave it?\n",
+            None,
         )
         .unwrap();
         let a = row("a");
@@ -2426,6 +2474,7 @@ mod tests {
             "g",
             "t",
             "Did the patch.\nShould this row move to the tool's quest log?",
+            None,
         )
         .unwrap();
         assert_eq!(row("t")["status"], "next");
@@ -2436,12 +2485,13 @@ mod tests {
             "g",
             "b",
             "Did the fix (see https://x/?a=1).\n\nLeft: the card for the gate.\nThen done.",
+            None,
         )
         .unwrap();
         let b = row("b");
         assert_eq!(b["status"], "next");
         assert_eq!(b["note"], "Left: the card for the gate. Then done.");
-        settle_row(home, "g", "c", "Anything left?").unwrap();
+        settle_row(home, "g", "c", "Anything left?", None).unwrap();
         assert_eq!(row("c")["status"], "done");
         // A row its worker left at next stays at next whatever its note or
         // the report says: wording closes nothing.
@@ -2452,11 +2502,57 @@ mod tests {
         q.push(json!({"mechanic": "i", "status": "next", "note": "Landed it.", "target": "level 1 sprites at least 1"}));
         crate::mechanic::session::write_queue(&f, &q).unwrap();
         for m in ["d", "e", "g", "i"] {
-            settle_row(home, "g", m, "Done. Landed.").unwrap();
+            settle_row(home, "g", m, "Done. Landed.", None).unwrap();
             assert_eq!(row(m)["status"], "next", "{m}");
         }
         // With no line naming what is left, its last paragraph.
         assert_eq!(left_of("Did it.\n\nThe card is up."), "The card is up.");
+    }
+
+    #[test]
+    fn a_structured_result_makes_its_rows_note_and_not_the_prose() {
+        let t = tempfile::tempdir().unwrap();
+        let home = t.path();
+        let f = home.join("mechanics/g/queue.json");
+        fs::create_dir_all(f.parent().unwrap()).unwrap();
+        let q = json!([
+            {"mechanic": "a", "status": "agent working", "worker": "loop-x"},
+            {"mechanic": "b", "status": "agent working", "worker": "loop-y"},
+        ]);
+        fs::write(&f, q.to_string()).unwrap();
+        let row = |m: &str| -> Value {
+            crate::mechanic::session::read_queue(&f)
+                .into_iter()
+                .find(|r| r["mechanic"] == json!(m))
+                .unwrap()
+        };
+        // Prose with a question and a left line: the result wins.
+        let left = json!({"outcome": "left", "did": "Made the clip.", "left": "the gate card.",
+            "next_rows": ["tile-flicker"]});
+        settle_row(
+            home,
+            "g",
+            "a",
+            "Should I land it?\nLeft: nothing",
+            Some(&left),
+        )
+        .unwrap();
+        assert_eq!(row("a")["status"], "next");
+        assert_eq!(
+            row("a")["note"],
+            "Left: the gate card. Proposed: tile-flicker."
+        );
+        // An outcome of done closes nothing: the row closes by its measure
+        // or its worker's --status done.
+        let done = json!({"outcome": "done", "did": "Landed 1f2e.", "left": ""});
+        settle_row(home, "g", "b", "Left: lots?", Some(&done)).unwrap();
+        assert_eq!(row("b")["status"], "next");
+        assert_eq!(row("b")["note"], "Landed 1f2e.");
+        let blocked = json!({"outcome": "blocked", "did": "", "left": "no ROM."});
+        assert_eq!(note_of(&blocked), "Blocked: no ROM.");
+        // The schema the worker is given parses and names its fields.
+        let s: Value = serde_json::from_str(WORKER_RESULT_SCHEMA).unwrap();
+        assert_eq!(s["required"], json!(["outcome", "did", "left"]));
     }
 
     #[test]
@@ -2809,6 +2905,11 @@ mod tests {
         assert_eq!(
             flag(&a, "--setting-sources").as_deref(),
             Some("project,local")
+        );
+        // It ends with the structured result its row's note is made from.
+        assert_eq!(
+            flag(&a, "--json-schema").as_deref(),
+            Some(WORKER_RESULT_SCHEMA)
         );
         // loop.toml's choice, and empty leaves it to the person's own.
         let mut s = loop_state::settings(&setup.home);
