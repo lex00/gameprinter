@@ -1029,9 +1029,35 @@ fn look(ctx: &Ctx) {
         tries: TRIES,
         again_after: Duration::from_secs(10),
     };
+    // Fewer workers than allowed and no row for another: the loop is idle,
+    // and gp serve's finder (crate::scoreboard::find_work) makes rows of the
+    // gaps on the scoreboard's lines that aren't full. The trouble filer's
+    // checks run at once, so a problem that would make a row makes it now.
+    let live = loop_state::workers(home)
+        .iter()
+        .filter(|w| loop_state::holds(w))
+        .count();
+    if todo.is_empty() && live < s.runner.max_workers as usize {
+        let was = idle();
+        IDLE_MS.store(gp_mcp::asks::now_ms(), Ordering::SeqCst);
+        if !was {
+            let _ = crate::loop_cmd::health_in(&ctx.paths, Some(&ctx.games));
+        }
+    }
     for step in todo {
         spawn(setup.clone(), step);
     }
+}
+
+/// When the runner last looked and found fewer workers at work than
+/// allowed and no step to start.
+static IDLE_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Whether the runner is idle now: its last look, within the last half
+/// minute, found room for a worker and nothing to start.
+pub(crate) fn idle() -> bool {
+    let at = IDLE_MS.load(Ordering::SeqCst);
+    at > 0 && gp_mcp::asks::now_ms().saturating_sub(at) < 30_000
 }
 
 /// Starts a worker on `step` in a thread of its own.

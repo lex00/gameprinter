@@ -148,6 +148,7 @@ pub(crate) fn measure(
         shots_dir: None,
         sprites: None,
         propose: false,
+        line: None,
         apart: true,
     };
     let o = crate::picture::run(&args, paths)?;

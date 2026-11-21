@@ -887,6 +887,95 @@ pub(crate) fn refresh(
     }
 }
 
+/// The lines below full, as (game, line, key): measured on the current key
+/// with no error, background or sprites short of their frames. An
+/// `own_draws` line is left out: the picture check doesn't measure it.
+pub(crate) fn short_lines(home: &Path, games: &Path, gp: &Path) -> Vec<(String, Line, String)> {
+    let mut out = Vec::new();
+    for g in crate::next::games_in(games) {
+        let Some(Ok(lines)) = lines(&games.join(&g)) else {
+            continue;
+        };
+        let cache = read_cache(home, &g);
+        for l in lines {
+            if l.own_draws {
+                continue;
+            }
+            let key = key_of(home, &games.join(&g), &g, &l.clip, gp);
+            let Some(e) = cache.lines.get(&l.slot()) else {
+                continue;
+            };
+            let Some(n) = e.now else { continue };
+            let short = n.background[0] < n.background[1] || n.sprites[0] < n.sprites[1];
+            if e.key == key && e.error.is_none() && short {
+                out.push((g.clone(), l, key));
+            }
+        }
+    }
+    out
+}
+
+/// The short lines the finder looked at already, as GAME/SLOT/KEY: a line
+/// is looked at again once its measure's key changes.
+static FOUND: Mutex<std::collections::BTreeSet<String>> =
+    Mutex::new(std::collections::BTreeSet::new());
+
+/// gp serve's finder (docs/loop.md, "When the loop runs out of rows"): while
+/// the runner is idle, each line below full not looked at on its current
+/// key has `look` run on it (the picture check with `--propose`, which adds
+/// a row per gap it finds, naming the line). Returns the lines it looked at.
+pub(crate) fn find_work(
+    home: &Path,
+    games: &Path,
+    gp: &Path,
+    idle: impl Fn() -> bool,
+    mut look: impl FnMut(&str, &Line),
+) -> Vec<String> {
+    let mut looked = Vec::new();
+    for (g, line, key) in short_lines(home, games, gp) {
+        if !idle() {
+            break;
+        }
+        let id = format!("{g}/{}/{key}", line.slot());
+        if !FOUND.lock().map(|mut f| f.insert(id)).unwrap_or(false) {
+            continue;
+        }
+        look(&g, &line);
+        looked.push(format!("{g}/{}", line.name));
+    }
+    looked
+}
+
+/// The picture check with `--propose` on a line's clip: each lasting gap
+/// becomes a next row whose note names the line.
+fn propose_gaps(gp: &Path, games: &Path, game: &str, line: &Line, module: Option<&Path>) {
+    use std::process::{Command, Stdio};
+    let mut cmd = Command::new(gp);
+    cmd.arg("--json")
+        .arg("picture")
+        .arg(games.join(game))
+        .args([
+            "--run",
+            game,
+            "--clip",
+            &line.clip,
+            "--top",
+            "2",
+            "--propose",
+        ])
+        .args(["--line", &line.name]);
+    if let Some(m) = module {
+        cmd.arg("--module").arg(m);
+    }
+    let _ = cmd
+        .current_dir(games)
+        .env("GP_GAMES_DIR", games)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+}
+
 /// How often gp serve looks for lines out of date.
 const LOOK: std::time::Duration = std::time::Duration::from_secs(30);
 
@@ -937,6 +1026,12 @@ pub(crate) fn start(home: PathBuf, games: PathBuf, modules: BTreeMap<String, Pat
             for g in crate::next::games_in(&games) {
                 close_rows(&home, &games, &g);
             }
+            // Room for a worker and no row for it: rows from the lines'
+            // gaps, so the loop doesn't sit idle while a line isn't full.
+            find_work(&home, &games, &gp, crate::serve::runner::idle, |g, line| {
+                let module = module_for(&home, &games.join(g), g, &modules);
+                propose_gaps(&gp, &games, g, line, module.as_deref());
+            });
             std::thread::sleep(LOOK);
         }
     });
@@ -1311,6 +1406,81 @@ level = "field"
         );
         let e = lines(&g).unwrap().unwrap_err();
         assert!(e.contains("no clip hop.l9.001"), "{e}");
+    }
+
+    /// While the runner is idle, the finder looks once at each line below
+    /// full on its current key, and at nothing while the runner is busy; a
+    /// new measure (a landing) lets it look again.
+    #[test]
+    fn the_finder_looks_at_the_lines_below_full_while_idle() {
+        let d = games();
+        let home = tempfile::tempdir().unwrap();
+        let h = home.path();
+        board_file(
+            d.path(),
+            "[[line]]\nname = \"the title\"\nclip = \"hop.title.001\"\n\n[[line]]\nname = \"level 2\"\nclip = \"hop.l2.001\"\n\n[[line]]\nname = \"own\"\nclip = \"hop.l1.001\"\nown_draws = true\n",
+        );
+        let status = |m: &str| {
+            put(
+                &h.join("work/refine/hop/status.json"),
+                &format!(r#"{{"model": {{"hash": "{m}"}}, "clips": []}}"#),
+            )
+        };
+        status("finder-1");
+        let gp = h.join("bin/gp");
+        put(&gp, "a gp");
+        let measure = || {
+            refresh(h, d.path(), &gp, |_, l| {
+                Ok(match (l.own_draws, l.clip.as_str()) {
+                    (true, _) => Numbers {
+                        own: Some([10, 200]),
+                        ..Numbers::default()
+                    },
+                    (_, "hop.title.001") => Numbers {
+                        background: [100, 100],
+                        sprites: [100, 100],
+                        ..Numbers::default()
+                    },
+                    _ => Numbers {
+                        background: [300, 300],
+                        sprites: [280, 300],
+                        ..Numbers::default()
+                    },
+                })
+            })
+        };
+        measure();
+        let short: Vec<String> = short_lines(h, d.path(), &gp)
+            .into_iter()
+            .map(|(_, l, _)| l.name)
+            .collect();
+        assert_eq!(short, vec!["level 2"], "full and own-draws lines are left");
+        assert!(
+            find_work(h, d.path(), &gp, || false, |_, _| panic!("busy")).is_empty(),
+            "nothing while the runner is busy"
+        );
+        let mut seen = Vec::new();
+        let got = find_work(
+            h,
+            d.path(),
+            &gp,
+            || true,
+            |g, l| seen.push((g.to_owned(), l.clip.clone())),
+        );
+        assert_eq!(got, vec!["hop/level 2"]);
+        assert_eq!(seen, vec![("hop".to_owned(), "hop.l2.001".to_owned())]);
+        assert!(
+            find_work(h, d.path(), &gp, || true, |_, _| panic!("again")).is_empty(),
+            "a line is looked at once on its key"
+        );
+        // A landing: measured again, looked at again.
+        status("finder-2");
+        assert!(
+            short_lines(h, d.path(), &gp).is_empty(),
+            "out of date until measured"
+        );
+        measure();
+        assert_eq!(find_work(h, d.path(), &gp, || true, |_, _| {}).len(), 1);
     }
 
     #[test]

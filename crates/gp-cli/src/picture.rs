@@ -97,6 +97,11 @@ pub struct PictureArgs {
     /// if it was done.
     #[arg(long)]
     pub propose: bool,
+    /// With `--propose`: the scoreboard line the clip is measured for, said
+    /// in each row's note as where it came from (gp serve's finder,
+    /// crate::scoreboard::find_work, passes it).
+    #[arg(long, requires = "propose")]
+    pub line: Option<String>,
     /// Each compared frame's pixels apart, kept in the JSON as `apart`
     /// (frame, sprites, background): what an approved look is locked to
     /// (crate::approved). Not a flag: the gate and `gp mechanic approve`
@@ -107,12 +112,15 @@ pub struct PictureArgs {
 
 /// The gaps `--propose` makes rows of: each group's details by how many
 /// clips and frames show them, flicker and one-frame gaps left out, at most
-/// `top` of a group. Each is (row, what, from, the clips it is seen in).
+/// `top` of a group. Each is (row, what, from, the clips it is seen in),
+/// from naming the scoreboard line when one is given.
 fn proposals(
     run: &str,
+    line: Option<&str>,
     details: &BTreeMap<(&'static str, String), Tally>,
     top: usize,
 ) -> Vec<(String, String, String, Vec<String>)> {
+    let on = line.map_or(String::new(), |l| format!("scoreboard line {l}: "));
     let mut by: BTreeMap<&'static str, Vec<(&String, &Tally)>> = BTreeMap::new();
     for ((g, d), t) in details {
         if *g != "flicker" && t.frames >= 2 {
@@ -140,10 +148,10 @@ fn proposals(
             );
             let from = match &t.example {
                 Some((c, f, l, r)) => format!(
-                    "gp picture --run {run}, {c} frame {f}, {l} at {}, {} {}x{}",
+                    "{on}gp picture --run {run}, {c} frame {f}, {l} at {}, {} {}x{}",
                     r[0], r[1], r[2], r[3]
                 ),
-                None => format!("gp picture --run {run}"),
+                None => format!("{on}gp picture --run {run}"),
             };
             out.push((row, what, from, t.clips.iter().cloned().collect()));
         }
@@ -1493,7 +1501,7 @@ pub(crate) fn run(args: &PictureArgs, paths: &gp_evidence::Paths) -> Result<Outc
             .and_then(|n| n.to_str())
             .unwrap_or_default()
             .to_owned();
-        let list = proposals(&args.run, &details, args.top);
+        let list = proposals(&args.run, args.line.as_deref(), &details, args.top);
         let _ = writeln!(text_out, "\nProposed to {name}'s quest log:");
         if list.is_empty() {
             let _ = writeln!(text_out, "  nothing: no gap but flicker or one-frame gaps");
@@ -1746,7 +1754,7 @@ mod tests {
                 t.add("game.l1.001", &f(40 + n, d), true);
             }
         }
-        let got = proposals("r1", &details, 4);
+        let got = proposals("r1", None, &details, 4);
         assert_eq!(
             got,
             vec![(
@@ -1756,6 +1764,12 @@ mod tests {
                 "gp picture --run r1, game.l1.001 frame 40, sprites at 8, 16 16x16".to_owned(),
                 vec!["game.l1.001".to_owned()]
             )]
+        );
+        // Found for a scoreboard line, the row says which.
+        let got = proposals("r1", Some("level 1"), &details, 4);
+        assert_eq!(
+            got[0].2,
+            "scoreboard line level 1: gp picture --run r1, game.l1.001 frame 40, sprites at 8, 16 16x16"
         );
     }
 
