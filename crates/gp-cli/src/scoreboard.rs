@@ -1353,8 +1353,10 @@ pub(crate) fn confirm_row(line: &str) -> String {
 /// (background and sprites each at least [`LOOK_SHARE`] of the frames, on a
 /// current measure): a row `confirm-LINE`, asking you, with the line's
 /// clip over all its frames in the game's own pictures, so LOOK AT IT sets
-/// it up beside the original. A row the quest log has already, whatever
-/// its status, is left as it is. Returns the rows it added.
+/// it up beside the original. A row the quest log has already by that
+/// name, or any row with the line's clip in the game's own pictures,
+/// whatever its status, is left as it is and no row is added. Returns the
+/// rows it added.
 pub(crate) fn ask_looks(home: &Path, games: &Path, game: &str) -> Vec<String> {
     let Some(b) = board(home, games, game) else {
         return Vec::new();
@@ -1379,7 +1381,14 @@ pub(crate) fn ask_looks(home: &Path, games: &Path, game: &str) -> Vec<String> {
         };
         let name = l["name"].as_str().unwrap_or("");
         let row = confirm_row(name);
-        if row == "confirm" || q.iter().any(|r| r["mechanic"] == json!(row)) {
+        // A row by that name, or any row asking about this clip in the
+        // game's own pictures (the owner's confirm-bonus for the first
+        // bonus round), already has the owner's look.
+        let asked = |r: &Value| {
+            r["mechanic"] == json!(row)
+                || (r["clip"]["id"] == l["clip"] && r["clip"]["look"] == json!("game"))
+        };
+        if row == "confirm" || l["clip"].is_null() || q.iter().any(asked) {
             continue;
         }
         let state = l["state"]["pct"]
@@ -1610,11 +1619,14 @@ level = "field"
         let f = h.join("mechanics/hop/queue.json");
         put(
             &f,
-            r#"[{"mechanic": "confirm-title", "status": "done", "note": "the owner's"}]"#,
+            r#"[{"mechanic": "title-look", "status": "asking you", "note": "the owner's", "clip": {"id": "hop.title.001", "from": 0, "to": 99, "look": "game"}}]"#,
         );
         assert_eq!(ask_looks(h, d.path(), "hop"), vec!["confirm-level-1"]);
         let q = crate::mechanic::session::read_queue(&f);
-        assert_eq!(q[0]["status"], "done", "a row it has is left");
+        assert_eq!(
+            q[0]["status"], "asking you",
+            "a row asking about the title's clip is left, and no confirm-title"
+        );
         let r = q
             .iter()
             .find(|r| r["mechanic"] == "confirm-level-1")
@@ -1631,6 +1643,12 @@ level = "field"
         assert!(note.contains(measured), "{note}");
         assert_eq!(q.len(), 2, "level 2 is short and own draws isn't a look");
         assert!(ask_looks(h, d.path(), "hop").is_empty(), "once");
+        // A row by the name, with no clip, is left as well.
+        put(
+            &f,
+            r#"[{"mechanic": "confirm-title", "status": "done"}, {"mechanic": "confirm-level-1", "status": "done"}]"#,
+        );
+        assert!(ask_looks(h, d.path(), "hop").is_empty(), "by name");
         assert_eq!(
             confirm_row("The first bonus round"),
             "confirm-first-bonus-round"
