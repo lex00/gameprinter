@@ -4,9 +4,11 @@
 //! another build since this one started, nothing new starts (the runner's
 //! workers and its clip keeping wait; the person's yeses still run, since
 //! the workers can take half an hour), and once the
-//! workers have finished their step, the yeses written their result, the
-//! background jobs and the preview's build ended and no request is being
-//! answered, the process becomes the new build (exec) with the arguments
+//! yeses have written their result, no worker is in the server's hands
+//! (one whose process runs keeps running: it runs on its own, and the new
+//! build takes it up; serve/runner.rs, `adopt`), the background jobs and
+//! the preview's build ended and no request is being answered, the
+//! process becomes the new build (exec) with the arguments
 //! it was started with, on the port it listens on. The page's own polls
 //! reconnect a moment later. `--rom` is left out, so the set the page's
 //! picker chose last stays chosen.
@@ -147,12 +149,14 @@ fn still_at_work() -> Option<String> {
             format!("{k} {many}")
         }
     };
+    // Only a worker gp serve has in hand now (making its worktree, between
+    // tries, writing its report): one whose process runs keeps running
+    // across the move.
     if workers > 0 {
         parts.push(format!(
-            "{} {} {} step",
+            "{} {} starting or reporting",
             n(workers, "worker", "workers"),
-            if workers == 1 { "finishes" } else { "finish" },
-            if workers == 1 { "its" } else { "their" }
+            if workers == 1 { "is" } else { "are" }
         ));
     }
     if yeses > 0 {
@@ -259,12 +263,23 @@ pub(crate) fn start(ctx: Arc<Ctx>) {
             while ANSWERING.load(Ordering::SeqCst) > 0 && t.elapsed() < REQUESTS_FOR {
                 std::thread::sleep(Duration::from_millis(20));
             }
+            // The workers held from here to the exec: none goes from
+            // running on its own to work in this process, and the new
+            // build takes up the ones running.
+            let (held, in_hand) = super::runner::hold_workers();
+            if in_hand > 0 {
+                drop(held);
+                CLOSING.store(false, Ordering::SeqCst);
+                SEALED.store(false, Ordering::SeqCst);
+                continue;
+            }
             let args: Vec<OsString> = std::env::args_os().skip(1).collect();
             let mut c = std::process::Command::new(&bin);
             c.args(again_args(&args, ctx.port))
                 .env("GP_SERVE_RELOADED", "1");
             eprintln!("gp serve: moving onto {}", bin.display());
             let e = crate::mechanic::server::exec(c);
+            drop(held);
             eprintln!("gp serve: couldn't move onto {}: {e:#}", bin.display());
             seen = now;
             CLOSING.store(false, Ordering::SeqCst);

@@ -31,6 +31,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File};
+#[cfg(not(unix))]
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -80,8 +81,22 @@ pub(crate) struct Setup {
     pub again_after: Duration,
 }
 
-/// The live workers: a step id and its stop flag.
-static RUNNING: Mutex<BTreeMap<String, Arc<AtomicBool>>> = Mutex::new(BTreeMap::new());
+/// A live worker as this server watches it.
+#[derive(Default)]
+pub(crate) struct Live {
+    /// Set to stop it.
+    stop: AtomicBool,
+    /// Its process runs on its own (detached, its exit written to a file;
+    /// [`launch`]), so a move onto a new gp leaves it running and the new
+    /// server takes it up ([`adopt`]). Unset while this server does
+    /// something for it in process: its worktree, between tries, its
+    /// report. Changed only with [`RUNNING`] held, which the move holds
+    /// from its last look to its exec.
+    out: AtomicBool,
+}
+
+/// The live workers: a step id and how it is watched.
+static RUNNING: Mutex<BTreeMap<String, Arc<Live>>> = Mutex::new(BTreeMap::new());
 
 /// How many yeses run now, from claimed to their ask's result written.
 static YESES_RUNNING: AtomicUsize = AtomicUsize::new(0);
@@ -91,15 +106,44 @@ static YES_IDS: Mutex<BTreeSet<String>> = Mutex::new(BTreeSet::new());
 /// The clip keeping's gates run now ([`keep_clips`]).
 static KEEPING: AtomicBool = AtomicBool::new(false);
 
-/// What the runner has at work now: its workers, the yeses it runs and
-/// whether the clip keeping runs. serve/reload.rs moves onto a new gp only
-/// once all are none.
+/// What the runner has at work in this process now: its workers between
+/// processes (a worker whose process runs on its own isn't counted: it
+/// keeps running across a move and the new server takes it up), the yeses
+/// it runs and whether the clip keeping runs. serve/reload.rs moves onto a
+/// new gp only once all are none.
 pub(crate) fn at_work() -> (usize, usize, bool) {
     (
-        RUNNING.lock().unwrap_or_else(|e| e.into_inner()).len(),
+        in_process(&RUNNING.lock().unwrap_or_else(|e| e.into_inner())),
         YESES_RUNNING.load(Ordering::SeqCst),
         KEEPING.load(Ordering::SeqCst),
     )
+}
+
+fn in_process(running: &BTreeMap<String, Arc<Live>>) -> usize {
+    running
+        .values()
+        .filter(|l| !l.out.load(Ordering::SeqCst))
+        .count()
+}
+
+/// The live workers held, for a move onto a new gp: while the guard is
+/// held no worker goes from running on its own to work in this process,
+/// so a move that saw none in process execs with none. With how many are
+/// in process now.
+pub(crate) fn hold_workers() -> (
+    std::sync::MutexGuard<'static, BTreeMap<String, Arc<Live>>>,
+    usize,
+) {
+    let g = RUNNING.lock().unwrap_or_else(|e| e.into_inner());
+    let n = in_process(&g);
+    (g, n)
+}
+
+/// Sets whether worker `live`'s process runs on its own, with the live
+/// workers held.
+fn set_out(live: &Live, out: bool) {
+    let _g = RUNNING.lock().unwrap_or_else(|e| e.into_inner());
+    live.out.store(out, Ordering::SeqCst);
 }
 
 fn running_ids() -> BTreeSet<String> {
@@ -261,12 +305,20 @@ pub(crate) fn start(ctx: Arc<Ctx>) {
     if STARTED.set(()).is_err() {
         return;
     }
-    // A record left live by a server that stopped: its process ended
-    // unwatched, or runs on with no one watching it.
+    // A record left live by the server before (this process before its
+    // move onto a new gp, or a server stopped): one whose process runs on
+    // its own, or ended with its exit written, is taken up and watched
+    // here; one whose process ended unwatched is stopped.
+    let setup = setup_of(&ctx);
     for mut w in loop_state::workers(&ctx.paths.home) {
-        if loop_state::LIVE.contains(&w["state"].as_str().unwrap_or(""))
-            && !w["pid"].as_u64().is_some_and(gp_mcp::proc::alive)
-        {
+        if !loop_state::LIVE.contains(&w["state"].as_str().unwrap_or("")) {
+            continue;
+        }
+        if let Some(setup) = setup.clone().filter(|_| Launched::of(&w).is_some()) {
+            adopt(setup, w);
+            continue;
+        }
+        if !w["pid"].as_u64().is_some_and(gp_mcp::proc::alive) {
             w["state"] = json!("stopped");
             w["why"] = json!("it ended while gp serve wasn't running");
             write(&ctx.paths.home, &w);
@@ -1001,11 +1053,7 @@ fn look(ctx: &Ctx) {
     if !s.runner.on || crate::wrong::halt(home).is_some() {
         return;
     }
-    let cs = clip_agent::Settings::current(ctx);
-    let Mode::Command(argv) = cs.mode.clone() else {
-        return;
-    };
-    let Some(program) = argv.first().and_then(|p| clip_agent::find_program(p)) else {
+    let Some(setup) = setup_of(ctx) else {
         return;
     };
     let v = crate::loop_cmd::steps_json(&ctx.paths, Some(&ctx.games));
@@ -1017,18 +1065,6 @@ fn look(ctx: &Ctx) {
         s.runner.max_workers as usize,
         gp_mcp::asks::now_ms(),
     );
-    let setup = Setup {
-        home: home.clone(),
-        games: ctx.games.clone(),
-        repo: cs.repo.clone(),
-        tools: ctx.repo.clone(),
-        gp: cs.gp.clone(),
-        argv,
-        program,
-        timeout: cs.timeout,
-        tries: TRIES,
-        again_after: Duration::from_secs(10),
-    };
     // Fewer workers than allowed and no row for another: the loop is idle,
     // and gp serve's finder (crate::scoreboard::find_work) makes rows of the
     // gaps on the scoreboard's lines that aren't full. The trouble filer's
@@ -1060,18 +1096,34 @@ pub(crate) fn idle() -> bool {
     at > 0 && gp_mcp::asks::now_ms().saturating_sub(at) < 30_000
 }
 
+/// What a worker is started with, when an agent command is set and found.
+fn setup_of(ctx: &Ctx) -> Option<Setup> {
+    let cs = clip_agent::Settings::current(ctx);
+    let Mode::Command(argv) = cs.mode.clone() else {
+        return None;
+    };
+    let program = argv.first().and_then(|p| clip_agent::find_program(p))?;
+    Some(Setup {
+        home: ctx.paths.home.clone(),
+        games: ctx.games.clone(),
+        repo: cs.repo.clone(),
+        tools: ctx.repo.clone(),
+        gp: cs.gp.clone(),
+        argv,
+        program,
+        timeout: cs.timeout,
+        tries: TRIES,
+        again_after: Duration::from_secs(10),
+    })
+}
+
 /// Starts a worker on `step` in a thread of its own.
 pub(crate) fn spawn(setup: Setup, step: Value) -> std::thread::JoinHandle<()> {
     let id = step["id"].as_str().unwrap_or("").to_owned();
-    let flag = Arc::new(AtomicBool::new(false));
-    RUNNING
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .insert(id.clone(), flag.clone());
     let before = fs::read(file(&setup.home, &id))
         .ok()
         .and_then(|b| serde_json::from_slice::<Value>(&b).ok());
-    let mut rec = json!({
+    let rec = json!({
         "step": step,
         "state": "working",
         "why": "",
@@ -1081,8 +1133,29 @@ pub(crate) fn spawn(setup: Setup, step: Value) -> std::thread::JoinHandle<()> {
         "runs": before.as_ref().map_or(0, runs) + 1,
     });
     write(&setup.home, &rec);
+    watched(setup, rec, false)
+}
+
+/// Takes up a worker the server before left running on its own (or that
+/// ended with its exit written since): it is watched here as if started
+/// here, its tries going on from the one its process is.
+pub(crate) fn adopt(setup: Setup, rec: Value) -> std::thread::JoinHandle<()> {
+    watched(setup, rec, true)
+}
+
+fn watched(setup: Setup, mut rec: Value, resume: bool) -> std::thread::JoinHandle<()> {
+    let id = rec["step"]["id"].as_str().unwrap_or("").to_owned();
+    let live = Arc::new(Live::default());
+    // An adopted worker's process runs on its own from the start: a move
+    // right after this one needn't wait for it.
+    live.out.store(resume, Ordering::SeqCst);
+    RUNNING
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(id.clone(), live.clone());
     std::thread::spawn(move || {
-        if let Err(e) = work(&setup, &flag, &mut rec) {
+        if let Err(e) = work(&setup, &live, &mut rec, resume) {
+            set_out(&live, false);
             rec["state"] = json!("stopped");
             rec["why"] = json!(format!("it couldn't start: {e:#}"));
         }
@@ -1139,7 +1212,8 @@ fn report_on_row(setup: &Setup, rec: &Value) {
         ),
         None => format!("Worker loop-{id} ended ({state}): {said}"),
     };
-    let _ = settle_row(&setup.home, &game, &row, &said);
+    let since = rec["started_ms"].as_u64().unwrap_or(0);
+    let _ = settle_row(&setup.home, &game, &row, &said, since);
     let _ = Command::new(&setup.gp)
         .args(["mechanic", "log", &game, &row, &words])
         .env("GP_HOME", &setup.home)
@@ -1157,13 +1231,35 @@ fn report_on_row(setup: &Setup, rec: &Value) {
 /// `next` with what the report says is left, and the report's questions
 /// with them for the next worker to decide (only a look, with its clip on
 /// the row, asks the person, and a worker sets that itself). A row the
+/// worker left at `next` with a note it wrote since `since_ms` saying the
+/// work is done (Landed, Done, Nothing to land, Already fixed, Gone ...,
+/// naming nothing left) and no target is set done. Any other row the
 /// worker moved itself (done, asking you, ...) stays as it is.
-fn settle_row(home: &Path, game: &str, row: &str, report: &str) -> anyhow::Result<()> {
+fn settle_row(
+    home: &Path,
+    game: &str,
+    row: &str,
+    report: &str,
+    since_ms: u64,
+) -> anyhow::Result<()> {
     if !crate::mechanic::session::name_ok(game) {
         bail!("not a game name: {game}");
     }
     let f = home.join("mechanics").join(game).join("queue.json");
     let mut q = crate::mechanic::session::read_queue(&f);
+    if let Some(r) = q.iter_mut().find(|r| {
+        r["mechanic"] == json!(row)
+            && r["status"] == json!("next")
+            && r.get("target").is_none()
+            && r["changed_ms"].as_u64().is_some_and(|c| c >= since_ms)
+            && r["note"].as_str().is_some_and(says_done)
+    }) {
+        r["status"] = json!("done");
+        if let Some(o) = r.as_object_mut() {
+            o.remove("worker");
+        }
+        return crate::mechanic::session::write_queue(&f, &q);
+    }
     let Some(r) = q
         .iter_mut()
         .find(|r| r["mechanic"] == json!(row) && r["status"] == json!("agent working"))
@@ -1214,23 +1310,49 @@ fn asks_of(report: &str) -> Option<String> {
     (!asks.is_empty()).then(|| asks.join(" "))
 }
 
+/// Words naming what is left (or still open).
+const LEFT_WORDS: &[&str] = &[
+    "left:",
+    "is left",
+    "'s left",
+    "still open",
+    "remaining:",
+    "left to do",
+];
+
+fn names_left(l: &str) -> bool {
+    let l = l.to_lowercase();
+    LEFT_WORDS.iter().any(|k| l.contains(k))
+}
+
+/// Whether a row's note says its work is done: it starts by saying so and
+/// names nothing left.
+fn says_done(note: &str) -> bool {
+    let n = note.trim_start().to_lowercase();
+    [
+        "done",
+        "landed",
+        "nothing to land",
+        "nothing new to land",
+        "nothing new landed",
+        "nothing landed",
+        "nothing to change",
+        "already fixed",
+        "already on main",
+        "already landed",
+        "gone",
+    ]
+    .iter()
+    .any(|p| n.starts_with(p))
+        && !n.starts_with("done when")
+        && !names_left(note)
+}
+
 /// What the report says is left: from its line naming what is left (or
 /// still open) to its end, else its last paragraph.
 fn left_of(report: &str) -> String {
     let lines: Vec<&str> = report.lines().collect();
-    let named = lines.iter().position(|l| {
-        let l = l.to_lowercase();
-        [
-            "left:",
-            "is left",
-            "'s left",
-            "still open",
-            "remaining:",
-            "left to do",
-        ]
-        .iter()
-        .any(|k| l.contains(k))
-    });
+    let named = lines.iter().position(|l| names_left(l));
     let part: Vec<&str> = match named {
         Some(i) => lines[i..].to_vec(),
         None => {
@@ -1519,8 +1641,9 @@ fn last_line(log: &Path) -> Option<String> {
 }
 
 /// Runs the worker's tries until one ends well, it is stopped, or the
-/// tries or the time are up.
-fn work(setup: &Setup, flag: &AtomicBool, rec: &mut Value) -> anyhow::Result<()> {
+/// tries or the time are up. With `resume`, the try its record names is
+/// already running (or ended) on its own: it is watched, not started.
+fn work(setup: &Setup, live: &Live, rec: &mut Value, resume: bool) -> anyhow::Result<()> {
     let step = rec["step"].clone();
     let id = step["id"].as_str().unwrap_or("").to_owned();
     let in_games = in_games(&step);
@@ -1555,64 +1678,87 @@ fn work(setup: &Setup, flag: &AtomicBool, rec: &mut Value) -> anyhow::Result<()>
             "command": setup.gp, "args": args, "env": env,
         }}}))?,
     )?;
-    let t0 = Instant::now();
+    // Its time runs from its start, across a move onto a new gp.
+    let started_ms = rec["started_ms"]
+        .as_u64()
+        .unwrap_or_else(gp_mcp::asks::now_ms);
+    let timed_out =
+        || gp_mcp::asks::now_ms().saturating_sub(started_ms) >= setup.timeout.as_millis() as u64;
+    let flag = &live.stop;
     let mut before = String::new();
-    for n in 1..=setup.tries.max(1) {
-        rec["tries"] = json!(n);
-        let brief_path = dir.join(format!("brief.{n}.txt"));
+    let first = if resume {
+        rec["tries"].as_u64().unwrap_or(1).max(1) as u32
+    } else {
+        1
+    };
+    for n in first..=setup.tries.max(first) {
         let log_path = dir.join(format!("{n}.log"));
-        fs::write(&brief_path, brief(setup, &step, &wt, &branch, &before))?;
-        let log = File::create(&log_path)?;
-        let mut cmd = Command::new(&setup.program);
-        let mut shown = vec![setup.program.display().to_string()];
-        cmd.args(&setup.argv[1..]);
-        shown.extend(setup.argv[1..].iter().cloned());
-        if clip_agent::is_claude(setup.argv.first().map(String::as_str).unwrap_or("")) {
-            let extra = claude_args(setup, &wt, &mcp);
-            cmd.args(&extra);
-            shown.extend(extra);
-        }
-        rec["command"] = json!(clip_agent::command_line(&shown));
-        rec["log"] = json!(log_path);
-        rec["brief"] = json!(brief_path);
-        cmd.env("GP_HOME", &setup.home)
-            .env("GP_GAMES_DIR", games)
-            .env(loop_state::STEP_ENV, &id)
-            .env("GP_WORKER", format!("loop-{id}"))
-            .env("GP_LOOP_BRIEF", &brief_path)
-            .env("GP_LOOP_WORKTREE", &wt)
-            .env("GP_GP", &setup.gp)
-            .env("GP_NO_WINDOW", "1")
-            .current_dir(&wt)
-            .stdout(Stdio::from(log.try_clone()?))
-            .stderr(Stdio::from(log))
-            .stdin(Stdio::piped());
-        gp_mcp::proc::own_group(&mut cmd);
-        let mut child = cmd.spawn().context("starting the worker")?;
-        if let Some(mut stdin) = child.stdin.take() {
-            let _ = stdin.write_all(&fs::read(&brief_path).unwrap_or_default());
-        }
-        rec["pid"] = json!(child.id());
-        rec["state"] = json!("working");
-        write(&setup.home, rec);
-        let end = |child: &mut std::process::Child| {
-            gp_mcp::proc::stop_group(child.id(), Duration::from_secs(2));
-            let _ = child.kill();
-            let _ = child.wait();
+        let adopted = resume && n == first;
+        let p = if adopted {
+            Launched::of(rec).context("the worker's record names no process")?
+        } else {
+            rec["tries"] = json!(n);
+            let brief_path = dir.join(format!("brief.{n}.txt"));
+            fs::write(&brief_path, brief(setup, &step, &wt, &branch, &before))?;
+            let log = File::create(&log_path)?;
+            let mut argv: Vec<String> = setup.argv[1..].to_vec();
+            if clip_agent::is_claude(setup.argv.first().map(String::as_str).unwrap_or("")) {
+                argv.extend(claude_args(setup, &wt, &mcp));
+            }
+            let mut shown = vec![setup.program.display().to_string()];
+            shown.extend(argv.iter().cloned());
+            rec["command"] = json!(clip_agent::command_line(&shown));
+            rec["log"] = json!(log_path);
+            rec["brief"] = json!(brief_path);
+            let mut cmd = launcher(&setup.program, &argv, &brief_path, &dir, n);
+            cmd.env("GP_HOME", &setup.home)
+                .env("GP_GAMES_DIR", games)
+                .env(loop_state::STEP_ENV, &id)
+                .env("GP_WORKER", format!("loop-{id}"))
+                .env("GP_LOOP_BRIEF", &brief_path)
+                .env("GP_LOOP_WORKTREE", &wt)
+                .env("GP_GP", &setup.gp)
+                .env("GP_NO_WINDOW", "1")
+                .current_dir(&wt)
+                .stdout(Stdio::from(log.try_clone()?))
+                .stderr(Stdio::from(log));
+            gp_mcp::proc::own_group(&mut cmd);
+            let p = launch(cmd, &brief_path, &dir, n).context("starting the worker")?;
+            rec["pid"] = json!(p.pid);
+            rec["group"] = json!(p.group);
+            rec["exit_file"] = json!(p.exit);
+            rec["state"] = json!("working");
+            write(&setup.home, rec);
+            p
         };
+        // From here its process runs on its own until it ends.
+        set_out(live, true);
+        let end = |p: &Launched| {
+            gp_mcp::proc::stop_group(p.group, Duration::from_secs(2));
+            p.reap();
+        };
+        let mut looked_alive = Instant::now();
         let code = loop {
-            if let Some(s) = child.try_wait()? {
-                break s.code();
+            let ended = p.ended(looked_alive.elapsed() >= Duration::from_secs(2));
+            if looked_alive.elapsed() >= Duration::from_secs(2) {
+                looked_alive = Instant::now();
+            }
+            if let Some(code) = ended {
+                set_out(live, false);
+                p.reap();
+                break code;
             }
             if flag.load(Ordering::Relaxed) {
-                end(&mut child);
+                set_out(live, false);
+                end(&p);
                 rec["state"] = json!("stopped");
                 rec["why"] = json!("you stopped it");
                 rec["last"] = json!(last_line(&log_path));
                 return Ok(());
             }
-            if t0.elapsed() >= setup.timeout {
-                end(&mut child);
+            if timed_out() {
+                set_out(live, false);
+                end(&p);
                 rec["state"] = json!("stopped");
                 rec["why"] = json!(format!(
                     "its time ran out ({} minutes)",
@@ -1676,7 +1822,7 @@ pub(crate) fn stop_worker(home: &Path, id: &str) -> Result<Value, String> {
         return Err(format!("a step's id is s and 12 hex digits (got {id:?})"));
     }
     if let Some(f) = RUNNING.lock().unwrap_or_else(|e| e.into_inner()).get(id) {
-        f.store(true, Ordering::Relaxed);
+        f.stop.store(true, Ordering::Relaxed);
         return Ok(json!({"stopping": id}));
     }
     let mut w: Value = fs::read(file(home, id))
@@ -1684,7 +1830,9 @@ pub(crate) fn stop_worker(home: &Path, id: &str) -> Result<Value, String> {
         .and_then(|b| serde_json::from_slice(&b).ok())
         .ok_or_else(|| format!("no worker on step {id}"))?;
     if let Some(pid) = w["pid"].as_u64().filter(|p| gp_mcp::proc::alive(*p)) {
-        gp_mcp::proc::stop_group(pid as u32, Duration::from_secs(2));
+        // Its process group: the launcher's, which outlives the launcher.
+        let group = w["group"].as_u64().unwrap_or(pid);
+        gp_mcp::proc::stop_group(group as u32, Duration::from_secs(2));
     }
     if loop_state::LIVE.contains(&w["state"].as_str().unwrap_or("")) {
         w["state"] = json!("stopped");
@@ -1693,6 +1841,166 @@ pub(crate) fn stop_worker(home: &Path, id: &str) -> Result<Value, String> {
         write(home, &w);
     }
     Ok(json!({"stopped": id}))
+}
+
+/// A worker's process as started by [`launch`]. On unix it runs on its
+/// own: a short `sh` (the process group's leader, which this server waits
+/// for at once) starts it in the background with the brief on its stdin
+/// and writes its pid, and when it ends its exit code goes to a file. It
+/// is no child of gp serve, so it keeps running across gp serve's move
+/// onto a new build (exec), and any server reads its end from the file.
+pub(crate) struct Launched {
+    /// The process that runs the agent and writes its exit.
+    pub pid: u32,
+    /// Its process group, which [`gp_mcp::proc::stop_group`] stops.
+    pub group: u32,
+    /// Where its exit code is written when it ends (none off unix).
+    pub exit: Option<PathBuf>,
+}
+
+/// The children this server waits for itself (off unix).
+#[cfg(not(unix))]
+static CHILDREN: Mutex<BTreeMap<u32, std::process::Child>> = Mutex::new(BTreeMap::new());
+
+/// The launcher's script: the agent in the background with the brief on
+/// its stdin, its exit code written when it ends, its pid written now.
+#[cfg(unix)]
+const LAUNCH_SH: &str = r#"e=$1; p=$2; b=$3; shift 3
+( "$@" < "$b"; c=$?; echo "$c" > "$e.tmp"; mv "$e.tmp" "$e" ) &
+echo "$!" > "$p.tmp"; mv "$p.tmp" "$p"
+"#;
+
+fn exit_file(dir: &Path, n: u32) -> PathBuf {
+    dir.join(format!("{n}.exit"))
+}
+
+fn pid_file(dir: &Path, n: u32) -> PathBuf {
+    dir.join(format!("{n}.pid"))
+}
+
+/// The command that starts try `n` of `program ARGV` with the brief.
+fn launcher(program: &Path, argv: &[String], brief: &Path, dir: &Path, n: u32) -> Command {
+    #[cfg(unix)]
+    {
+        let mut c = Command::new("/bin/sh");
+        c.arg("-c")
+            .arg(LAUNCH_SH)
+            .arg("sh")
+            .arg(exit_file(dir, n))
+            .arg(pid_file(dir, n))
+            .arg(brief)
+            .arg(program)
+            .args(argv)
+            .stdin(Stdio::null());
+        c
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (brief, dir, n);
+        let mut c = Command::new(program);
+        c.args(argv).stdin(Stdio::piped());
+        c
+    }
+}
+
+/// Starts the [`launcher`]'s command.
+fn launch(mut cmd: Command, brief: &Path, dir: &Path, n: u32) -> anyhow::Result<Launched> {
+    #[cfg(unix)]
+    {
+        let _ = brief;
+        let (exit, pidf) = (exit_file(dir, n), pid_file(dir, n));
+        let _ = fs::remove_file(&exit);
+        let _ = fs::remove_file(&pidf);
+        let mut sh = cmd.spawn()?;
+        let group = sh.id();
+        let s = sh.wait()?;
+        let pid = fs::read_to_string(&pidf)
+            .ok()
+            .and_then(|t| t.trim().parse::<u32>().ok())
+            .with_context(|| format!("the launcher wrote no pid (it ended with {s})"))?;
+        Ok(Launched {
+            pid,
+            group,
+            exit: Some(exit),
+        })
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (dir, n);
+        let mut child = cmd.spawn()?;
+        if let Some(mut stdin) = child.stdin.take() {
+            let _ = stdin.write_all(&fs::read(brief).unwrap_or_default());
+        }
+        let pid = child.id();
+        CHILDREN
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(pid, child);
+        Ok(Launched {
+            pid,
+            group: pid,
+            exit: None,
+        })
+    }
+}
+
+impl Launched {
+    /// The process a worker's record names, when it can be taken up: one
+    /// started detached (its exit file named), still running or ended with
+    /// its exit written.
+    pub(crate) fn of(rec: &Value) -> Option<Self> {
+        let pid = rec["pid"].as_u64()? as u32;
+        let exit = PathBuf::from(rec["exit_file"].as_str()?);
+        let group = rec["group"].as_u64().map_or(pid, |g| g as u32);
+        (exit.is_file() || gp_mcp::proc::alive(u64::from(pid))).then_some(Self {
+            pid,
+            group,
+            exit: Some(exit),
+        })
+    }
+
+    fn written(&self) -> Option<Option<i32>> {
+        let t = fs::read_to_string(self.exit.as_ref()?).ok()?;
+        Some(t.trim().parse::<i32>().ok())
+    }
+
+    /// Its exit code once it ended (None inside for a signal or an end
+    /// with nothing written), else None. `look` also asks the process
+    /// table, for an end that wrote nothing (its group stopped).
+    fn ended(&self, look: bool) -> Option<Option<i32>> {
+        #[cfg(not(unix))]
+        if self.exit.is_none() {
+            let _ = look;
+            let mut m = CHILDREN.lock().unwrap_or_else(|e| e.into_inner());
+            let c = m.get_mut(&self.pid)?;
+            return match c.try_wait() {
+                Ok(Some(s)) => Some(s.code()),
+                Ok(None) => None,
+                Err(_) => Some(None),
+            };
+        }
+        if let Some(c) = self.written() {
+            return Some(c);
+        }
+        if look && !gp_mcp::proc::alive(u64::from(self.pid)) {
+            return Some(self.written().flatten());
+        }
+        None
+    }
+
+    /// Off unix, waits for the child it ended; on unix nothing waits (the
+    /// launcher was waited for, and its background child isn't ours).
+    fn reap(&self) {
+        #[cfg(not(unix))]
+        if let Some(mut c) = CHILDREN
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&self.pid)
+        {
+            let _ = c.kill();
+            let _ = c.wait();
+        }
+    }
 }
 
 fn stop(ctx: &Ctx, req: &Request, params: &Params) -> Result<Response, Fail> {
@@ -1803,6 +2111,7 @@ mod tests {
             "g",
             "a",
             "I made the clip.\nShould I model the initials screen? Or leave it?\n",
+            0,
         )
         .unwrap();
         let a = row("a");
@@ -1823,6 +2132,7 @@ mod tests {
             "g",
             "t",
             "Did the patch.\nShould this row move to the tool's quest log?",
+            0,
         )
         .unwrap();
         assert_eq!(row("t")["status"], "next");
@@ -1833,13 +2143,38 @@ mod tests {
             "g",
             "b",
             "Did the fix (see https://x/?a=1).\n\nLeft: the card for the gate.\nThen done.",
+            0,
         )
         .unwrap();
         let b = row("b");
         assert_eq!(b["status"], "next");
         assert_eq!(b["note"], "Left: the card for the gate. Then done.");
-        settle_row(home, "g", "c", "Anything left?").unwrap();
+        settle_row(home, "g", "c", "Anything left?", 0).unwrap();
         assert_eq!(row("c")["status"], "done");
+        // A row its worker left at next with a note saying it is done.
+        let mut q = crate::mechanic::session::read_queue(&f);
+        q.push(json!({"mechanic": "d", "status": "next", "note": "Nothing new to land: ad344acc has it."}));
+        q.push(json!({"mechanic": "e", "status": "next", "note": "Landed 1f2e. Left: the card for the theme."}));
+        q.push(json!({"mechanic": "h", "status": "next", "note": "Done when the demo matches."}));
+        q.push(json!({"mechanic": "i", "status": "next", "note": "Landed it.", "target": "level 1 sprites at least 1"}));
+        crate::mechanic::session::write_queue(&f, &q).unwrap();
+        for m in ["d", "e", "h", "i"] {
+            settle_row(home, "g", m, "Done.", 0).unwrap();
+        }
+        assert_eq!(row("d")["status"], "done");
+        assert_eq!(row("e")["status"], "next", "it names something left");
+        assert_eq!(
+            row("h")["status"],
+            "next",
+            "a done-when is a target in words"
+        );
+        assert_eq!(row("i")["status"], "next", "a target closes by its measure");
+        // A note from before the worker started isn't its word.
+        let mut q = crate::mechanic::session::read_queue(&f);
+        q.push(json!({"mechanic": "j", "status": "next", "note": "Landed long ago."}));
+        crate::mechanic::session::write_queue(&f, &q).unwrap();
+        settle_row(home, "g", "j", "Done.", u64::MAX).unwrap();
+        assert_eq!(row("j")["status"], "next");
         // With no line naming what is left, its last paragraph.
         assert_eq!(left_of("Did it.\n\nThe card is up."), "The card is up.");
     }
@@ -2189,5 +2524,103 @@ mod tests {
         let r = record(&setup.home, id);
         assert_eq!(r["state"], "stopped");
         assert_eq!(r["why"], "you stopped it");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_running_worker_is_not_in_the_servers_hands_and_a_new_server_takes_it_up() {
+        let t = tempfile::tempdir().unwrap();
+        let go = t.path().join("go");
+        let setup = rig(
+            t.path(),
+            &format!(
+                "while [ ! -e {g} ]; do sleep 0.05; done\necho fin\n",
+                g = go.display()
+            ),
+        );
+        let id = "s0000000000a4";
+        let h = spawn(setup.clone(), s(id, "agent", &["game:g"]));
+        let out = || {
+            RUNNING
+                .lock()
+                .unwrap()
+                .get(id)
+                .is_some_and(|l| l.out.load(Ordering::SeqCst))
+        };
+        let t0 = Instant::now();
+        while !out() && t0.elapsed() < Duration::from_secs(10) {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        // Its process runs on its own: a move onto a new gp needn't wait.
+        assert!(out(), "running on its own");
+        let r = record(&setup.home, id);
+        assert!(loop_state::holds(&r), "{r}");
+        assert!(r["exit_file"].is_string() && r["group"].is_u64(), "{r}");
+        fs::write(&go, "").unwrap();
+        h.join().unwrap();
+        assert_eq!(record(&setup.home, id)["state"], "done");
+
+        // A worker the server before left running: the new one watches it
+        // to its end.
+        let id = "s0000000000a5";
+        let dir = files_dir(&setup.home, id);
+        fs::create_dir_all(&dir).unwrap();
+        let brief = dir.join("brief.1.txt");
+        fs::write(&brief, "the brief\n").unwrap();
+        let log = File::create(dir.join("1.log")).unwrap();
+        let _ = fs::remove_file(&go);
+        let script = t.path().join("left.sh");
+        fs::write(
+            &script,
+            format!(
+                "while [ ! -e {g} ]; do sleep 0.05; done\ncat\necho left running\n",
+                g = go.display()
+            ),
+        )
+        .unwrap();
+        let mut cmd = launcher(
+            Path::new("/bin/sh"),
+            &[script.display().to_string()],
+            &brief,
+            &dir,
+            1,
+        );
+        cmd.stdout(Stdio::from(log.try_clone().unwrap()))
+            .stderr(Stdio::from(log));
+        gp_mcp::proc::own_group(&mut cmd);
+        let p = launch(cmd, &brief, &dir, 1).unwrap();
+        let rec = json!({"step": s(id, "agent", &["game:g"]), "state": "working", "tries": 1, "runs": 1,
+            "started_ms": gp_mcp::asks::now_ms(), "pid": p.pid, "group": p.group, "exit_file": p.exit});
+        write(&setup.home, &rec);
+        assert!(Launched::of(&rec).is_some());
+        let h = adopt(setup.clone(), rec);
+        fs::write(&go, "").unwrap();
+        h.join().unwrap();
+        let r = record(&setup.home, id);
+        assert_eq!(r["state"], "done", "{r}");
+        assert_eq!(r["tries"], 1);
+        assert_eq!(r["last"], "left running");
+        let said = fs::read_to_string(dir.join("1.log")).unwrap();
+        assert!(said.contains("the brief"), "its brief on stdin: {said}");
+
+        // One that ended with an error while no server watched: its next
+        // try starts here.
+        let id = "s0000000000a6";
+        let dir = files_dir(&setup.home, id);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("1.log"), "nope\n").unwrap();
+        fs::write(exit_file(&dir, 1), "3\n").unwrap();
+        let rec = json!({"step": s(id, "agent", &["game:g"]), "state": "working", "tries": 1, "runs": 1,
+            "started_ms": gp_mcp::asks::now_ms(), "pid": 999_999_999u64, "exit_file": exit_file(&dir, 1)});
+        assert!(Launched::of(&rec).is_some());
+        adopt(setup.clone(), rec).join().unwrap();
+        let r = record(&setup.home, id);
+        assert_eq!(r["state"], "done", "{r}");
+        assert_eq!(r["tries"], 2);
+        let b2 = fs::read_to_string(dir.join("brief.2.txt")).unwrap();
+        assert!(
+            b2.contains("Your try 1 at this step ended with exit 3"),
+            "{b2}"
+        );
     }
 }
