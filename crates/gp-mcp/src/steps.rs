@@ -72,12 +72,37 @@ pub fn settings_file(home: &Path) -> PathBuf {
 }
 
 /// The home's settings; the defaults (everything off) without a file or
-/// with one that doesn't read.
+/// with one that doesn't read. A new home (its folder missing or empty)
+/// is given its file with `steps_required` on ([`new_home_settings`]):
+/// no agent is at work on it yet whose writes the setting would refuse.
 pub fn settings(home: &Path) -> Settings {
-    std::fs::read_to_string(settings_file(home))
-        .ok()
-        .and_then(|t| toml::from_str(&t).ok())
-        .unwrap_or_default()
+    let f = settings_file(home);
+    if let Ok(t) = std::fs::read_to_string(&f) {
+        return toml::from_str(&t).unwrap_or_default();
+    }
+    if !cfg!(test) && !in_temp(home) && is_new_home(home) {
+        let s = new_home_settings();
+        if save(home, &s).is_ok() {
+            return s;
+        }
+    }
+    Settings::default()
+}
+
+/// What a new home starts with: `steps_required` on, the runner off.
+pub fn new_home_settings() -> Settings {
+    Settings {
+        steps_required: true,
+        ..Settings::default()
+    }
+}
+
+/// Whether `home` is new: its folder is missing or holds nothing.
+pub fn is_new_home(home: &Path) -> bool {
+    match std::fs::read_dir(home) {
+        Ok(mut d) => d.next().is_none(),
+        Err(e) => e.kind() == std::io::ErrorKind::NotFound,
+    }
 }
 
 pub fn save(home: &Path, s: &Settings) -> Result<(), String> {
@@ -449,6 +474,22 @@ mod tests {
         assert!(left("runner-3.json"));
         assert!(left("runner-4.json"));
         assert!(!left("runner.json"));
+    }
+
+    #[test]
+    fn a_new_home_is_a_missing_or_empty_folder_and_starts_with_steps_required() {
+        let t = tempfile::tempdir().unwrap();
+        let home = t.path().join("home");
+        assert!(is_new_home(&home));
+        std::fs::create_dir_all(&home).unwrap();
+        assert!(is_new_home(&home));
+        std::fs::create_dir_all(home.join("work")).unwrap();
+        assert!(!is_new_home(&home));
+        let s = new_home_settings();
+        assert!(s.steps_required && !s.runner.on);
+        // A home with its file keeps what it says.
+        save(&home, &Settings::default()).unwrap();
+        assert!(!settings(&home).steps_required);
     }
 
     #[test]

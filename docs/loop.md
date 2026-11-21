@@ -38,7 +38,7 @@ The home's loop settings are `$GP_HOME/loop.toml`, changed with `gp loop set` (w
 
 | Setting | Flag | Default | What |
 |---|---|---|---|
-| `steps_required` | `--steps-required on\|off` | off | gp_run runs writes, landings and publishes only as open steps |
+| `steps_required` | `--steps-required on\|off` | off; on in a new home | gp_run runs writes, landings and publishes only as open steps |
 | `runner.on` | `--runner on\|off` | off | gp serve's runner starts workers |
 | `runner.max_workers` | `--max-workers N` | 2 | The most workers at once |
 | `runner.spending` | `--spending WORDS` | empty | A note on spending, shown on the page beside the runner |
@@ -48,7 +48,7 @@ The home's loop settings are `$GP_HOME/loop.toml`, changed with `gp loop set` (w
 
 A `claude` worker is started the same on every machine: on `runner.model` and `runner.effort` (unless the agent command gives its own), with `--setting-sources project,local`, so the person's own settings, hooks, plugins and CLAUDE.md stay out, and with `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`, so their memory does too. It isn't `--bare`, which reads only `ANTHROPIC_API_KEY` and so fails for a person signed in by subscription.
 
-`steps_required` is off by default because the tool gate publishes each landing at once to the gp every running agent uses: on by default, it would refuse the writes of agents already at work before the owner chose it. To turn it on, `gp loop set --steps-required on`; to turn it off, `gp loop set --steps-required off`.
+`steps_required` is off by default because the tool gate publishes each landing at once to the gp every running agent uses: on by default, it would refuse the writes of agents already at work before the owner chose it. A new home is different, because no agent works on it yet: the first gp that reads the settings of a home whose folder is missing or empty writes its `loop.toml` with `steps_required` on, so two people starting fresh run the same steps in `next`'s order. A home in the temp folder (a test's) keeps the defaults. To turn it on, `gp loop set --steps-required on`; to turn it off, `gp loop set --steps-required off`.
 
 ## Wrong
 

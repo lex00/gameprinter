@@ -81,6 +81,8 @@ MCP allows dots in tool names, but some clients allow only letters, digits, `_` 
 
 Every reply is a JSON object, sent as the result's `structuredContent` and also as its text, for clients that read only text.
 
+Every reply over MCP also carries `next_step`, the loop's next step (crates/gp-mcp/src/next_step.rs): `{"id", "who", "says"}`, and the result's last text item, after the JSON's, is the line `NEXT STEP ID (WHO): SAYS`. A worker the runner started (`GP_STEP`) is given its own step. Any other caller gets `next`'s step for the game or copy the call named (`game`, `args.game` of a gp_run, or `copy`), or for the one opened last. The tool `next` gives its own answer's step. When `next` can't answer, `id` is null and `why` says why. Two agents on the same home are given the same step, and its id is the one a write cites as gp_run's `step`.
+
 | What happened | Reply |
 |---|---|
 | The tool did what was asked | `isError` false |

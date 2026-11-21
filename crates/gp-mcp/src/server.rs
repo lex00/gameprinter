@@ -48,11 +48,16 @@ pub fn tool_list() -> Vec<Tool> {
 }
 
 /// A reply as an MCP tool result: the JSON as structured content and as
-/// text, for clients that read only text.
+/// text, for clients that read only text; when the reply has a next step
+/// (crate::next_step), a last text item gives it in one line.
 pub fn tool_result(reply: &Reply) -> CallToolResult {
     let text = serde_json::to_string_pretty(&reply.json).expect("JSON serializes");
+    let mut content = vec![json!({ "type": "text", "text": text })];
+    if let Some(l) = crate::next_step::line(&reply.json) {
+        content.push(json!({ "type": "text", "text": l }));
+    }
     serde_json::from_value(json!({
-        "content": [{ "type": "text", "text": text }],
+        "content": content,
         "structuredContent": reply.json,
         "isError": reply.is_error,
     }))
@@ -101,7 +106,12 @@ impl ServerHandler for Server {
         // Tools block (child processes, the interpreter), so they run off
         // the runtime's thread.
         let tool = name.clone();
-        let mut handle = tokio::task::spawn_blocking(move || tools::call(&config, &tool, args));
+        // Every reply ends with the next step (crate::next_step).
+        let mut handle = tokio::task::spawn_blocking(move || {
+            let mut r = tools::call(&config, &tool, args.clone())?;
+            crate::next_step::attach(&config, &tool, &args, &mut r);
+            Some(r)
+        });
         // While a tool runs, a client that sent a progress token hears from
         // it every PROGRESS_EVERY: how long it has run.
         let token = context.meta.get_progress_token();
