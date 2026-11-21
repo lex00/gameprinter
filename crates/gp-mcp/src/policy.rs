@@ -531,7 +531,7 @@ pub const TABLE: &[Row] = &[
         "mechanic start",
         J,
         Rule::Refuse(
-            "it serves the game's page until stopped. Ask the person to open the page (`gp serve`, then the game's CLIPS tab), and use next with wait_s to hear what they hand you.",
+            "it serves the game's page until stopped. Ask the person to open the page (`gp serve`, then the game's CLIPS tab), and use next with wait_s to hear what they hand you. A loop worker on a quest-log row doesn't need it: mechanic busy or mechanic log makes the row's session.",
         ),
     ),
     r("mechanic sweep", S, Write),

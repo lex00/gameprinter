@@ -147,8 +147,31 @@ impl Session {
         })
     }
 
-    /// Opens the session, making it with `prompt` as what the mechanic is
-    /// when it is new.
+    /// What `gp mechanic show` prints for a quest-log row with no session
+    /// yet: the row's note as its words, no clips, no talk, writing nothing
+    /// (`gp mechanic busy` or `log` makes the session from the row).
+    pub fn row_state(paths: &Paths, game: &str, mechanic: &str) -> Result<Option<Value>> {
+        Self::dir_of(paths, game, mechanic)?;
+        let q = read_queue(&queue_file(paths, game)?);
+        Ok(q.iter()
+            .find(|r| r["mechanic"] == json!(mechanic))
+            .map(|row| {
+                json!({
+                    "busy": null,
+                    "agent_ms": null,
+                    "game": game,
+                    "mechanic": mechanic,
+                    "prompt": row["note"].as_str().unwrap_or(""),
+                    "rom": null,
+                    "folder": null,
+                    "clips": [],
+                    "talk": [],
+                    "waiting_for": "agent",
+                    "queue": super::scores::scored_queue(&paths.home, game),
+                })
+            }))
+    }
+
     /// The session of a quest-log row, made from its note when it has none
     /// yet (as the page's pick makes one), with the ROM another of the
     /// game's sessions was made with: so a loop worker can post the row's

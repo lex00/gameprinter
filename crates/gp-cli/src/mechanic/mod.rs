@@ -1000,7 +1000,13 @@ pub(crate) fn run(cmd: &MechanicCmd, paths: &Paths) -> Result<Outcome> {
             Ok(Outcome::ok(v, line))
         }
         MechanicCmd::Show { game, mechanic } => {
-            let v = Session::open(paths, game, mechanic)?.state()?;
+            let v = match Session::exists(paths, game, mechanic)? {
+                false => match Session::row_state(paths, game, mechanic)? {
+                    Some(v) => v,
+                    None => Session::open(paths, game, mechanic)?.state()?,
+                },
+                true => Session::open(paths, game, mechanic)?.state()?,
+            };
             Ok(Outcome::ok(v.clone(), show_text(&v)))
         }
         MechanicCmd::Say {
@@ -1747,6 +1753,33 @@ mod tests {
         let (_, _, added) = seed_quest_log(&p, "test-hop", "platformer", "ab").unwrap();
         assert_eq!(added, 0);
         assert_eq!(read_queue(&dir.join("queue.json"))[2]["status"], "done");
+    }
+
+    /// A quest-log row with no session shows its note and writes nothing;
+    /// a name that is neither a row nor a session is still refused.
+    #[test]
+    fn a_row_with_no_session_shows_its_note() {
+        let d = tempfile::tempdir().unwrap();
+        let p = paths(d.path());
+        let dir = p.home.join("mechanics").join("test-hop");
+        std::fs::create_dir_all(&dir).unwrap();
+        write_queue(
+            &dir.join("queue.json"),
+            &[json!({"mechanic": "trouble-x", "status": "next", "note": "Proposed by the loop: x"})],
+        )
+        .unwrap();
+        let v = Session::row_state(&p, "test-hop", "trouble-x")
+            .unwrap()
+            .unwrap();
+        assert_eq!(v["prompt"], "Proposed by the loop: x");
+        assert_eq!(v["waiting_for"], "agent");
+        assert!(show_text(&v).contains("test-hop / trouble-x: Proposed by the loop: x"));
+        assert!(!Session::exists(&p, "test-hop", "trouble-x").unwrap());
+        assert!(
+            Session::row_state(&p, "test-hop", "nothing")
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]
