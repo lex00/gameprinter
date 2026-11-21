@@ -1806,6 +1806,23 @@ fn claude_args(setup: &Setup, wt: &Path, mcp: &Path) -> Vec<String> {
     .map(String::from)
     .to_vec();
     a.push(mcp.display().to_string());
+    // Every worker the same, whoever's machine it runs on: the model and
+    // effort loop.toml names (the agent command's own, when it gives them),
+    // and none of the person's own settings, hooks, plugins or CLAUDE.md
+    // (user settings are left out; auto-memory is off by its variable, set
+    // where the worker starts). --bare would also do it but reads only
+    // ANTHROPIC_API_KEY, which a person signed in by subscription hasn't.
+    let r = loop_state::settings(&setup.home).runner;
+    let own = |f: &str| setup.argv.iter().any(|x| x == f);
+    if !r.model.is_empty() && !own("--model") {
+        a.extend(["--model".to_owned(), r.model]);
+    }
+    if !r.effort.is_empty() && !own("--effort") {
+        a.extend(["--effort".to_owned(), r.effort]);
+    }
+    if !own("--setting-sources") && !own("--bare") {
+        a.extend(["--setting-sources".to_owned(), "project,local".to_owned()]);
+    }
     // The home's themes, which a worker brings into the games checkout
     // (they are read there, never changed in place).
     let themes = setup.home.join("work").join("themes");
@@ -1953,7 +1970,9 @@ fn work(setup: &Setup, live: &Live, rec: &mut Value, resume: bool) -> anyhow::Re
             fs::write(&brief_path, brief(setup, &step, &wt, &branch, &before))?;
             let log = File::create(&log_path)?;
             let mut argv: Vec<String> = setup.argv[1..].to_vec();
-            if clip_agent::is_claude(setup.argv.first().map(String::as_str).unwrap_or("")) {
+            let claude =
+                clip_agent::is_claude(setup.argv.first().map(String::as_str).unwrap_or(""));
+            if claude {
                 argv.extend(claude_args(setup, &wt, &mcp));
             }
             let mut shown = vec![setup.program.display().to_string()];
@@ -1973,6 +1992,10 @@ fn work(setup: &Setup, live: &Live, rec: &mut Value, resume: bool) -> anyhow::Re
                 .current_dir(&wt)
                 .stdout(Stdio::from(log.try_clone()?))
                 .stderr(Stdio::from(log));
+            if claude {
+                // The person's own memory stays out of the worker.
+                cmd.env("CLAUDE_CODE_DISABLE_AUTO_MEMORY", "1");
+            }
             gp_mcp::proc::own_group(&mut cmd);
             let p = launch(cmd, &brief_path, &dir, n).context("starting the worker")?;
             rec["pid"] = json!(p.pid);
@@ -2759,6 +2782,46 @@ mod tests {
 
     fn record(home: &Path, id: &str) -> Value {
         serde_json::from_slice(&fs::read(file(home, id)).unwrap()).unwrap()
+    }
+
+    /// The flag's value in a worker's arguments.
+    fn flag(a: &[String], f: &str) -> Option<String> {
+        a.iter()
+            .position(|x| x == f)
+            .and_then(|i| a.get(i + 1).cloned())
+    }
+
+    #[test]
+    fn a_worker_runs_on_the_loops_model_not_the_persons_setup() {
+        let t = tempfile::tempdir().unwrap();
+        let mut setup = rig(t.path(), "true\n");
+        let (wt, mcp) = (t.path().join("wt"), t.path().join("mcp.json"));
+        // No loop.toml: the pinned defaults, and no user settings.
+        let a = claude_args(&setup, &wt, &mcp);
+        assert_eq!(
+            flag(&a, "--model").as_deref(),
+            Some(loop_state::WORKER_MODEL)
+        );
+        assert_eq!(
+            flag(&a, "--effort").as_deref(),
+            Some(loop_state::WORKER_EFFORT)
+        );
+        assert_eq!(
+            flag(&a, "--setting-sources").as_deref(),
+            Some("project,local")
+        );
+        // loop.toml's choice, and empty leaves it to the person's own.
+        let mut s = loop_state::settings(&setup.home);
+        s.runner.model = "sonnet".into();
+        s.runner.effort = String::new();
+        loop_state::save(&setup.home, &s).unwrap();
+        let a = claude_args(&setup, &wt, &mcp);
+        assert_eq!(flag(&a, "--model").as_deref(), Some("sonnet"));
+        assert_eq!(flag(&a, "--effort"), None);
+        // An agent command that gives its own model keeps it, given once.
+        setup.argv = vec!["claude".into(), "--model".into(), "haiku".into()];
+        let a = claude_args(&setup, &wt, &mcp);
+        assert_eq!(flag(&a, "--model"), None);
     }
 
     #[test]

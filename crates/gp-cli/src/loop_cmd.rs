@@ -73,6 +73,14 @@ pub enum LoopCmd {
         /// dollars a day"); the runner keeps no count of money yet.
         #[arg(long)]
         spending: Option<String>,
+        /// The model every claude worker runs on (default opus); "" leaves
+        /// it to the person's own Claude settings.
+        #[arg(long)]
+        model: Option<String>,
+        /// The workers' effort (default high); "" leaves it to the person's
+        /// own.
+        #[arg(long, value_parser = ["", "low", "medium", "high", "xhigh", "max"])]
+        effort: Option<String>,
         /// The games whose quest-log items the loop works on, by name,
         /// comma-separated ("tapper"); "all" for every game's.
         #[arg(long)]
@@ -103,10 +111,15 @@ pub enum LoopCmd {
     },
 }
 
+/// A worker setting as the text says it: empty is the person's own.
+fn or_own(v: &str) -> &str {
+    if v.is_empty() { "the person's own" } else { v }
+}
+
 fn settings_text(s: &gp_mcp::steps::Settings) -> String {
     let w = |b: bool| if b { "on" } else { "off" };
     format!(
-        "steps required by gp_run: {}\nquest-log items of: {}\nrunner: {}, at most {} workers{}",
+        "steps required by gp_run: {}\nquest-log items of: {}\nrunner: {}, at most {} workers, model {}, effort {}{}",
         w(s.steps_required),
         if s.games.is_empty() {
             "every game".to_owned()
@@ -115,6 +128,8 @@ fn settings_text(s: &gp_mcp::steps::Settings) -> String {
         },
         w(s.runner.on),
         s.runner.max_workers,
+        or_own(&s.runner.model),
+        or_own(&s.runner.effort),
         if s.runner.spending.is_empty() {
             String::new()
         } else {
@@ -271,6 +286,8 @@ pub(crate) fn run(cmd: &LoopCmd, paths: &gp_evidence::Paths) -> Result<Outcome> 
             runner,
             max_workers,
             spending,
+            model,
+            effort,
             games,
         } => {
             let home = &paths.home;
@@ -287,6 +304,12 @@ pub(crate) fn run(cmd: &LoopCmd, paths: &gp_evidence::Paths) -> Result<Outcome> 
             if let Some(w) = spending {
                 s.runner.spending = w.trim().to_owned();
             }
+            if let Some(m) = model {
+                s.runner.model = m.trim().to_owned();
+            }
+            if let Some(e) = effort {
+                s.runner.effort = e.clone();
+            }
             if let Some(g) = games {
                 s.games = if g.trim() == "all" {
                     Vec::new()
@@ -301,7 +324,9 @@ pub(crate) fn run(cmd: &LoopCmd, paths: &gp_evidence::Paths) -> Result<Outcome> 
                 || steps_required.is_some()
                 || runner.is_some()
                 || max_workers.is_some()
-                || spending.is_some();
+                || spending.is_some()
+                || model.is_some()
+                || effort.is_some();
             if changed {
                 gp_mcp::steps::save(home, &s).map_err(anyhow::Error::msg)?;
             }

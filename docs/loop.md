@@ -42,7 +42,11 @@ The home's loop settings are `$GP_HOME/loop.toml`, changed with `gp loop set` (w
 | `runner.on` | `--runner on\|off` | off | gp serve's runner starts workers |
 | `runner.max_workers` | `--max-workers N` | 2 | The most workers at once |
 | `runner.spending` | `--spending WORDS` | empty | A note on spending, shown on the page beside the runner |
+| `runner.model` | `--model NAME` (`""` for the person's own) | opus | The model every `claude` worker runs on (`--model`) |
+| `runner.effort` | `--effort LEVEL` (`""` for the person's own) | high | Its effort (`--effort`) |
 | `games` | `--games NAME,NAME` (`all` clears it) | every game | The games whose quest-log items the loop works on |
+
+A `claude` worker is started the same on every machine: on `runner.model` and `runner.effort` (unless the agent command gives its own), with `--setting-sources project,local`, so the person's own settings, hooks, plugins and CLAUDE.md stay out, and with `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`, so their memory does too. It isn't `--bare`, which reads only `ANTHROPIC_API_KEY` and so fails for a person signed in by subscription.
 
 `steps_required` is off by default because the tool gate publishes each landing at once to the gp every running agent uses: on by default, it would refuse the writes of agents already at work before the owner chose it. To turn it on, `gp loop set --steps-required on`; to turn it off, `gp loop set --steps-required off`.
 

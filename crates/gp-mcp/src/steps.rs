@@ -42,7 +42,18 @@ pub struct Runner {
     pub max_workers: u32,
     /// The owner's note on spending, shown on the page beside the runner.
     pub spending: String,
+    /// The model every `claude` worker runs on (`--model`), so two people
+    /// on one ROM get the same work; empty leaves it to the person's own.
+    pub model: String,
+    /// Its effort (`--effort`: low, medium, high, xhigh, max); empty leaves
+    /// it to the person's own.
+    pub effort: String,
 }
+
+/// The model a worker runs on when loop.toml names none.
+pub const WORKER_MODEL: &str = "opus";
+/// Its effort when loop.toml names none.
+pub const WORKER_EFFORT: &str = "high";
 
 impl Default for Runner {
     fn default() -> Self {
@@ -50,6 +61,8 @@ impl Default for Runner {
             on: false,
             max_workers: 2,
             spending: String::new(),
+            model: WORKER_MODEL.into(),
+            effort: WORKER_EFFORT.into(),
         }
     }
 }
@@ -468,6 +481,8 @@ mod tests {
                 on: false,
                 max_workers: 3,
                 spending: "about 5 dollars a day".into(),
+                model: "sonnet".into(),
+                effort: "medium".into(),
             },
             games: vec!["tapper".into()],
         };
