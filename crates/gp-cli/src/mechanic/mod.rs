@@ -589,9 +589,15 @@ pub enum MechanicCmd {
         game: String,
         /// Only these rows (default every item of triage.toml).
         rows: Vec<String>,
-        /// Seconds each tool may spend on a row.
+        /// Seconds the game's auto-player may run before it counts as
+        /// hung (four times this from power-on, twice from a save point);
+        /// a run it cuts isn't used. No other tool stops on time.
         #[arg(long, default_value_t = 60)]
         budget: u64,
+        /// Runs of seeded presses the search makes for a row (the same on
+        /// every machine).
+        #[arg(long, default_value_t = 300)]
+        tries: usize,
         /// How many leads (gp mechanic leads) to triage too.
         #[arg(long, default_value_t = 5)]
         leads: usize,
@@ -1202,6 +1208,7 @@ pub(crate) fn run(cmd: &MechanicCmd, paths: &Paths) -> Result<Outcome> {
             game,
             rows,
             budget,
+            tries,
             leads,
             autoplay,
             autoplay_frames,
@@ -1215,6 +1222,7 @@ pub(crate) fn run(cmd: &MechanicCmd, paths: &Paths) -> Result<Outcome> {
                 games: games.as_deref(),
                 rows,
                 budget: *budget,
+                tries: *tries,
                 leads: *leads,
                 autoplay: autoplay.as_deref(),
                 autoplay_frames: *autoplay_frames,

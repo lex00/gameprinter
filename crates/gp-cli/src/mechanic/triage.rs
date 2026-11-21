@@ -3,7 +3,11 @@
 //!
 //! What a row has to show is written in the game's package folder as
 //! `triage.toml` (the format is below): a test on RAM that comes to hold
-//! when a clip shows it. Each tool tries in turn, with a budget:
+//! when a clip shows it. Each tool tries in turn, with a budget counted in
+//! plays and tries, never in seconds, so every machine gets the same result:
+//! the corpus, the script and autoplay's logs are played to their end, and
+//! the search makes `--tries` runs. Only autoplay's own program has a time
+//! limit, against a hang, and a run it cuts is not used.
 //!
 //! | Tool | What it does |
 //! |---|---|
@@ -382,7 +386,6 @@ fn scan(
     frames: &[InputFrame],
     windows: &[(String, usize, usize)],
     goals: &[&Goal],
-    deadline: Instant,
 ) -> Result<(Vec<Vec<Watch>>, usize)> {
     let mut o = OriginalRuntime::of_rom(rom)?;
     o.set_video(false);
@@ -422,9 +425,6 @@ fn scan(
             }
         }
         played = n;
-        if n.is_multiple_of(500) && Instant::now() > deadline {
-            break;
-        }
     }
     Ok((w, played))
 }
@@ -435,8 +435,10 @@ pub(crate) struct Args<'a> {
     pub games: Option<&'a Path>,
     /// Only these rows (default every row and lead the plan has).
     pub rows: &'a [String],
-    /// Seconds each tool may spend on a row.
+    /// Seconds autoplay's program may run before it counts as hung.
     pub budget: u64,
+    /// Runs of seeded presses the search makes for a row.
+    pub tries: usize,
     /// How many of the leads to triage.
     pub leads: usize,
     /// An auto-player to run instead of gp's own `gp mechanic autoplay`.
@@ -582,18 +584,15 @@ fn autoplay(
             std::thread::sleep(Duration::from_millis(200));
         }
     }
-    // A run stopped early leaves its partial log.
-    let file = if input.is_file() {
-        input
-    } else {
-        let p = dir.join(format!("autoplay-{key}-partial.input"));
-        if !p.is_file() {
-            bail!("autoplay wrote no log in {secs} s");
-        }
-        p
-    };
-    let log = InputLog::parse(&fs::read_to_string(&file)?)
-        .map_err(|e| anyhow::anyhow!("{}: {e}", file.display()))?;
+    // A run cut by the time limit isn't used: how far it got depends on
+    // the machine.
+    if !input.is_file() {
+        bail!(
+            "autoplay didn't finish in {secs} s (a run cut short isn't used: it would differ by machine; give --budget more)"
+        );
+    }
+    let log = InputLog::parse(&fs::read_to_string(&input)?)
+        .map_err(|e| anyhow::anyhow!("{}: {e}", input.display()))?;
     Ok(log.frames)
 }
 
@@ -610,15 +609,15 @@ fn chords(board: &Board) -> Vec<u8> {
 /// The presses that reached a goal and the frame they reached it on.
 type Found = (Vec<InputFrame>, usize);
 
-/// Seeded presses from `start`, `tries` runs of up to `frames` each, until
-/// the goal holds or the time runs out. The presses that got it.
+/// Seeded presses from `start`, up to `budget` runs of up to `frames` each,
+/// until the goal holds. The presses that got it, and the runs made.
 fn search(
     rom: &[u8],
     board: &Board,
     start: &[InputFrame],
     goal: &Goal,
     frames: usize,
-    deadline: Instant,
+    budget: usize,
     seed: u64,
 ) -> Result<(Option<Found>, usize)> {
     let mut o0 = OriginalRuntime::of_rom(rom)?;
@@ -633,7 +632,7 @@ fn search(
     }
     let mut rng = gp_explore::presses::Rng::new(seed);
     let mut tries = 0;
-    while Instant::now() < deadline {
+    while tries < budget {
         tries += 1;
         let mut o = o0.clone();
         let mut w = Watch::default();
@@ -868,7 +867,6 @@ pub(crate) fn run(paths: &Paths, a: &Args) -> Result<Outcome> {
     // frames from power-on and what they are.
     let mut nears: Vec<Option<(Vec<InputFrame>, String)>> =
         (0..items.len()).map(|_| None).collect();
-    let budget = Duration::from_secs(a.budget.max(1));
     let started = Instant::now();
 
     // 1. The corpus: each play once, every clip of it as a window.
@@ -902,15 +900,10 @@ pub(crate) fn run(paths: &Paths, a: &Args) -> Result<Outcome> {
         .filter(|&k| uses(&items[k], "corpus"))
         .collect();
     let mut corpus_frames = 0;
-    let mut corpus_cut = false;
-    let corpus_deadline =
-        Instant::now() + budget * u32::try_from(corpus_items.len().max(1)).unwrap_or(1);
     for run in &runs {
         let gs: Vec<&Goal> = corpus_items.iter().map(|&k| &goals[k]).collect();
-        let (w, played) = scan(&rom.bytes, &run.frames, &run.windows, &gs, corpus_deadline)?;
-        let end = run.windows.iter().map(|x| x.2).max().unwrap_or(0);
+        let (w, played) = scan(&rom.bytes, &run.frames, &run.windows, &gs)?;
         corpus_frames += played;
-        corpus_cut |= played < end;
         for (j, &k) in corpus_items.iter().enumerate() {
             for (wi, win) in run.windows.iter().enumerate() {
                 let ww = &w[j][wi];
@@ -939,11 +932,10 @@ pub(crate) fn run(paths: &Paths, a: &Args) -> Result<Outcome> {
         tried[k].push(json!({"tool": "corpus", "said": match &hits[k] {
             Some(h) => format!("corpus clip {} shows it {} frames in", h.run, h.at - h.floor),
             None => format!(
-                "none of the {} corpus clips shows it ({} plays, {} frames{})",
+                "none of the {} corpus clips shows it ({} plays, {} frames)",
                 set.clips.len(),
                 runs.len(),
                 corpus_frames,
-                if corpus_cut { ", stopped at the budget before the end of some" } else { "" }
             ),
         }}));
     }
@@ -981,7 +973,6 @@ pub(crate) fn run(paths: &Paths, a: &Args) -> Result<Outcome> {
                 &frames,
                 &[("script".into(), base.len(), end)],
                 &[&goals[k]],
-                Instant::now() + budget,
             )?;
             Ok(match w[0][0].hit {
                 Some(h) => {
@@ -1025,13 +1016,8 @@ pub(crate) fn run(paths: &Paths, a: &Args) -> Result<Outcome> {
                     Ok(frames) => {
                         let end = frames.len();
                         let gs: Vec<&Goal> = ap_items.iter().map(|&k| &goals[k]).collect();
-                        let (w, _) = scan(
-                            &rom.bytes,
-                            &frames,
-                            &[("autoplay".into(), 0, end)],
-                            &gs,
-                            Instant::now() + budget * 4,
-                        )?;
+                        let (w, _) =
+                            scan(&rom.bytes, &frames, &[("autoplay".into(), 0, end)], &gs)?;
                         for (j, &k) in ap_items.iter().enumerate() {
                             if let Some(n) = w[j][0].near
                                 && nears[k].as_ref().is_none_or(|x| x.0.len() > n)
@@ -1066,7 +1052,7 @@ pub(crate) fn run(paths: &Paths, a: &Args) -> Result<Outcome> {
                     match autoplay(bin, rf, &dir, &board, &pre, more.max(1800), a.budget.max(30) * 2) {
                         Ok(frames) => {
                             let end = frames.len();
-                            let (w, _) = scan(&rom.bytes, &frames, &[("autoplay".into(), pre.len(), end)], &[&goals[k]], Instant::now() + budget)?;
+                            let (w, _) = scan(&rom.bytes, &frames, &[("autoplay".into(), pre.len(), end)], &[&goals[k]])?;
                             match w[0][0].hit {
                                 Some(h) => {
                                     hits[k] = Some(Hit { tool: "autoplay", run: format!("autoplay from {label}"), frames, at: h, floor: pre.len(), slot: w[0][0].slot.clone() });
@@ -1112,7 +1098,7 @@ pub(crate) fn run(paths: &Paths, a: &Args) -> Result<Outcome> {
                     &frames,
                     &goals[k],
                     len,
-                    Instant::now() + budget,
+                    a.tries.max(1),
                     0x9e37 + k as u64,
                 ) {
                     Ok((Some((own, h)), n)) => {
@@ -1130,8 +1116,7 @@ pub(crate) fn run(paths: &Paths, a: &Args) -> Result<Outcome> {
                         format!("seeded presses from {label} show it on try {n}")
                     }
                     Ok((None, n)) => format!(
-                        "{n} tries of seeded presses ({len} frames each) from {label} in {} s never showed it",
-                        budget.as_secs()
+                        "{n} tries of seeded presses ({len} frames each) from {label} never showed it"
                     ),
                     Err(e) => format!("the search couldn't run: {e:#}"),
                 }

@@ -362,7 +362,11 @@ which are a platformer's measure; `--judge`'s jump measures stay the NES's.
 
 The quest log is for play only the person can get. `gp mechanic triage
 GAME` has the tools try each row first, and each lead (`gp mechanic leads`,
-NES only), with `--budget` seconds a tool. What a row has to show is a test
+NES only), with a budget counted in plays and tries so every machine gets
+the same result: the corpus, the steps and autoplay's logs are played to
+their end, and the seeded search makes `--tries` runs (300). Only the
+auto-player's program has a time limit, `--budget` seconds against a hang,
+and a run it cuts isn't used. What a row has to show is a test
 on RAM in the game's package folder, `triage.toml` (its format is in
 `crates/gp-cli/src/mechanic/triage.rs`): it comes to hold when a clip shows
 the row. The tools, in order:
