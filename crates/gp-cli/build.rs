@@ -10,7 +10,7 @@
 //!
 //! With the `bundle` feature it also writes the table of files a released
 //! gp carries (src/bundle.rs): every file under `$GP_BUNDLE_DIR`, which
-//! `just release` fills. Without it the table is empty and nothing more is
+//! `just release-build` fills. Without it the table is empty and nothing more is
 //! read, so a dev build costs what it did.
 
 use std::fmt::Write as _;
@@ -72,7 +72,7 @@ fn bundle() {
     let dir = std::env::var_os("GP_BUNDLE_DIR")
         .filter(|d| !d.is_empty())
         .map(PathBuf::from)
-        .expect("the bundle feature needs GP_BUNDLE_DIR, the folder `just release` fills");
+        .expect("the bundle feature needs GP_BUNDLE_DIR, the folder `just release-build` fills");
     let dir = dir.canonicalize().expect("GP_BUNDLE_DIR doesn't exist");
     println!("cargo:rerun-if-changed={}", dir.display());
     // Every file, `target/` folders too (the players sit in target/play-web).

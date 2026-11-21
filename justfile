@@ -43,9 +43,42 @@ build:
 # built public page to carry, default the newest that passed the release
 # check. Another system's target needs its linker, so the release workflow
 # builds each on its own runner. Publishes nothing: no tag, no upload, no push.
-#   just release OUT [--target TARGET] [PAGE]
-release OUT *ARGS:
+#   just release-build OUT [--target TARGET] [PAGE]
+release-build OUT *ARGS:
     scripts/release/build.sh {{quote(OUT)}} {{ARGS}}
+
+# Start a release of gp (chant.config.ts, docs/release.md): dispatch
+# .github/workflows/release.yml from main. It takes main's head once its
+# checks on GitHub are green, builds gp on each platform's runner, cuts the
+# release v<version>, stamps the version into crates/gp-cli/Cargo.toml and
+# the plugin's manifests, and publishes the GitHub release (notes from
+# CHANGELOG.md's "## gp VERSION" section, which must be there) and the
+# Homebrew formula in lex00/tap. LABEL is auto (the next patch from the
+# commits since the last release) or a version such as 0.2.0. The owner's
+# to run: an agent never starts a release.
+#   just release
+#   just release 0.2.0
+release label="auto":
+    gh workflow run release.yml --ref main -f label={{quote(label)}}
+
+# What `just release` would cut from this checkout's commit: the label, the
+# checks it would pass or refuse, and what would be published where. A dry
+# run of chant release cut: cuts, tags, pushes and publishes nothing. Asks
+# GitHub for the commit's checks with `gh auth token` when GH_TOKEN is unset.
+#   just release-plan
+#   just release-plan 0.2.0
+release-plan label="auto":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ -z "${GH_TOKEN:-}" ] && command -v gh >/dev/null; then GH_TOKEN=$(gh auth token 2>/dev/null || true); export GH_TOKEN; fi
+    bash scripts/release/chant.sh release cut {{quote(label)}} --dry-run
+
+# Render .github/workflows/release.yml from chant.config.ts. Never edit that
+# file by hand. The first render replaces the hand-written build-only file,
+# which chant refuses to overwrite without --force.
+#   just release-workflow [--force]
+release-workflow *args:
+    bash scripts/release/chant.sh release workflow {{args}}
 
 mosshop:
     scripts/mosshop/build.sh {{quote(mosshop_dir)}}

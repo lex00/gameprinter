@@ -9,8 +9,9 @@
 # x86_64-unknown-linux-gnu, aarch64-unknown-linux-gnu or
 # x86_64-pc-windows-msvc. The default is $GP_RELEASE_TARGET, else this
 # machine's. Building for another system needs that system's linker, so the
-# release workflow builds each on its own runner. On Windows it runs in Git
-# Bash (the shell GitHub's Windows runners have).
+# release workflow builds each on its own runner (scripts/release/
+# chant-build.sh, chant.config.ts). On Windows it runs in Git Bash (the
+# shell GitHub's Windows runners have). `just release-build OUT` runs it.
 #
 # OUT gets:
 #   bundle/                      what the binary carries, laid out as a checkout:
@@ -64,7 +65,19 @@ case "$host" in *windows*) host_exe=".exe" ;; esac
 version="$(sed -n 's/^version = "\(.*\)"/\1/p' "$repo/crates/gp-cli/Cargo.toml" | head -1)"
 [ -n "$version" ] || version="$(sed -n 's/^version = "\(.*\)"/\1/p' "$repo/Cargo.toml" | head -1)"
 commit="$(git -C "$repo" rev-parse --short=12 HEAD)"
-if [ -n "$(git -C "$repo" status --porcelain --untracked-files=no)" ]; then
+# In a release's build job (scripts/release/chant-build.sh) chant has
+# stamped the release's label into the files chant.config.ts's
+# release.version names: that is the version, and those files' change
+# alone doesn't make the tree dirty.
+stamped=()
+if [ -n "${CHANT_RELEASE_LABEL:-}" ]; then
+  if [ "$version" != "${CHANT_RELEASE_LABEL#v}" ]; then
+    echo "release: crates/gp-cli/Cargo.toml says $version, not the release's ${CHANT_RELEASE_LABEL#v}; run chant release stamp first (scripts/release/chant-build.sh does)" >&2
+    exit 2
+  fi
+  stamped=(':!crates/gp-cli/Cargo.toml' ':!Cargo.lock' ':!plugin/.claude-plugin/plugin.json' ':!.claude-plugin/marketplace.json')
+fi
+if [ -n "$(git -C "$repo" status --porcelain --untracked-files=no -- . ${stamped[@]+"${stamped[@]}"})" ]; then
   commit="$commit-dirty"
 fi
 name="gp-$version-$commit-$target"

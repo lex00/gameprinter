@@ -51,6 +51,7 @@ While working, run the tests of the crate you change: `cargo test -p <crate>`. A
 - No `rm` in any form. List what should be deleted in your report; the person deletes it.
 - Remove a worktree with `git worktree remove`, adding `--force` once its patch has landed: the change is still uncommitted in it. Empty a build folder with `cargo clean --target-dir DIR`.
 - Never commit with `--no-verify`, and never push.
+- Never release gp: no `just release`, `chant release cut --yes` or `chant release publish`, and no release tag pushed. The owner starts a release ([docs/release.md](release.md)); `just release-plan` is a dry run anyone may use.
 - Never open `$GP_HOME/sealed` or a sealed run's session.
 - ROMs stay in `$GP_ROM_DIR`. Nothing made from a ROM (bytes, lifted files, a built game) goes into a commit or leaves the machine.
 - A change lands only through a gate: `gp model gate` for a game, `gp tool gate` for the tool. See [docs/gate.md](gate.md).

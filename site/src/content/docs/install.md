@@ -9,16 +9,17 @@ A released `gp` is a single file with the pages and files it needs built in. You
 
 ## Download it
 
-A release has an archive for each of these:
+A [release](https://github.com/lex00/gameprinter/releases) has an archive for each of these, and `SHA256SUMS`, the checksum of each:
 
-| Machine | Archive name ends in |
+| Machine | Archive |
 |---|---|
-| Mac with Apple silicon (M1 and later) | `aarch64-apple-darwin.tar.gz` |
-| Linux on an Intel or AMD 64-bit processor | `x86_64-unknown-linux-gnu.tar.gz` |
-| Linux on a 64-bit ARM processor | `aarch64-unknown-linux-gnu.tar.gz` |
-| Windows 10 or 11, 64-bit Intel or AMD | `x86_64-pc-windows-msvc.zip` |
+| Mac with Apple silicon (M1 and later) | `gp-aarch64-apple-darwin.tar.gz` |
+| Mac with an Intel processor | `gp-x86_64-apple-darwin.tar.gz` |
+| Linux on an Intel or AMD 64-bit processor | `gp-x86_64-unknown-linux-gnu.tar.gz` |
+| Linux on a 64-bit ARM processor | `gp-aarch64-unknown-linux-gnu.tar.gz` |
+| Windows 10 or 11, 64-bit Intel or AMD | `gp-x86_64-pc-windows-msvc.zip` |
 
-Older releases, from before the Linux and Windows builds, only have the Mac one; on another machine, [build it from source](#build-it-from-source). The Linux builds are made on Ubuntu 24.04 and may not start on an older Linux (one with a glibc before 2.39). Run `uname -m` to see which Linux build you need: it prints `x86_64` or `aarch64`.
+The first two releases, from before these names, have only the Apple silicon Mac archive, named `gp-VERSION-COMMIT-aarch64-apple-darwin.tar.gz` with its own `.sha256` file; for one of those on another machine, [build it from source](#build-it-from-source). The Linux builds are made on Ubuntu 24.04 and may not start on an older Linux (one with a glibc before 2.39). Run `uname -m` to see which Linux build you need: it prints `x86_64` or `aarch64`.
 
 ### With Homebrew
 
@@ -27,14 +28,14 @@ brew install lex00/tap/gp
 gp --version
 ```
 
-This is for a Mac; the Homebrew formula doesn't have the Linux builds yet. Homebrew checks the archive's checksum for you and puts `gp` at `/opt/homebrew/bin/gp`, which is the path you'll give an agent below. `brew upgrade gp` gets a newer release. The rest of this section does the same install by hand.
+Homebrew installs it on a Mac or on Linux, checks the archive's checksum for you, and puts `gp` at `/opt/homebrew/bin/gp` on an Apple silicon Mac (`/usr/local/bin/gp` on an Intel one, `/home/linuxbrew/.linuxbrew/bin/gp` on Linux), which is the path you'll give an agent below. `brew upgrade gp` gets a newer release. The rest of this section does the same install by hand.
 
 ### By hand, on a Mac
 
-Each archive comes with its checksum, the same name ending in `.sha256`. Download the archive, `gp-VERSION-COMMIT-aarch64-apple-darwin.tar.gz`, and its checksum into the same folder, then in Terminal, in that folder:
+Download the archive, `gp-aarch64-apple-darwin.tar.gz` (`gp-x86_64-apple-darwin.tar.gz` on an Intel Mac), and `SHA256SUMS` into the same folder, then in Terminal, in that folder:
 
 ```sh
-shasum -a 256 -c gp-*-aarch64-apple-darwin.tar.gz.sha256
+shasum -a 256 -c --ignore-missing SHA256SUMS
 ```
 
 It should print the archive's name and `OK`. If it says `FAILED`, the file isn't the one that was published: delete it and don't run it.
@@ -42,7 +43,7 @@ It should print the archive's name and `OK`. If it says `FAILED`, the file isn't
 Then unpack it and put `gp` in a folder on your PATH:
 
 ```sh
-tar -xzf gp-*-aarch64-apple-darwin.tar.gz
+tar -xzf gp-aarch64-apple-darwin.tar.gz
 mkdir -p ~/.local/bin
 mv gp-*-aarch64-apple-darwin/gp ~/.local/bin/gp
 echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
@@ -62,20 +63,20 @@ This `gp` isn't signed with an Apple developer certificate yet. macOS marks file
 Files downloaded with `curl` in Terminal aren't marked, and macOS won't ask about them:
 
 ```sh
-curl -fLO https://github.com/lex00/gameprinter/releases/download/TAG/gp-VERSION-COMMIT-aarch64-apple-darwin.tar.gz
-curl -fLO https://github.com/lex00/gameprinter/releases/download/TAG/gp-VERSION-COMMIT-aarch64-apple-darwin.tar.gz.sha256
-shasum -a 256 -c gp-*-aarch64-apple-darwin.tar.gz.sha256
+curl -fLO https://github.com/lex00/gameprinter/releases/latest/download/gp-aarch64-apple-darwin.tar.gz
+curl -fLO https://github.com/lex00/gameprinter/releases/latest/download/SHA256SUMS
+shasum -a 256 -c --ignore-missing SHA256SUMS
 ```
 
 Don't skip the checksum, though: it's the last line above.
 
 ### On Linux
 
-Download the archive for your processor and its `.sha256` into one folder, then in a terminal there (with `aarch64` in place of `x86_64` on ARM):
+Download the archive for your processor and `SHA256SUMS` into one folder, then in a terminal there (with `aarch64` in place of `x86_64` on ARM):
 
 ```sh
-sha256sum -c gp-*-x86_64-unknown-linux-gnu.tar.gz.sha256
-tar -xzf gp-*-x86_64-unknown-linux-gnu.tar.gz
+sha256sum -c --ignore-missing SHA256SUMS
+tar -xzf gp-x86_64-unknown-linux-gnu.tar.gz
 mkdir -p ~/.local/bin
 mv gp-*-x86_64-unknown-linux-gnu/gp ~/.local/bin/gp
 gp --version
@@ -85,19 +86,19 @@ gp --version
 
 ### On Windows
 
-Download `gp-VERSION-COMMIT-x86_64-pc-windows-msvc.zip` and its `.sha256` into one folder, such as Downloads. Open PowerShell there. Print the archive's checksum and compare it with the first word of the `.sha256` file:
+Download `gp-x86_64-pc-windows-msvc.zip` and `SHA256SUMS` into one folder, such as Downloads. Open PowerShell there. Print the archive's checksum and the line of `SHA256SUMS` for it:
 
 ```powershell
-(Get-FileHash .\gp-*-x86_64-pc-windows-msvc.zip -Algorithm SHA256).Hash
-Get-Content .\gp-*-x86_64-pc-windows-msvc.zip.sha256
+(Get-FileHash .\gp-x86_64-pc-windows-msvc.zip -Algorithm SHA256).Hash
+Select-String windows .\SHA256SUMS
 ```
 
-The two should be the same string of letters and digits. PowerShell prints it in capitals and the file has it in lower case, which doesn't matter. If they differ, delete the file and don't run it.
+The first should be the same string of letters and digits as the start of the line. PowerShell prints it in capitals and the file has it in lower case, which doesn't matter. If they differ, delete the file and don't run it.
 
 Unpack the zip and add a folder for `gp.exe` to your PATH:
 
 ```powershell
-Expand-Archive .\gp-*-x86_64-pc-windows-msvc.zip -DestinationPath .
+Expand-Archive .\gp-x86_64-pc-windows-msvc.zip -DestinationPath .
 New-Item -ItemType Directory -Force "$env:LOCALAPPDATA\Programs\gp"
 Move-Item .\gp-*-x86_64-pc-windows-msvc\gp.exe "$env:LOCALAPPDATA\Programs\gp\gp.exe"
 [Environment]::SetEnvironmentVariable("Path", [Environment]::GetEnvironmentVariable("Path", "User") + ";$env:LOCALAPPDATA\Programs\gp", "User")
@@ -214,7 +215,7 @@ export PATH="$HOME/.gameprinter/bin:$PATH"
 gp --help
 ```
 
-`just setup` turns on the hook that refuses any commit holding ROM data. `just publish` builds an optimized `gp` and puts it in `~/.gameprinter/bin`; add the `export` line to your shell's startup file to keep it on your PATH. A `gp` built this way reads the page's files from the checkout. `just release` builds one with them built in, like a download.
+`just setup` turns on the hook that refuses any commit holding ROM data. `just publish` builds an optimized `gp` and puts it in `~/.gameprinter/bin`; add the `export` line to your shell's startup file to keep it on your PATH. A `gp` built this way reads the page's files from the checkout. `just release-build OUT` builds one with them built in, like a download. Releases are made by the release workflow, which only the owner starts ([docs/release.md](https://github.com/lex00/gameprinter/blob/main/docs/release.md)).
 
 Day-to-day work happens on a Mac, where it's built and tested. It also compiles for Linux and Windows, and the release workflow builds and checks it on both. On Windows, run the repo's recipes from Git Bash. `gp game build` refuses there, since it has no sandbox.
 

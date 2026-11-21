@@ -14,7 +14,7 @@ path = "src/main.rs"
 [features]
 # A released gp: carries the built files it reads at run time (the editor,
 # the game's page, the players, the public page, the module kit), from the
-# folder GP_BUNDLE_DIR names (`just release` fills it). Off for dev builds.
+# folder GP_BUNDLE_DIR names (`just release-build` fills it). Off for dev builds.
 bundle = []
 
 [dependencies]

@@ -1,7 +1,7 @@
 //! The files a released gp carries, so a theme or game maker needs no
 //! gameprinter checkout (issue #11).
 //!
-//! A gp built with the `bundle` feature (`just release`) holds the built
+//! A gp built with the `bundle` feature (`just release-build`) holds the built
 //! files it reads at run time, laid out as they are in a checkout:
 //! `editor/dist/` (gp serve's editor), `mechanic/` (the game's page),
 //! `scripts/web/page/` (the preview's files), `target/play-web/` (the two
