@@ -167,10 +167,15 @@ fn open_with_rows(
                     .any(|t| row_touch.contains(t))
             })
     });
+    // The engine's own steps on a game touch `game:NAME`, but the runner
+    // never starts them (they are hints for an agent at the keyboard), so
+    // they don't hold back the game's rows; the rows hold the game among
+    // themselves in the runner's plan, one worker at a time.
     let taken: std::collections::BTreeSet<String> = open
         .iter()
         .flat_map(|s| s["touches"].as_array().cloned().unwrap_or_default())
         .filter_map(|t| t.as_str().map(str::to_owned))
+        .filter(|t| !t.starts_with("game:"))
         .collect();
     let free = |s: &Value| {
         s["touches"].as_array().is_some_and(|t| {

@@ -207,8 +207,15 @@ pub(crate) fn row_steps(paths: &gp_evidence::Paths, games: Option<&Path>) -> Vec
             // gameprinter worktree of its own, and the tool gate merges each
             // patch onto the tip (a conflict sends the row back to be redone
             // there), so tool rows run side by side up to the runner's limit.
+            // A game's row holds the game too: one worker at a time changes
+            // its model, so two patches never share a base and they land in
+            // the log's order.
             let tools = r["repo"] == json!("tools");
-            let touches = vec![format!("row:{g}/{row}")];
+            let touches = if tools {
+                vec![format!("row:{g}/{row}")]
+            } else {
+                vec![format!("row:{g}/{row}"), format!("game:{g}")]
+            };
             // A tool row lands through the tool gate.
             let cli = if r["repo"] == json!("tools") {
                 format!("{cli}, gp tool gate --patch FILE")

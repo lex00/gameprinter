@@ -2312,6 +2312,27 @@ mod tests {
     }
 
     #[test]
+    fn one_worker_at_a_time_changes_a_games_model() {
+        // A game's rows hold the game too; tool rows hold only their row.
+        let mut tool = s("s000000000003", "agent", &["row:a/t"]);
+        tool["repo"] = json!("tools");
+        let open = [
+            s("s000000000001", "agent", &["row:a/r", "game:a"]),
+            s("s000000000002", "agent", &["row:a/q", "game:a"]),
+            tool,
+            s("s000000000004", "agent", &["row:b/r", "game:b"]),
+        ];
+        let got = plan(&open, &[], &BTreeSet::new(), 5, 0);
+        let ids: Vec<&str> = got.iter().filter_map(|x| x["id"].as_str()).collect();
+        assert_eq!(ids, ["s000000000001", "s000000000003", "s000000000004"]);
+        // While the first row's worker is live, the second waits for it.
+        let workers = [json!({"step": open[0].clone(), "state": "working"})];
+        let live: BTreeSet<String> = ["s000000000001".to_owned()].into();
+        let got = plan(&open[1..], &workers, &live, 5, 0);
+        assert!(got.iter().all(|x| x["id"] != json!("s000000000002")));
+    }
+
+    #[test]
     fn a_step_still_open_after_its_worker_ended_gets_another_up_to_the_most_runs() {
         let open = [s("s000000000001", "agent", &["row:a/r"])];
         let now = 100 * AGAIN_AFTER_MS;
