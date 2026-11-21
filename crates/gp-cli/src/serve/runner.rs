@@ -295,8 +295,10 @@ pub(crate) fn start(ctx: Arc<Ctx>) {
             // The heartbeat the runner check reads (gp_mcp::steps::no_runner).
             let agent = matches!(clip_agent::Settings::current(&ctx).mode, Mode::Command(_));
             loop_state::beat(&ctx.paths.home, agent);
-            // A yes whose run died (gp serve stopped mid-gate) fails, so its
-            // row goes back to next instead of waiting for a hand.
+            // A yes whose run a stopped gp serve cut off is a yes again (or
+            // ends as the run's own output says), so it runs again instead
+            // of waiting for a hand; cut off too often, it fails and its
+            // row goes back to next.
             gp_mcp::asks::end_dead_runs(&ctx.paths.home, |id| {
                 YES_IDS
                     .lock()
@@ -417,46 +419,38 @@ fn run_yeses(ctx: &Arc<Ctx>) {
                 args.push("--onto".into());
                 args.push("main".into());
             }
-            let out = Command::new(&gp)
-                .args(&args)
-                .current_dir(dir)
-                .env("GP_HOME", &home)
-                .env("GP_GAMES_DIR", &games)
-                .env("GP_NO_HINTS", "1")
-                .stdin(Stdio::null())
-                .output();
-            let (state, lines) = match out {
-                Ok(o) => {
-                    let v: Value = serde_json::from_slice(&o.stdout).unwrap_or(Value::Null);
-                    let mut lines: Vec<String> = v["lines"]
-                        .as_array()
-                        .into_iter()
-                        .flatten()
-                        .filter_map(|l| l.as_str().map(str::to_owned))
-                        .collect();
-                    if lines.is_empty() {
-                        lines = String::from_utf8_lossy(&o.stderr)
-                            .lines()
-                            .chain(String::from_utf8_lossy(&o.stdout).lines())
-                            .filter(|l| !l.trim().is_empty())
-                            .map(str::to_owned)
-                            .collect();
-                    }
-                    let keep = lines.len().saturating_sub(6);
-                    let mut lines = lines.split_off(keep);
+            // Its output goes to files beside the ask, not pipes, so a run
+            // that outlives this server still ends with its words kept, and
+            // the next server reads them (gp_mcp::asks::end_dead_runs).
+            let (out_f, err_f) = gp_mcp::asks::run_files(&home, &id);
+            let child = File::create(&out_f).and_then(|o| {
+                let e = File::create(&err_f)?;
+                Command::new(&gp)
+                    .args(&args)
+                    .current_dir(dir)
+                    .env("GP_HOME", &home)
+                    .env("GP_GAMES_DIR", &games)
+                    .env("GP_NO_HINTS", "1")
+                    .stdin(Stdio::null())
+                    .stdout(o)
+                    .stderr(e)
+                    .spawn()
+            });
+            let (state, lines) = match child {
+                Ok(mut c) => {
+                    let _ = gp_mcp::asks::set_child(&home, &id, c.id());
+                    let ok = c.wait().map(|s| s.success()).unwrap_or(false);
+                    let out = fs::read(&out_f).unwrap_or_default();
+                    let err = fs::read(&err_f).unwrap_or_default();
+                    let (state, mut lines) = gp_mcp::asks::outcome(Some(ok), &out, &err);
                     lines.push(format!("(ran in {})", dir.display()));
-                    let state = if !o.status.success() || v["verdict"] == json!("FAIL") {
-                        "failed"
-                    } else if v["landed"].is_string() {
-                        "landed"
-                    } else {
-                        "passed"
-                    };
                     (state, lines)
                 }
                 Err(e) => ("failed", vec![format!("it couldn't start: {e}")]),
             };
             let _ = gp_mcp::asks::set_ran(&home, &id, state, &lines);
+            let _ = fs::remove_file(&out_f);
+            let _ = fs::remove_file(&err_f);
         });
     }
 }

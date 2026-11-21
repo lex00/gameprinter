@@ -7,7 +7,7 @@
 //!
 //! | File | What |
 //! |---|---|
-//! | `$GP_HOME/work/asks/ID.json` | One ask: `{id, command, argv, key, game, needs, says, cost?, plan?, held?, made_ms, state, answered_ms?, used_ms?}`; state is `open`, `yes`, `no` or `used`. `plan` is what a call that replaces data would change, from its plan; `held` is a change gp_run's net put back ([`crate::held`]) |
+//! | `$GP_HOME/work/asks/ID.json` | One ask: `{id, command, argv, key, game, needs, says, cost?, plan?, held?, made_ms, state, answered_ms?, used_ms?}`; state is `open`, `yes`, `no`, `running` (the runner runs it; `ran` says how far) or `used`. `plan` is what a call that replaces data would change, from its plan; `held` is a change gp_run's net put back ([`crate::held`]) |
 //! | `$GP_HOME/work/serve/page.json` | `{pid, port}`: the gp serve that answers the cards for this home, written when it starts |
 //!
 //! The yes guards against a careless agent, not a hostile one: a program
@@ -273,34 +273,95 @@ pub const RAN_SHOWS_MS: u64 = 15 * 60 * 1000;
 /// longer than a gate's time limit, so a run that died doesn't stay.
 pub const RUNNING_SHOWS_MS: u64 = 2 * 60 * 60 * 1000;
 
-/// Takes a yes for the loop's runner to run itself: marks it used, with
-/// `ran` {state: "running", at_ms}, so the yes runs once and gp_run's
-/// later call with it finds what the runner did. None when it isn't a yes
-/// still to use, or puts a held change back (gp_run's own road).
+/// How many times a yes's run may be cut off and run again before it
+/// counts as failed.
+pub const CUT_OFF_TRIES: u64 = 3;
+
+/// Takes a yes for the loop's runner to run itself: state `running`, with
+/// `ran` {state: "running", at_ms, pid}, so the yes runs once and gp_run's
+/// later call with it finds what the runner did. The yes is used only
+/// when the run ends ([`set_ran`]); a run its server stopped in is found
+/// by the next one ([`end_dead_runs`]). None when it isn't a yes still to
+/// use, or puts a held change back (gp_run's own road).
 pub fn claim_for_runner(home: &Path, id: &str) -> Option<Value> {
     let mut v = read(home, id)?;
     if !is_yes(&v, now_ms()) || v.get("held").is_some_and(|h| !h.is_null()) {
         return None;
     }
     let now = now_ms();
-    v["state"] = json!("used");
-    v["used_ms"] = json!(now);
+    v["state"] = json!("running");
     v["ran"] = json!({"by": "runner", "state": "running", "at_ms": now, "pid": std::process::id()});
     write(home, &v).ok()?;
     Some(v)
 }
 
-/// Why a run [`end_dead_runs`] ended failed: its card and its row say it.
-const DIED: &str = "its run stopped before it ended: gp serve stopped while it ran";
+/// The files the runner's run of ask `id` writes its output and errors
+/// to, beside the ask, so a run that outlives its server leaves its words
+/// for the next one.
+pub fn run_files(home: &Path, id: &str) -> (PathBuf, PathBuf) {
+    let d = dir(home);
+    (d.join(format!("{id}.out")), d.join(format!("{id}.err")))
+}
 
-/// The runner's runs of a yes that died before their result was written
-/// (gp serve stopped, or moved onto a new build, while one ran): each ask
-/// left `running` that `live` doesn't name, whose server (`ran.pid`) is
-/// gone or is this one, is set `failed` with why, ended when it started,
-/// so its quest-log row goes back to next (a row changed since keeps what
-/// it says). Returns their ids.
+/// The pid of the command the runner started for a yes (`ran.child`), so
+/// a server that starts after this one stopped can wait for it.
+pub fn set_child(home: &Path, id: &str, pid: u32) -> Result<(), String> {
+    let mut v = read(home, id).ok_or_else(|| format!("there's no ask {id}"))?;
+    v["ran"]["child"] = json!(pid);
+    write(home, &v)
+}
+
+/// What a run of a yes came to from its output, with its last lines: `ok`
+/// is whether it exited 0, None when no one saw it exit (a run that
+/// outlived its server), and then only its JSON says.
+pub fn outcome(ok: Option<bool>, out: &[u8], err: &[u8]) -> (&'static str, Vec<String>) {
+    let v: Value = serde_json::from_slice(out).unwrap_or(Value::Null);
+    let mut lines: Vec<String> = v["lines"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|l| l.as_str().map(str::to_owned))
+        .collect();
+    if lines.is_empty() {
+        lines = String::from_utf8_lossy(err)
+            .lines()
+            .chain(String::from_utf8_lossy(out).lines())
+            .filter(|l| !l.trim().is_empty())
+            .map(str::to_owned)
+            .collect();
+    }
+    let keep = lines.len().saturating_sub(6);
+    let lines = lines.split_off(keep);
+    let failed = match ok {
+        Some(ok) => !ok,
+        None => v["error"].is_string() || v["ok"] == json!(false),
+    };
+    let state = if failed || v["verdict"] == json!("FAIL") {
+        "failed"
+    } else if v["landed"].is_string() {
+        "landed"
+    } else {
+        "passed"
+    };
+    (state, lines)
+}
+
+/// Why a run [`end_dead_runs`] ended failed: its card and its row say it.
+const DIED: &str = "its run was cut off: gp serve stopped while it ran";
+
+/// The runner's runs of a yes that a server stopped in before their result
+/// was written (gp serve stopped, or moved onto a new build, while one
+/// ran): each ask left `running` that `live` doesn't name, whose server
+/// (`ran.pid`) is gone or is this one. A command it started that still
+/// runs (`ran.child`, up to [`RUNNING_SHOWS_MS`]) is waited for. One that
+/// ended with its whole JSON in its [`run_files`] ends the card as that
+/// says. Else the run was cut off, and the yes is a yes again for the
+/// runner to run again (yes-survives-restart); once it was cut off
+/// [`CUT_OFF_TRIES`] times it fails with why, ended when it started, so
+/// its quest-log row goes back to next. Returns the ids it settled.
 pub fn end_dead_runs(home: &Path, live: impl Fn(&str) -> bool) -> Vec<String> {
     let me = u64::from(std::process::id());
+    let now = now_ms();
     let mut out = Vec::new();
     for mut v in all(home) {
         let id = v["id"].as_str().unwrap_or("").to_owned();
@@ -319,10 +380,41 @@ pub fn end_dead_runs(home: &Path, live: impl Fn(&str) -> bool) -> Vec<String> {
             continue;
         }
         let at = ran["at_ms"].as_u64().unwrap_or(0);
-        v["ran"]["state"] = json!("failed");
-        v["ran"]["done_ms"] = json!(at);
-        v["ran"]["lines"] = json!([DIED]);
-        if write(home, &v).is_ok() {
+        if ran["child"].as_u64().is_some_and(crate::proc::alive)
+            && now.saturating_sub(at) < RUNNING_SHOWS_MS
+        {
+            continue;
+        }
+        let (out_f, err_f) = run_files(home, &id);
+        let said = std::fs::read(&out_f).unwrap_or_default();
+        let ended = serde_json::from_slice::<Value>(&said).is_ok_and(|j| j.is_object());
+        let n = v["cut_off"].as_u64().unwrap_or(0) + 1;
+        let wrote = if ended {
+            let err = std::fs::read(&err_f).unwrap_or_default();
+            let (state, mut lines) = outcome(None, &said, &err);
+            lines.push("(it ended while gp serve was stopped)".into());
+            set_ran(home, &id, state, &lines)
+        } else if n >= CUT_OFF_TRIES {
+            v["cut_off"] = json!(n);
+            v["state"] = json!("used");
+            v["used_ms"] = json!(now);
+            v["ran"]["state"] = json!("failed");
+            v["ran"]["done_ms"] = json!(at);
+            v["ran"]["lines"] = json!([format!("{DIED} ({n} times)")]);
+            write(home, &v)
+        } else {
+            v["cut_off"] = json!(n);
+            v["state"] = json!("yes");
+            v["answered_ms"] = json!(now);
+            if let Some(o) = v.as_object_mut() {
+                o.remove("ran");
+                o.remove("used_ms");
+            }
+            write(home, &v)
+        };
+        if wrote.is_ok() {
+            let _ = std::fs::remove_file(&out_f);
+            let _ = std::fs::remove_file(&err_f);
             out.push(id);
         }
     }
@@ -330,11 +422,14 @@ pub fn end_dead_runs(home: &Path, live: impl Fn(&str) -> bool) -> Vec<String> {
 }
 
 /// What the runner's run of a yes came to: `landed`, `passed` or
-/// `failed`, with its last lines.
+/// `failed`, with its last lines. The yes is now used.
 pub fn set_ran(home: &Path, id: &str, state: &str, lines: &[String]) -> Result<(), String> {
     let mut v = read(home, id).ok_or_else(|| format!("there's no ask {id}"))?;
+    let now = now_ms();
+    v["state"] = json!("used");
+    v["used_ms"] = json!(now);
     v["ran"]["state"] = json!(state);
-    v["ran"]["done_ms"] = json!(now_ms());
+    v["ran"]["done_ms"] = json!(now);
     v["ran"]["lines"] = json!(lines);
     write(home, &v)
 }
@@ -581,44 +676,86 @@ mod tests {
     }
 
     /// A yes left running by a server that is gone (or by this one, after
-    /// it moved onto a new build) fails, ended when it started; one this
-    /// server still runs, one another live server runs and a finished one
-    /// stay (tapper's scoreboard-matches-direct card, 2026-11-20).
+    /// it moved onto a new build) is a yes again, or ends as the JSON its
+    /// command left says; one whose command still runs, one this server
+    /// still runs, one another live server runs and a finished one stay.
+    /// Taken again it is the person's yes until it ends, and cut off
+    /// CUT_OFF_TRIES times it fails (yes-survives-restart; tapper's
+    /// scoreboard-matches-direct card, 2026-11-20).
     #[cfg(unix)]
     #[test]
-    fn a_run_that_died_with_its_server_fails() {
+    fn a_yes_survives_its_server_stopping() {
         let d = tempfile::tempdir().unwrap();
         let home = d.path();
         let me = u64::from(std::process::id());
-        // Another live server: the test's parent (cargo).
+        // Another live process: the test's parent (cargo).
         let other = u64::from(std::os::unix::process::parent_id());
+        let now = now_ms();
+        let none = json!(null);
         let runs = [
-            ("a-1", "running", 5, json!(null)),
-            ("b-2", "running", 6, json!(me)),
-            ("c-3", "running", 7, json!(me)),
-            ("d-4", "running", 8, json!(other)),
-            ("e-5", "landed", 9, json!(me)),
+            ("a-1", "running", none.clone(), none.clone()),
+            ("b-2", "running", json!(me), none.clone()),
+            ("c-3", "running", json!(me), none.clone()),
+            ("d-4", "running", json!(other), none.clone()),
+            ("e-5", "landed", json!(me), none.clone()),
+            ("f-6", "running", none.clone(), json!(other)),
+            ("g-7", "running", none.clone(), none.clone()),
         ];
-        for (id, state, at, pid) in &runs {
-            let mut ran = json!({"by": "runner", "state": state, "at_ms": at, "pid": pid});
+        for (id, state, pid, child) in &runs {
+            let mut ran = json!({"by": "runner", "state": state, "at_ms": now - 1000,
+                "pid": pid, "child": child});
             if *state == "landed" {
-                ran["done_ms"] = json!(10);
+                ran["done_ms"] = json!(now);
             }
-            let v = json!({"id": id, "made_ms": 1, "state": "used", "ran": ran});
+            let v = json!({"id": id, "made_ms": 1, "state": "running", "ran": ran});
             write(home, &v).unwrap();
         }
+        let g_out = run_files(home, "g-7").0;
+        std::fs::write(&g_out, r#"{"landed": "abc", "lines": ["PASS"]}"#).unwrap();
         let mut ended = end_dead_runs(home, |id| id == "c-3");
         ended.sort();
-        assert_eq!(ended, ["a-1", "b-2"]);
+        assert_eq!(ended, ["a-1", "b-2", "g-7"]);
+        // Cut off: a yes again.
         let a = read(home, "a-1").unwrap();
+        assert!(is_yes(&a, now_ms()) && a["ran"].is_null(), "{a}");
+        assert_eq!(a["cut_off"], 1);
+        // Ended while no server watched: as its JSON says.
+        let g = read(home, "g-7").unwrap();
+        assert_eq!(g["state"], "used");
+        assert_eq!(g["ran"]["state"], "landed");
+        assert!(!g_out.exists());
+        for id in ["c-3", "d-4", "f-6"] {
+            assert_eq!(read(home, id).unwrap()["ran"]["state"], "running", "{id}");
+        }
+        assert_eq!(read(home, "e-5").unwrap()["ran"]["state"], "landed");
+        // Taken again, it is running, not used, until its run ends.
+        let v = claim_for_runner(home, "a-1").unwrap();
+        assert_eq!(v["state"], "running");
+        assert!(claim_for_runner(home, "a-1").is_none(), "taken once");
+        // Cut off again and again: it fails rather than run forever.
+        let cut = json!({"by": "runner", "state": "running", "at_ms": 5});
+        mark(home, "a-1", "ran", cut).unwrap();
+        mark(home, "a-1", "cut_off", json!(CUT_OFF_TRIES - 1)).unwrap();
+        assert_eq!(end_dead_runs(home, |id| id == "c-3"), ["a-1"]);
+        let a = read(home, "a-1").unwrap();
+        assert_eq!(a["state"], "used");
         assert_eq!(a["ran"]["state"], "failed");
         assert_eq!(a["ran"]["done_ms"], 5);
-        assert_eq!(a["ran"]["lines"][0], DIED);
-        assert_eq!(read(home, "c-3").unwrap()["ran"]["state"], "running");
-        assert_eq!(read(home, "d-4").unwrap()["ran"]["state"], "running");
-        assert_eq!(read(home, "e-5").unwrap()["ran"]["state"], "landed");
+        assert!(a["ran"]["lines"][0].as_str().unwrap().starts_with(DIED));
         // Once ended, it isn't ended again.
         assert!(end_dead_runs(home, |id| id == "c-3").is_empty());
+    }
+
+    /// A run no one saw exit is judged by its JSON alone.
+    #[test]
+    fn a_run_that_outlived_its_server_ends_as_its_json_says() {
+        let st = |out: &[u8]| outcome(None, out, b"").0;
+        let landed = br#"{"landed": "abc", "lines": ["PASS"]}"#;
+        assert_eq!(st(landed), "landed");
+        assert_eq!(outcome(Some(false), landed, b"").0, "failed");
+        assert_eq!(st(br#"{"error": "no"}"#), "failed");
+        assert_eq!(st(br#"{"verdict": "FAIL"}"#), "failed");
+        assert_eq!(st(br#"{"verdict": "PASS"}"#), "passed");
     }
 
     /// A gate's card says what lands in the patch's own words and the
