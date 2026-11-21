@@ -100,6 +100,12 @@ fn connect_caps(mut cmd: Command, work: &Path, capabilities: Value) -> Client {
         init["result"]["serverInfo"]["name"], "game-printer",
         "{init}"
     );
+    // gp's own version, which a plugin pins, not gp-mcp's.
+    assert_eq!(
+        init["result"]["serverInfo"]["version"],
+        env!("CARGO_PKG_VERSION"),
+        "{init}"
+    );
     assert!(
         init["result"]["instructions"]
             .as_str()
@@ -176,6 +182,22 @@ impl Client {
         let text: Value =
             serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap();
         assert_eq!(text, content, "the text content is the structured content");
+        // Every named tool's reply carries the next step (docs/mcp.md,
+        // "Keeping up"): its id, or null with why there is none, and when
+        // there is one the reply's last text says it.
+        let step = &content["next_step"];
+        assert!(
+            step.get("id").is_some(),
+            "{name}'s reply has no next_step: {content}"
+        );
+        if let Some(id) = step["id"].as_str() {
+            let items = result["content"].as_array().unwrap();
+            let last = items.last().and_then(|i| i["text"].as_str()).unwrap_or("");
+            assert!(
+                last.starts_with(&format!("NEXT STEP {id} ")),
+                "{name}'s last text item is its next step: {last}"
+            );
+        }
         let mut summary = content.to_string();
         summary.truncate(160);
         self.transcript
@@ -245,6 +267,12 @@ fn an_agent_edits_previews_and_validates_moss_hop() {
     );
     assert_eq!(
         init["result"]["serverInfo"]["name"], "game-printer",
+        "{init}"
+    );
+    // gp's own version, which a plugin pins, not gp-mcp's.
+    assert_eq!(
+        init["result"]["serverInfo"]["version"],
+        env!("CARGO_PKG_VERSION"),
         "{init}"
     );
     assert!(
@@ -769,6 +797,12 @@ fn connect(home: &Path, work: &Path, rom: &Path, lifted: &Path) -> Client {
     );
     assert_eq!(
         init["result"]["serverInfo"]["name"], "game-printer",
+        "{init}"
+    );
+    // gp's own version, which a plugin pins, not gp-mcp's.
+    assert_eq!(
+        init["result"]["serverInfo"]["version"],
+        env!("CARGO_PKG_VERSION"),
         "{init}"
     );
     assert!(

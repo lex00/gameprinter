@@ -338,6 +338,27 @@ A person's stage goes the same road: `level list`, `level show`, `level render` 
 
 A `--port` of 7710 or 7720 is refused. `mechanic demo`, `mechanic say --judge` and `mechanic triage` (not its dry run) ask Laya at 127.0.0.1:7720 for moves and would start it when nothing answers, so gp_run runs them only while Laya or `gp serve` answers: Laya at `$GP_LAYA_URL` when it is on 127.0.0.1 (else 7720), gp serve at `$GP_SERVE_URL` likewise (else 7710). The refusal carries `needs: "laya"`, and the page's LET THE TOOLS TRY tells the person in plain words that Laya isn't running, keeping the refusal as the record's `detail`. gp_run then runs the command with `$GP_LAYA_URL` and `$GP_SERVE_URL` set to the addresses it checked, and every gp command's `--decide` left out reads `$GP_LAYA_URL` before its built-in `http://127.0.0.1:7720` (`mechanic demo`, `mechanic say --judge`, `mechanic triage`, `localize`, `model blind`, `farm` and `farm topdown`), so one variable decides where Laya is everywhere. The mechanic page check gives its gp serve a stand-in decision server as `$GP_LAYA_URL`, so it doesn't need the person's Laya and nothing it runs connects to 7720.
 
+## Keeping up
+
+The server has to follow gp as gp changes: a tool added or renamed, a command removed, a worker given new words. Tests that `just check` runs fail when it doesn't, each saying what to change (crates/gp-cli/src/mcp_keeps_up.rs unless named):
+
+| Check | Fails when |
+|---|---|
+| `the_instructions_name_every_tool_and_no_gone_one` | The instructions a client reads on connecting (`gp_mcp::server::INSTRUCTIONS`) leave a named tool out, or hold a snake_case word that is no tool, no tool's argument and no field a tool's description gives |
+| `the_tools_descriptions_name_only_tools_there_are` | A tool's description names a tool that isn't there (a snake_case word that begins as a tool's name does) |
+| `the_server_names_only_commands_gp_has` | A `gp WORDS` in the instructions or a description names no command of gp's, or a flag the command hasn't. `gp_run WORDS` is held the same way when its first word is a command's |
+| `a_rows_step_runs_commands_gp_has` | A command a quest-log row's step runs (crates/gp-cli/src/steps.rs `ROW_CLI`, and the tool gate for a tool row) is gone, which would drop it from the step's commands without a word |
+| `a_workers_brief_names_commands_gp_has_and_tools_it_may_call` (serve/runner.rs) | A worker's brief names a gp command or flag gp hasn't, or a tool the worker isn't allowed: a worker reaches the loop through the same MCP tools, `gp_run` above all, as a person's agent |
+| `everything_names_only_tools_the_server_has` | Any file git tracks (a worker's allowed tools, a skill, a plugin's hooks and commands, the docs) names `mcp__gp__NAME` for a tool the server hasn't |
+| `the_docs_table_has_every_tool` | The table of the tools above has no row for a tool, or a row for one gone |
+| `a_plugin_carries_gps_version` | A plugin manifest in the repo (`.claude-plugin/plugin.json`) has a version other than gp's (crates/gp-cli/Cargo.toml) |
+| `every_command_has_a_rule_in_gp_run_s_policy` (cli_tree.rs) | A command has no rule in gp_run's policy, or a rule names no command |
+| tests/mcp.rs, every tool call | A named tool's reply over stdio has no `next_step` (its id, or null with why), or has an id and its last text item doesn't say `NEXT STEP ID` |
+
+The server says gp's version as its own (`serverInfo.version`, from gp-cli), not gp-mcp's crate version, so a plugin pinned to a gp release and the server it starts agree; tests/mcp.rs checks it on connecting.
+
+A new capability reaches an agent through these: a new command through gp_run (its policy rule) and a line in the instructions or a tool's description when it is one an agent should reach for unasked; a new named tool through its row above and its words in the instructions. The gameprinter plugin is held as it lands: its skills, hooks and `/gp:port` may name only tools the server has (the scan of tracked files), and its manifest carries gp's version.
+
 ## Measurements
 
 On 2026-10-28, on this machine (Apple M-series, debug build):

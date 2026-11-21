@@ -95,6 +95,8 @@ mod lockstep;
 mod loop_cmd;
 mod loop_hook;
 mod mcp;
+#[cfg(test)]
+mod mcp_keeps_up;
 mod mechanic;
 mod mechanics;
 mod metrics_cmd;

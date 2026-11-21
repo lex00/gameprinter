@@ -133,7 +133,10 @@ pub(crate) fn listed(a: &Answer, s: &Step) -> Value {
 
 /// What a quest-log item's step may run: the item's own record, the
 /// checks and the gate its change lands through.
-const ROW_CLI: &str = "gp mechanic show GAME ROW, gp mechanic start GAME ROW, gp mechanic busy GAME ROW, gp mechanic log GAME ROW, gp mechanic say GAME ROW, gp mechanic queue GAME ROW, gp mechanic probe GAME, gp clip presses GAME, gp corpus import GAME, gp model gate GAME";
+pub(crate) const ROW_CLI: &str = "gp mechanic show GAME ROW, gp mechanic start GAME ROW, gp mechanic busy GAME ROW, gp mechanic log GAME ROW, gp mechanic say GAME ROW, gp mechanic queue GAME ROW, gp mechanic probe GAME, gp clip presses GAME, gp corpus import GAME, gp model gate GAME";
+
+/// What a row of the tool's work runs besides: the gate it lands through.
+pub(crate) const TOOL_ROW_CLI: &str = ", gp tool gate --patch FILE";
 
 /// The quest-log items that wait for work, as steps of the agent's: each
 /// game's rows that are next or being worked on, in the log's order, one
@@ -218,7 +221,7 @@ pub(crate) fn row_steps(paths: &gp_evidence::Paths, games: Option<&Path>) -> Vec
             };
             // A tool row lands through the tool gate.
             let cli = if r["repo"] == json!("tools") {
-                format!("{cli}, gp tool gate --patch FILE")
+                format!("{cli}{TOOL_ROW_CLI}")
             } else {
                 cli
             };

@@ -1805,7 +1805,7 @@ pub(crate) fn brief(setup: &Setup, step: &Value, wt: &Path, branch: &str, before
         format!("It touches: {}", list("touches")),
         String::new(),
         format!("Your worktree is {} (branch {branch}).", wt.display()),
-        format!("Run gp commands that write, land or publish with the gp_run tool only: from your shell they are refused. Reads may run in Bash as {gp} COMMAND ARGS, one command a call: no eval, no &&, no pipes. Before cargo in the worktree, run {gp} worker env loop-{id} --rust and set what it prints."),
+        format!("Run gp commands that write, land or publish with the MCP tool gp_run only: from your shell they are refused. Reads may run in Bash as {gp} COMMAND ARGS, one command a call: no eval, no &&, no pipes. Before cargo in the worktree, run {gp} worker env loop-{id} --rust and set what it prints."),
         format!("Every gp_run call that writes, lands or publishes is this step: gp_run cites {id} for you and refuses any other step."),
         "A change lands only through a gate: gp model gate for a game, gp tool gate for the tool. A landing waits for the person's yes on their page; ask and wait, never work around it.".to_owned(),
         "The step is the whole item: do what it needs now, as far as a card for the person's yes. If what is left is a landing, make the patch, dry-run it and raise the card in this step; never leave it to another step. Don't answer the person with an explanation in place of the work: when they say they don't understand, do the next thing and tell them in one line what is on their page.".to_owned(),
@@ -3188,6 +3188,49 @@ mod tests {
             seen.contains(&format!("s0000000000c4 {}\n", new.display())),
             "{seen}"
         );
+    }
+
+    /// A worker reaches the loop through the MCP tools a person's agent
+    /// has: every gp command its brief names is one gp has, with its
+    /// flags, and every tool it names is among the worker's allowed ones.
+    #[test]
+    fn a_workers_brief_names_commands_gp_has_and_tools_it_may_call() {
+        let t = tempfile::tempdir().unwrap();
+        let mut setup = rig(t.path(), "true\n");
+        // As a worker's brief says it on a home where gp is on the path.
+        setup.gp = PathBuf::from("gp");
+        let (wt, mcp) = (t.path().join("wt"), t.path().join("mcp.json"));
+        let allowed = claude_args(&setup, &wt, &mcp);
+        let tools = crate::mcp_keeps_up::tool_names();
+        for repo in ["tools", "games"] {
+            let cli = format!(
+                "{}{}",
+                crate::steps::ROW_CLI
+                    .replace("GAME", "g")
+                    .replace("ROW", "r"),
+                crate::steps::TOOL_ROW_CLI
+            );
+            let step = json!({
+                "id": "s0000000000b1", "subject": "g", "says": "Work on r.",
+                "how": {"cli": cli}, "commands": crate::steps::commands_of(&cli),
+                "touches": ["row:g/r"], "repo": repo,
+            });
+            let b = brief(&setup, &step, &wt, "loop/s0000000000b1", "");
+            assert_eq!(
+                crate::mcp_keeps_up::unknown_commands(&b),
+                Vec::<String>::new(),
+                "the brief (serve/runner.rs brief) names gp commands gp hasn't:\n{b}"
+            );
+            for n in b
+                .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+                .filter(|w| w.contains('_') && tools.contains(w))
+            {
+                assert!(
+                    allowed.contains(&format!("mcp__gp__{n}")),
+                    "the brief names {n}, which the worker isn't allowed (claude_args)"
+                );
+            }
+        }
     }
 
     #[test]

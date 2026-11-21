@@ -101,7 +101,9 @@ pub(crate) fn run(args: &McpArgs, paths: &Paths) -> Result<Outcome> {
     // The tools' `gp query` children ask this process, which keeps the
     // recordings open between them (crate::session).
     let _sessions = crate::session::serve_in_background(paths);
-    gp_mcp::server::serve_stdio(config).map_err(anyhow::Error::msg)?;
+    // The server says gp's own version, which a plugin pins (docs/mcp.md,
+    // "Keeping up"), not gp-mcp's crate version.
+    gp_mcp::server::serve_stdio(config, env!("CARGO_PKG_VERSION")).map_err(anyhow::Error::msg)?;
     // stdout was the MCP channel, so nothing more is printed there.
     Ok(Outcome::ok(shown, String::new()))
 }
