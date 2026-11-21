@@ -89,6 +89,114 @@ pub(crate) struct ImportRules {
     /// Sessions (`title`) and clips (`walk.006`) left out by name.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub exclude: Vec<Excluded>,
+    /// The scripted presses a session's clip is scored on. With it, the
+    /// person's recording only reaches the clip's start; the presses from
+    /// there come from this recipe and a seed of the session's name and
+    /// clip number, so two people's clips of a row press the same.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub script: Option<Script>,
+}
+
+/// `[import.script]`: seeded presses from a clip's start.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Script {
+    /// The recipe's seed; the session's name and clip number are mixed in.
+    pub seed: u64,
+    /// The clip's own frames.
+    pub frames: u64,
+    /// The buttons it presses, one at a time, as spans name them
+    /// (`left`, `a`; on an arcade set `tap`, `coin`).
+    pub buttons: Vec<String>,
+    /// How long a press is held, in frames: least and most.
+    pub hold: [u64; 2],
+    /// The frames between two presses: least and most.
+    #[serde(default)]
+    pub gap: [u64; 2],
+    /// An arcade set's presses line, `SYSTEM COLUMNS` (`tapper CSRLDUT`).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub arcade: String,
+}
+
+/// The NES buttons a span names.
+const NES_BUTTONS: [&str; 8] = ["right", "left", "down", "up", "start", "select", "b", "a"];
+
+impl Script {
+    /// The arcade layout its presses carry, and a refusal of a recipe that
+    /// can't make presses.
+    fn check(&self) -> Result<Option<gp_evidence::input_log::ArcadeLayout>> {
+        let arcade = if self.arcade.trim().is_empty() {
+            None
+        } else {
+            let mut w = self.arcade.split_whitespace();
+            let (Some(system), Some(columns), None) = (w.next(), w.next(), w.next()) else {
+                bail!(
+                    "[import.script] arcade is `SYSTEM COLUMNS`: {}",
+                    self.arcade
+                );
+            };
+            Some(gp_evidence::input_log::ArcadeLayout {
+                system: system.to_owned(),
+                columns: columns.to_owned(),
+            })
+        };
+        if self.frames == 0 {
+            bail!("[import.script] frames is more than 0");
+        }
+        if self.buttons.is_empty() {
+            bail!("[import.script] buttons names at least one button");
+        }
+        for b in &self.buttons {
+            let known = match &arcade {
+                Some(a) => a
+                    .columns
+                    .chars()
+                    .any(|c| gp_evidence::input_log::arcade_button(c) == Some(b.as_str())),
+                None => NES_BUTTONS.contains(&b.as_str()),
+            };
+            if !known {
+                bail!("[import.script] presses no button `{b}` on this game's controls");
+            }
+        }
+        if self.hold[0] == 0 || self.hold[0] > self.hold[1] || self.gap[0] > self.gap[1] {
+            bail!(
+                "[import.script] hold is [LEAST, MOST] with LEAST at least 1, and gap [LEAST, MOST]"
+            );
+        }
+        Ok(arcade)
+    }
+
+    /// The presses of session `session`'s clip `n`: a press of a drawn
+    /// button for a drawn hold, a drawn gap, again, to `frames`. The same
+    /// recipe, session and number give the same spans on any machine.
+    fn presses(&self, session: &str, n: u64) -> Spans {
+        let mut h = blake3::Hasher::new();
+        h.update(b"gp-import-script 1\n");
+        h.update(&self.seed.to_le_bytes());
+        h.update(session.as_bytes());
+        h.update(&n.to_le_bytes());
+        let seed: [u8; 8] = h.finalize().as_bytes()[..8].try_into().unwrap_or([0; 8]);
+        let mut state = u64::from_le_bytes(seed);
+        // splitmix64
+        let mut next = || {
+            state = state.wrapping_add(0x9e37_79b9_7f4a_7c15);
+            let mut z = state;
+            z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+            z ^ (z >> 31)
+        };
+        let mut draw = |[lo, hi]: [u64; 2]| lo + next() % (hi - lo + 1);
+        let last = self.buttons.len() as u64 - 1;
+        let mut spans = Vec::new();
+        let mut t = 0;
+        while t < self.frames {
+            let b = &self.buttons[usize::try_from(draw([0, last])).unwrap_or(0)];
+            let end = (t + draw(self.hold)).min(self.frames) - 1;
+            spans.push(format!("{b}@{t}-{end}"));
+            t = end + 1 + draw(self.gap);
+        }
+        (self.frames, spans)
+    }
 }
 
 /// A session or a clip `gp corpus import` leaves out, and why.
@@ -125,6 +233,25 @@ struct Taken {
     lead: Spans,
     /// The clip's own frames and spans.
     body: Spans,
+    /// `played`, or `scripted` when its presses are `[import.script]`'s.
+    source: &'static str,
+    /// The arcade layout its own presses carry (a script's).
+    arcade: Option<gp_evidence::input_log::ArcadeLayout>,
+}
+
+impl Taken {
+    /// The clip with its own presses from the script: its start stays the
+    /// person's.
+    fn scripted(
+        mut self,
+        s: &Script,
+        arcade: Option<&gp_evidence::input_log::ArcadeLayout>,
+    ) -> Self {
+        self.body = s.presses(&self.session, self.n);
+        self.source = "scripted";
+        self.arcade = arcade.cloned();
+        self
+    }
 }
 
 /// A session or clip left out, and why.
@@ -351,6 +478,8 @@ fn take(
                     .to_owned(),
                 lead: (start as u64, lead),
                 body: (frames as u64, body),
+                source: "played",
+                arcade: None,
             });
         }
     }
@@ -372,10 +501,10 @@ fn recipe_inputs(dir: &Path, r: &Recipe) -> Option<(Spans, Spans)> {
     Some((lead, (r.frames, body)))
 }
 
-/// Whether a plan's clip is one the import makes: `played`, its ID the
-/// prefix's.
+/// Whether a plan's clip is one the import makes: `played` or `scripted`,
+/// its ID the prefix's.
 fn owned(r: &Recipe, prefix: &str) -> bool {
-    r.source == "played" && r.id.starts_with(&format!("{prefix}."))
+    matches!(r.source.as_str(), "played" | "scripted") && r.id.starts_with(&format!("{prefix}."))
 }
 
 /// The session an owned clip's ID names: `walk` in `hop.walk.001`.
@@ -515,9 +644,15 @@ fn merge(
     let clip = |t: &Taken, files: &mut Vec<(String, String)>| -> PlanClip {
         let key = cs::file_key(&t.id);
         let lead = format!("inputs/{key}.start.presses");
-        files.push((lead.clone(), cs::presses_text(&nes_presses(&t.lead))));
+        // A clip's start and own presses name the same buttons: a script's
+        // arcade line goes on both.
+        let mut start = nes_presses(&t.lead);
+        start.arcade.clone_from(&t.arcade);
+        files.push((lead.clone(), cs::presses_text(&start)));
         let presses = format!("inputs/{key}.presses");
-        files.push((presses.clone(), cs::presses_text(&nes_presses(&t.body))));
+        let mut body = nes_presses(&t.body);
+        body.arcade.clone_from(&t.arcade);
+        files.push((presses.clone(), cs::presses_text(&body)));
         let note = if t.note.trim().is_empty() {
             t.session.as_str()
         } else {
@@ -530,7 +665,7 @@ fn merge(
         PlanClip {
             id: t.id.clone(),
             name,
-            source: "played".into(),
+            source: t.source.into(),
             start: lead,
             presses,
             frames: t.body.0,
@@ -796,7 +931,14 @@ pub(crate) fn run(a: &Args<'_>, paths: &Paths) -> Result<Outcome> {
     } else {
         rules.prefix.clone()
     };
-    let (taken, left) = take(home, game, &prefix, &rules, a.sessions)?;
+    let (mut taken, left) = take(home, game, &prefix, &rules, a.sessions)?;
+    if let Some(s) = &rules.script {
+        let arcade = s.check()?;
+        taken = taken
+            .into_iter()
+            .map(|t| t.scripted(s, arcade.as_ref()))
+            .collect();
+    }
     let why = if rules.why.is_empty() {
         "a clip of the {session} mechanic session"
     } else {
@@ -1191,6 +1333,51 @@ mod tests {
             m.contains("removed = [\"g.jump.001\", \"g.jump.002\"]"),
             "{m}"
         );
+    }
+
+    /// With `[import.script]`, two people who pressed differently on a row
+    /// get the same scored presses: each keeps their own start, and the
+    /// clip's presses are the recipe's, with the arcade line it names.
+    #[test]
+    fn a_script_gives_two_people_the_same_presses() {
+        let d = tempfile::tempdir().unwrap();
+        let script = "[import]\nprefix = \"g\"\n\n[import.script]\nseed = 7\nframes = 120\n\
+                      buttons = [\"left\", \"right\", \"tap\"]\nhold = [2, 10]\ngap = [0, 5]\n\
+                      arcade = \"tapper CSRLDUT\"\n\n";
+        let mut presses = Vec::new();
+        for (who, start, spans) in [("a", 10, ["right@0-19"]), ("b", 14, ["left@3-9"])] {
+            let home = d.path().join(who).join("home");
+            let tpl = d.path().join(who).join("tpl");
+            clip(&home, "pour", 1, start, &spans, 30);
+            plan(&tpl, script);
+            let o = run(&args(&tpl, &home, true), &paths(&home)).unwrap();
+            assert_eq!(o.json["added"], json!(["g.pour.001"]), "{}", o.text);
+            let loaded = crate::plan::load(&tpl).unwrap().unwrap();
+            let c = &loaded.set.clips[0];
+            assert_eq!(c.source, "scripted");
+            assert_eq!(c.frames, 120);
+            assert_eq!(c.start.frame, start);
+            presses.push(fs::read_to_string(tpl.join("inputs/g.pour.001.presses")).unwrap());
+            // Again: nothing changes.
+            let o = run(&args(&tpl, &home, true), &paths(&home)).unwrap();
+            assert_eq!(o.json["step"], "none");
+        }
+        assert_eq!(presses[0], presses[1]);
+        let p = cs::parse_presses(&presses[0]).unwrap();
+        assert_eq!(p.frames, 120);
+        assert_eq!(p.arcade.unwrap().system, "tapper");
+        assert!(p.spans.len() > 5, "{presses:?}");
+        let named = |s: &String| ["left@", "right@", "tap@"].iter().any(|b| s.starts_with(b));
+        assert!(p.spans.iter().all(named), "{presses:?}");
+
+        // A button the controls don't have is refused.
+        let home = d.path().join("a/home");
+        let tpl = d.path().join("c");
+        plan(&tpl, &script.replace("\"tap\"", "\"jump\""));
+        let Err(e) = run(&args(&tpl, &home, false), &paths(&home)) else {
+            panic!("a button the controls don't have was taken");
+        };
+        assert!(format!("{e:#}").contains("`jump`"), "{e:#}");
     }
 
     /// Clips whose sessions aren't in the home are kept, and an import of

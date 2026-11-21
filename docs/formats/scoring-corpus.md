@@ -119,6 +119,30 @@ An import changes a clip already in the plan only when it is told to: `--replace
 | By name | `[import] exclude`: a session (`title`) or a session's clip (`walk.006`), with why |
 | What can't be a recipe | A clip with no frames, or one that presses reset or a third or fourth controller |
 
+### Scripted clips
+
+Two people record a row differently, so their sessions' presses differ, and so would the clips each model is scored on. With an `[import.script]` table a session's recording only reaches the clip's start; its own presses come from the recipe:
+
+```toml
+[import.script]
+seed = 1
+frames = 600
+buttons = ["left", "right", "up", "down", "tap"]
+hold = [2, 30]
+gap = [0, 15]
+arcade = "tapper CSRLDUT"
+```
+
+| Key | What |
+|---|---|
+| `seed` | The recipe's seed. The session's name (the row) and the clip's number are mixed in through BLAKE3, so a row's clip 1 presses the same for everyone |
+| `frames` | The clip's own frames, whatever the person's clip ran |
+| `buttons` | The buttons pressed, one at a time, as spans name them; on an arcade set the names its columns give (`tap`, `coin`, `start1`) |
+| `hold`, `gap` | A press's frames held and the frames between two presses: least and most, drawn from a splitmix64 stream |
+| `arcade` | An arcade set's `SYSTEM COLUMNS`, written as the `arcade` line of both the clip's presses files, its start's and its own; left out on the NES |
+
+Such a clip is `source = "scripted"`, with the person's start presses and the recipe's own presses. The import adds, keeps and holds scripted clips as it does played ones: a clip already in the plan as `played` is held, not rewritten, until `--replace` names it. A button the controls don't have, a hold under one frame or a range whose least is above its most is refused.
+
 Without `--write` nothing is written. With it, the plan is edited in place: a new clip goes after the last clip (so before the changelog), a replaced clip's block takes the session's presses, start and frames with its other lines kept, and a removed clip's block and its `inputs/` files go. Every other byte stays as it was. Then the version is recorded by the rules above, with a changelog line naming the clips. A mapping that maps no field yet (as `gp game new` writes it) is refused, since a clip scored over nothing agrees on every frame. `--from HOME` reads the sessions, paths and sealed runs from another home.
 
 The old import also measured new clips' curves in a capture run (`--run`) and recorded the version only once every clip had one. A plan keeps no curves, so the version is recorded on the same `--write`.
