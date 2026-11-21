@@ -60,7 +60,12 @@ pub(crate) fn read(game: &Path) -> std::result::Result<Vec<Look>, String> {
     let Ok(text) = fs::read_to_string(game.join(FILE)) else {
         return Ok(Vec::new());
     };
-    let f: File = match toml::from_str(&text) {
+    parse(&text)
+}
+
+/// The looks of an `approved.toml` text.
+pub(crate) fn parse(text: &str) -> std::result::Result<Vec<Look>, String> {
+    let f: File = match toml::from_str(text) {
         Ok(f) => f,
         Err(e) => return Err(format!("{FILE}: {}", e.message())),
     };

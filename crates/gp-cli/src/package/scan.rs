@@ -855,6 +855,43 @@ struct Text {
     lexed: Option<fields::Lexed>,
 }
 
+/// The numbers of a game's `approved.toml` worth comparing: the frame
+/// numbers (each look's `frames` and each `apart` row's first) are the
+/// clip's counter, so a lock on consecutive frames isn't a ROM run; the
+/// pixel counts are still compared. Only a file `gp mechanic approve`
+/// could have written loses them: it parses as approved looks and each
+/// look's rows count up through its frames. Any other text keeps all.
+fn approved_measures(text: &str, nums: Vec<Num>) -> Vec<Num> {
+    let Ok(looks) = crate::approved::parse(text) else {
+        return nums;
+    };
+    let counted = looks.iter().all(|l| {
+        let [a, b] = l.frames;
+        l.apart.iter().all(|r| (a..=b).contains(&r[0]))
+            && l.apart.windows(2).all(|w| w[0][0] < w[1][0])
+    });
+    if !counted {
+        return nums;
+    }
+    // Byte spans of the frame numbers: a `frames` line whole, a row's first.
+    let mut drop: Vec<(usize, usize)> = Vec::new();
+    let mut at = 0;
+    for line in text.split_inclusive('\n') {
+        let t = line.trim_start();
+        let start = at + line.len() - t.len();
+        if t.starts_with("frames") {
+            drop.push((start, at + line.len()));
+        } else if t.starts_with('[') && !t.starts_with("[[") {
+            let end = t.find(',').unwrap_or(t.len());
+            drop.push((start, start + end));
+        }
+        at += line.len();
+    }
+    nums.into_iter()
+        .filter(|n| !drop.iter().any(|&(s, e)| s <= n.start && n.end <= e))
+        .collect()
+}
+
 /// Groups of numbers by byte span: every span's numbers in order.
 fn groups_of(nums: &[Num], spans: &[(usize, usize)]) -> Vec<rom_match::Group> {
     spans
@@ -1107,7 +1144,10 @@ fn scan_part(pkg: &Package, part: &Part, found: &BTreeMap<String, Rom>) -> Resul
     let texts: Vec<Text> = raw
         .into_iter()
         .map(|(rel, role, text)| {
-            let nums = rom_match::numbers(&text);
+            let mut nums = rom_match::numbers(&text);
+            if rel == crate::approved::FILE {
+                nums = approved_measures(&text, nums);
+            }
             let toml = rel.ends_with(".toml") || role == Role::Recipe;
             let lexed = toml.then(|| fields::lex(&text));
             let spans = match &lexed {

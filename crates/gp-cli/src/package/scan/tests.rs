@@ -472,3 +472,43 @@ fn press_timings_have_an_allowance() {
 fn a_routine_in_no_image_has_no_operands() {
     assert!(transcribe::routine_operands(&[], 0x8000).is_empty());
 }
+
+/// An approved.toml as `gp mechanic approve` writes it: its frame numbers
+/// count the clip's frames, so a lock on consecutive frames isn't a ROM
+/// run; its pixel counts are still compared. A file that isn't approved
+/// looks, or whose rows don't count up, keeps every number.
+#[test]
+fn approved_frame_numbers_are_not_compared() {
+    let mut looks = vec![crate::approved::Look {
+        row: "confirm-level-two".to_owned(),
+        clip: "game.level.two".to_owned(),
+        frames: [0, 40],
+        look: "game".to_owned(),
+        approved: "today".to_owned(),
+        apart: (0..=40)
+            .map(|f| [f, 0, if f == 7 { 12 } else { 0 }])
+            .collect(),
+    }];
+    let text = crate::approved::text(&looks);
+    let kept: Vec<i64> = super::approved_measures(&text, rom_match::numbers(&text))
+        .iter()
+        .map(|n| n.value)
+        .collect();
+    assert_eq!(kept.len(), 41 * 2, "{kept:?}");
+    assert_eq!(kept.iter().filter(|&&v| v == 12).count(), 1, "{kept:?}");
+    assert!(kept.iter().all(|&v| v == 0 || v == 12), "{kept:?}");
+
+    looks[0].apart.swap(3, 4);
+    let text = crate::approved::text(&looks);
+    let all = rom_match::numbers(&text).len();
+    assert_eq!(
+        super::approved_measures(&text, rom_match::numbers(&text)).len(),
+        all
+    );
+    let other = "frames = [1, 2, 3]\nt = [4, 5, 6]\n";
+    let all = rom_match::numbers(other).len();
+    assert_eq!(
+        super::approved_measures(other, rom_match::numbers(other)).len(),
+        all
+    );
+}
