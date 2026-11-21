@@ -246,17 +246,14 @@ impl ModuleRuntime {
             .call(op, &w.0, ticks)
     }
 
+    /// The deadline of a call that runs `frames` frames: a call's, or ten
+    /// frame-times a frame when that is longer. Every frame here is one the
+    /// tools run and no player waits on (the page holds a frame to ten
+    /// frame-times itself, docs/modules.md). A single frame gets a call's
+    /// deadline too: on a loaded machine one frame of a long clip can wait
+    /// more than ten frame-times for the CPU, and the gate failed on it.
     fn frames_deadline(frames: usize) -> u64 {
         CALL_TICKS.max(FRAME_TICKS.saturating_mul(frames as u64))
-    }
-
-    /// A frame's deadline when it's one frame: the design's ten frame-times.
-    fn step_deadline(frames: usize) -> u64 {
-        if frames <= 1 {
-            FRAME_TICKS
-        } else {
-            Self::frames_deadline(frames)
-        }
     }
 
     /// Whether [`QueryValues::query_values`] reads with one call across
@@ -366,16 +363,6 @@ impl ModuleRuntime {
         .map(|_| ())
     }
 
-    /// `step` with a call's deadline, not a frame's: for a tool that runs a
-    /// frame no player waits on, such as one with a random draw forced to a
-    /// byte the game seldom draws, which can take a branch that runs long.
-    pub fn step_unhurried(&mut self, inputs: &[InputFrame]) -> Result<Vec<Event>, String> {
-        let out = self.call(wire::STEP, Self::frames_deadline(inputs.len()), |w| {
-            w.inputs(inputs)
-        })?;
-        Reader::new(&out).events()
-    }
-
     /// The draw calls the run's script has kept, frame and site each; None
     /// when it keeps none.
     pub fn draw_calls(&self) -> Result<Option<Vec<(u64, String)>>, String> {
@@ -460,7 +447,7 @@ impl Runtime for ModuleRuntime {
     }
 
     fn step(&mut self, inputs: &[InputFrame]) -> Result<Vec<Event>, String> {
-        let out = self.call(wire::STEP, Self::step_deadline(inputs.len()), |w| {
+        let out = self.call(wire::STEP, Self::frames_deadline(inputs.len()), |w| {
             w.inputs(inputs)
         })?;
         Reader::new(&out).events()
@@ -595,6 +582,16 @@ mod tests {
         let e = h.call(wire::STEP, &[], FRAME_TICKS).unwrap_err();
         assert!(e.contains("deadline"), "{e}");
         assert!(t0.elapsed() < Duration::from_secs(5));
+    }
+
+    /// A step of one frame has a call's deadline, so a tool's frame that
+    /// waits on a loaded machine isn't stopped; a long run has ten
+    /// frame-times a frame.
+    #[test]
+    fn one_frame_has_a_calls_deadline_and_a_long_run_more() {
+        assert_eq!(ModuleRuntime::frames_deadline(0), CALL_TICKS);
+        assert_eq!(ModuleRuntime::frames_deadline(1), CALL_TICKS);
+        assert_eq!(ModuleRuntime::frames_deadline(24_650), 24_650 * FRAME_TICKS);
     }
 
     #[test]

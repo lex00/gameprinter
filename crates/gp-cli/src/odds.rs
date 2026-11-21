@@ -305,7 +305,8 @@ fn free_run(start: Model, frames: &[InputFrame]) -> Result<ClipRun> {
     let mut seen = 0;
     for input in frames {
         let before = rt.fork();
-        rt.step_unhurried(std::slice::from_ref(input))?;
+        rt.step(std::slice::from_ref(input))
+            .map_err(anyhow::Error::msg)?;
         let calls = rt.draw_calls()?;
         if calls.len() == seen {
             continue;
@@ -333,7 +334,8 @@ fn free_run(start: Model, frames: &[InputFrame]) -> Result<ClipRun> {
                     lenient: true,
                     ..DrawScript::default()
                 })?;
-                f.step_unhurried(std::slice::from_ref(input))?;
+                f.step(std::slice::from_ref(input))
+                    .map_err(anyhow::Error::msg)?;
                 let h = f.world_hash()?;
                 let i = match by_state.iter().position(|(s, _)| *s == h) {
                     Some(i) => i,

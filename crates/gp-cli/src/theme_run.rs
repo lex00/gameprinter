@@ -161,12 +161,7 @@ impl Run {
     /// One frame: the simulation's events, and the APU writes the game's
     /// sound driver made on it.
     pub(crate) fn advance(&mut self, f: &InputFrame) -> Result<Stepped, String> {
-        // A frame no player waits on: a call's deadline, not a frame's, so a
-        // busy machine doesn't stop the module mid-review.
-        let events = self
-            .rt
-            .step_unhurried_events(std::slice::from_ref(f))
-            .map_err(|e| format!("{e:#}"))?;
+        let events = gp_runtime::Runtime::step(&mut self.rt, std::slice::from_ref(f))?;
         let apu = gp_interp::lockstep::apu_writes(&events);
         let names = &self.rt.spec().events;
         let sim = events
