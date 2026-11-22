@@ -6,7 +6,7 @@
 //! | Endpoint | What |
 //! |---|---|
 //! | `GET /api/asks` | The asks still open, and the yeses not yet used, newest first |
-//! | `POST /api/asks/{id}` | `{answer: "yes" \| "no"}`: the person's answer to an open ask |
+//! | `POST /api/asks/{id}` | `{answer: "yes" \| "no", words?}`: the person's answer to an open ask, with what they wrote beside it: kept on the ask, written to its row's talk as their turn, and put in the row's note when the runner settles the row by the card (a NO with words sends the row to next with them) |
 
 use serde_json::{Value, json};
 
@@ -23,7 +23,7 @@ pub(super) fn routes() -> Vec<Route> {
         },
         Route {
             path: "/api/asks/{id}",
-            about: "POST {answer: yes|no}: the person's answer to an ask",
+            about: "POST {answer: yes|no, words?}: the person's answer to an ask, and what they wrote beside it",
             handler: answer,
         },
     ]
@@ -55,6 +55,29 @@ fn answer(ctx: &Ctx, req: &Request, params: &Params) -> Result<Response, Fail> {
         Some("no") => asks::Answer::No,
         _ => return Err(Fail::bad_request("answer is yes or no")),
     };
-    let done = asks::answer(&ctx.paths.home, id, a).map_err(Fail::conflict)?;
-    Ok(Response::json(&done))
+    let words = v["words"].as_str().unwrap_or("").trim();
+    let done = asks::answer_with(&ctx.paths.home, id, a, words).map_err(Fail::conflict)?;
+    // The words go to the card's row as the person's turn, so its worker
+    // reads them with the row; the row's status is the runner's to set
+    // when it settles the card (runner::settle_card_rows).
+    let mut out = done.clone();
+    if let Some(w) = done["words"].as_str()
+        && let Some((game, row)) = super::runner::ask_row(&ctx.paths.home, &done)
+    {
+        let said = match a {
+            asks::Answer::Yes => "YES",
+            asks::Answer::No => "NO",
+        };
+        let text = format!(
+            "{said} to the card ({}): {w}",
+            super::runner::card_what(&done)
+        );
+        let turn = crate::mechanic::session::Session::open_or_make(&ctx.paths, &game, &row)
+            .and_then(|s| s.turn_keeping_status(json!({"by": "player", "text": text, "card": id})));
+        out["row"] = json!(format!("{game}/{row}"));
+        if let Err(e) = turn {
+            out["talk_error"] = json!(format!("{e:#}"));
+        }
+    }
+    Ok(Response::json(&out))
 }

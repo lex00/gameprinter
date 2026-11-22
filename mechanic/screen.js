@@ -1494,6 +1494,11 @@ async function tell(e) {
 /** How long a card the runner finished stays on the strip. */
 const ASK_DONE_SHOWS_MS = 60 * 1000;
 const asksOpen = new Set();
+// The cards whose box for words is open, and what is typed in each, kept
+// across redraws: the words go with YES or NO (POST /api/asks/ID, words)
+// to the card's row, as the person's turn.
+const asksWording = new Set();
+const askWords = new Map();
 let asksDrawn = "";
 let asksShown = 0; // the yes cards in YOUR TURN now
 let asksNow = []; // those cards, as /api/asks last gave them
@@ -1539,11 +1544,14 @@ async function refreshAsks() {
   if (key === asksDrawn) { drawYourTurn(); return; }
   asksDrawn = key;
   const box = $("asks");
+  // The card being written on keeps the person's cursor through a redraw.
+  const typing = document.activeElement?.classList?.contains("ask-words")
+    ? document.activeElement.closest(".ask-card")?.dataset.ask : null;
   box.textContent = "";
   box.hidden = list.length === 0;
   drawYourTurn();
   for (const a of list) {
-    const card = el("div", `ask-card${a.ran || a.state === "yes" ? " ran" : ""}${asksOpen.has(a.id) ? " open" : ""}`);
+    const card = el("div", `ask-card${a.ran || a.state === "yes" ? " ran" : ""}${asksOpen.has(a.id) ? " open" : ""}${asksWording.has(a.id) ? " wording" : ""}`);
     card.dataset.ask = a.id;
     const RAN = { landed: "LANDED", passed: "DONE", failed: "FAILED" };
     const at = turn.indexOf(a);
@@ -1602,25 +1610,59 @@ async function refreshAsks() {
         : "Raised outside the loop: no quest-log item, no step."));
     }
     card.append(el("span", "ask-detail", `gp ${a.command ?? ""}`));
+    if (a.words) card.append(el("span", "ask-detail", `You wrote: ${a.words}`));
     if (a.ran) {
       for (const l of a.ran.lines ?? []) card.append(el("span", "ask-detail", l));
     } else if (a.state === "yes") {
       card.append(el("span", "ask-detail", "The loop's runner runs the yeses one at a time, in the order you said them, while it is on."));
     } else {
+      // A box for words, opened by WORDS so the card's face stays one line:
+      // what is wrong with what the card showed (sent with NO, the row goes
+      // back to its worker with them), or what to keep in mind (with YES).
+      const t = el("input", "ask-words");
+      t.placeholder = "What's wrong, or what to keep (goes with YES or NO)";
+      t.setAttribute("aria-label", "Your words with your answer");
+      t.value = askWords.get(a.id) ?? "";
+      t.hidden = !asksWording.has(a.id);
+      t.addEventListener("input", () => askWords.set(a.id, t.value));
+      t.addEventListener("keydown", (ev) => { ev.stopPropagation(); if (ev.code === "Escape") t.blur(); });
+      t.addEventListener("click", (ev) => ev.stopPropagation());
+      const w = el("button", "ask-words-open", "WORDS");
+      w.type = "button";
+      w.title = "Say what is wrong, or what to keep, with your YES or NO";
+      w.hidden = asksWording.has(a.id);
+      w.addEventListener("click", (e) => {
+        e.currentTarget.blur();
+        asksWording.add(a.id);
+        card.classList.add("wording");
+        w.hidden = true;
+        t.hidden = false;
+        t.focus();
+      });
       for (const [word, val] of [["YES", "yes"], ["NO", "no"]]) {
         const b = el("button", `ask-${val}`, word);
         b.type = "button";
-        b.title = val === "yes" ? "Let your agent do this, once" : "Your agent won't do this";
+        b.title = val === "yes"
+          ? "Let your agent do this, once (with your words, if you wrote any)"
+          : "Your agent won't do this; with words, its row goes back to its worker with them";
         b.addEventListener("click", async (e) => {
           e.currentTarget.blur();
           for (const x of card.querySelectorAll("button")) x.disabled = true;
+          const words = t.value.trim();
           try {
             const r = await fetch(`/api/asks/${encodeURIComponent(a.id)}`, {
               method: "POST",
               headers: { "content-type": "application/json" },
-              body: JSON.stringify({ answer: val }),
+              body: JSON.stringify(words ? { answer: val, words } : { answer: val }),
             });
-            if (!r.ok) says.textContent = `${a.says} (Your answer didn't save: ${(await r.json().catch(() => ({}))).error ?? r.status}.)`;
+            const out = await r.json().catch(() => ({}));
+            if (!r.ok) says.textContent = `${a.says} (Your answer didn't save: ${out.error ?? r.status}.)`;
+            else {
+              askWords.delete(a.id);
+              asksWording.delete(a.id);
+              if (out.talk_error) fault(`Your answer saved, but your words didn't reach the row: ${out.talk_error}`, 8000);
+              else if (words && out.row) note(`Your words went to ${out.row.split("/").slice(1).join("/")}.`, 5000);
+            }
           } catch (err) {
             says.textContent = `${a.says} (Your answer didn't save. Is the page's server still running?)`;
           }
@@ -1629,8 +1671,10 @@ async function refreshAsks() {
         });
         card.append(b);
       }
+      card.append(w, t);
     }
     box.append(card);
+    if (typing === a.id) card.querySelector(".ask-words")?.focus();
   }
 }
 

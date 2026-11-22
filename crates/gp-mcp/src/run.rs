@@ -1046,13 +1046,19 @@ fn the_yes(
     };
     match found {
         asks::Found::Yes(v) => Ok(format!(
-            "the person said yes to this on the page (ask {}); that yes is used now, so another run needs another yes",
-            v["id"].as_str().unwrap_or("")
+            "the person said yes to this on the page (ask {}); that yes is used now, so another run needs another yes{}",
+            v["id"].as_str().unwrap_or(""),
+            said_beside(&v)
         )),
         asks::Found::No(v) => Err(refusal(
-            format!(
-                "gp {path}: the person said no to this (on the page, or in the form their client showed). Don't run it; ask them what they would like instead."
-            ),
+            match v["words"].as_str() {
+                Some(w) => format!(
+                    "gp {path}: the person said no to this, and wrote: \"{w}\". Don't run it; change what they said, then raise a new card."
+                ),
+                None => format!(
+                    "gp {path}: the person said no to this (on the page, or in the form their client showed). Don't run it; ask them what they would like instead."
+                ),
+            },
             Some(&v),
         )),
         asks::Found::Open(v) if served => Err(refusal(
@@ -1136,6 +1142,15 @@ pub enum FormYes {
     Refused(String),
     /// No form could be shown (why).
     NoForm(String),
+}
+
+/// The person's words beside their answer to ask `v`, as the end of a
+/// sentence, or nothing when they wrote none.
+fn said_beside(v: &Value) -> String {
+    v["words"]
+        .as_str()
+        .map(|w| format!(". Beside their yes they wrote: \"{w}\""))
+        .unwrap_or_default()
 }
 
 /// Asks the person's yes to ask `v` (gp `path`) in a form: its card's own

@@ -358,8 +358,17 @@ impl Session {
         self.append_turn(v)
     }
 
-    /// [`Self::turn`] for a caller that holds the lock.
-    fn append_turn(&self, mut v: Value) -> Result<usize> {
+    /// A turn that leaves the row's status as it is: the person's words
+    /// beside their answer to a card, which the runner settles the row by
+    /// (serve::runner's settle_card_rows), so the turn mustn't set it
+    /// "agent working" first.
+    pub fn turn_keeping_status(&self, v: Value) -> Result<usize> {
+        let _g = self.lock.lock().expect("lock");
+        self.write_turn(v)
+    }
+
+    /// Writes turn `v` to the talk, numbered; returns its number.
+    fn write_turn(&self, mut v: Value) -> Result<usize> {
         let n = self.turns()?.len() + 1;
         v["n"] = json!(n);
         if v["at_ms"].is_null() {
@@ -370,6 +379,13 @@ impl Session {
             .append(true)
             .open(self.dir.join("talk.ndjson"))?;
         writeln!(f, "{v}")?;
+        Ok(n)
+    }
+
+    /// [`Self::turn`] for a caller that holds the lock.
+    fn append_turn(&self, v: Value) -> Result<usize> {
+        let by_player = v["by"] == json!("player");
+        let n = self.write_turn(v)?;
         // The queue follows whose turn it is: the person's turn makes the
         // mechanic "agent working", the agent's "asking you" only when the
         // row has a look for them (a clip, or a card): an answer with
@@ -383,7 +399,7 @@ impl Session {
         if let Some(r) = q.iter_mut().find(|r| r["mechanic"] == json!(me))
             && r["status"] != json!("done")
         {
-            let st = if v["by"] == json!("player") {
+            let st = if by_player {
                 Some("agent working")
             } else {
                 let mut asked = r.clone();

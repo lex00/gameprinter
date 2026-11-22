@@ -552,7 +552,7 @@ const CARD_SETTLES_FOR_MS: u64 = 24 * 60 * 60 * 1000;
 
 /// What a card asks to do, in a few words: its command's message up to
 /// `Expect:` (a gate's), without the game's name in front, else its sentence.
-fn card_what(a: &Value) -> String {
+pub(crate) fn card_what(a: &Value) -> String {
     let argv: Vec<&str> = a["argv"]
         .as_array()
         .into_iter()
@@ -689,6 +689,9 @@ fn settle_row_by_card(
         .filter_map(Value::as_str)
         .rfind(|l| !l.trim().is_empty() && !l.starts_with("(ran in "))
         .unwrap_or("no reason given");
+    // What the person wrote beside their answer, kept in the note (it is in
+    // the row's talk too, POST /api/asks/ID).
+    let words = a["words"].as_str().map(str::trim).filter(|w| !w.is_empty());
     let (status, note) = match kind {
         "landed" => ("done", format!("Landed on your YES: {what}.")),
         "passed" => ("done", format!("Done on your YES: {what}.")),
@@ -713,6 +716,15 @@ fn settle_row_by_card(
                 "Its card ran out unanswered ({what}). The loop takes it up again and raises a new card."
             ),
         ),
+    };
+    // A NO with words sends the row back with them, for its worker to make
+    // the fix again; a YES with words lands and keeps them on the row.
+    let note = match (kind, words) {
+        ("no", Some(w)) => format!(
+            "You said NO to its card ({what}) and wrote: \"{w}\". The loop takes it up again and makes the fix you asked for."
+        ),
+        (_, Some(w)) => format!("{note} Beside your YES you wrote: \"{w}\"."),
+        (_, None) => note,
     };
     // A row with a target closes on its measure, not on the landing: it
     // waits in line until the scoreboard measures it again
@@ -2756,6 +2768,8 @@ mod tests {
                  "changed_ms": gp_mcp::asks::now_ms() - 100},
                 {"mechanic": "f", "status": "in line", "note": "Its card was set aside",
                  "changed_ms": gp_mcp::asks::now_ms() - 100},
+                {"mechanic": "h", "status": "asking you", "note": "Its card is on your page: press YES"},
+                {"mechanic": "i", "status": "asking you", "note": "Its card is on your page: press YES"},
             ])
             .to_string(),
         )
@@ -2800,6 +2814,18 @@ mod tests {
             json!({"state": "used", "ran": {"state": "failed", "done_ms": now - 500, "lines": ["local changes"]}}),
         );
         card(6, "f", json!({"state": "no", "answered_ms": now - 500}));
+        // A NO and a YES with the person's words beside them
+        // (card-answer-takes-words).
+        card(
+            7,
+            "h",
+            json!({"state": "no", "answered_ms": now, "words": "the foam is too tall"}),
+        );
+        card(
+            8,
+            "i",
+            json!({"state": "used", "words": "keep the rim", "ran": {"state": "landed", "done_ms": now}}),
+        );
         settle_card_rows(home);
         let row = |m: &str| -> Value {
             crate::mechanic::session::read_queue(&f)
@@ -2814,6 +2840,16 @@ mod tests {
         assert_eq!(
             row("b")["note"],
             "You said NO to its card (the glass froths). The loop takes it up again; say on the row what should change."
+        );
+        assert_eq!(row("h")["status"], "next");
+        assert_eq!(
+            row("h")["note"],
+            "You said NO to its card (the glass froths) and wrote: \"the foam is too tall\". The loop takes it up again and makes the fix you asked for."
+        );
+        assert_eq!(row("i")["status"], "done");
+        assert_eq!(
+            row("i")["note"],
+            "Landed on your YES: the glass froths. Beside your YES you wrote: \"keep the rim\"."
         );
         // A done row whose note no longer talks of a card stays done.
         assert_eq!(row("c")["status"], "done");

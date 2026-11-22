@@ -7,7 +7,7 @@
 //!
 //! | File | What |
 //! |---|---|
-//! | `$GP_HOME/work/asks/ID.json` | One ask: `{id, command, argv, key, game, needs, says, cost?, plan?, held?, made_ms, state, answered_ms?, used_ms?}`; state is `open`, `yes`, `no`, `running` (the runner runs it; `ran` says how far) or `used`. `plan` is what a call that replaces data would change, from its plan; `held` is a change gp_run's net put back ([`crate::held`]) |
+//! | `$GP_HOME/work/asks/ID.json` | One ask: `{id, command, argv, key, game, needs, says, cost?, plan?, held?, made_ms, state, answered_ms?, words?, used_ms?}`; state is `open`, `yes`, `no`, `running` (the runner runs it; `ran` says how far) or `used`. `plan` is what a call that replaces data would change, from its plan; `held` is a change gp_run's net put back ([`crate::held`]); `words` is what the person wrote beside their YES or NO |
 //! | `$GP_HOME/work/serve/page.json` | `{pid, port}`: the gp serve that answers the cards for this home, written when it starts |
 //!
 //! The yes guards against a careless agent, not a hostile one: a program
@@ -165,7 +165,21 @@ pub enum Answer {
 
 /// The page's YES or NO on an open ask.
 pub fn answer(home: &Path, id: &str, a: Answer) -> Result<Value, String> {
+    answer_with(home, id, a, "")
+}
+
+/// The longest the person's words on a card are kept, in characters.
+pub const WORDS_MAX: usize = 2000;
+
+/// [`answer`] with the person's words beside it (`words`, kept on the ask
+/// when there are any): what is wrong with what the card showed, or what to
+/// keep in mind with a yes.
+pub fn answer_with(home: &Path, id: &str, a: Answer, words: &str) -> Result<Value, String> {
     let mut v = read(home, id).ok_or_else(|| format!("there's no ask {id}"))?;
+    let words: String = words.trim().chars().take(WORDS_MAX).collect();
+    if !words.is_empty() {
+        v["words"] = json!(words);
+    }
     if !is_open(&v, now_ms()) {
         return Err(format!(
             "this ask was answered already, or is too old ({})",
@@ -925,7 +939,11 @@ mod tests {
         // Another ask, answered no.
         let b = make(home, &new(&argv, &vals)).unwrap();
         let id = b["id"].as_str().unwrap();
-        answer(home, id, Answer::No).unwrap();
+        answer_with(home, id, Answer::No, "  the hat is too wide  ").unwrap();
+        assert_eq!(
+            read(home, id).unwrap()["words"],
+            json!("the hat is too wide")
+        );
         assert!(matches!(find(home, Some(id), &k), Found::No(_)));
         assert!(matches!(find(home, None, &k), Found::No(_)));
         // A changed argument is another call.
