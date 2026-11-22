@@ -158,6 +158,13 @@ const model = {
   token: 0, // which start is current
   say: "", // what is drawn over it while it isn't on
   draws: null, // how it took the original's draws ({taken, of, desync}), or null
+  // The gate card whose change it plays (ask_look.rs: the model as the
+  // card's patch would leave it), or null for main's model.
+  ask: null,
+  // The card a gate card's LOOK AT IT set up, kept while BEFORE shows
+  // main's, so AFTER goes back to it.
+  card: null,
+  loads: 0, // loads begun, so a switch of model knows one ran
 };
 
 // The original's random draws, recorded in the player's slot 0 at the
@@ -390,19 +397,59 @@ function lookParam() {
 }
 
 /** The rebuild built once at least: builds it first when it isn't, saying
- * how long it has taken. */
-async function ensureBuilt() {
-  let st = await api("api/rebuild/status");
+ * how long it has taken. With `ask`, a gate card's look: the model as the
+ * card's patch would leave it (ask_look.rs). */
+async function ensureBuilt(ask = model.ask) {
+  const q = ask ? `?ask=${encodeURIComponent(ask)}` : "";
+  let st = await api(`api/rebuild/status${q}`);
   if (st.built) return st;
   if (!st.model) throw new Error("this game has no model yet");
-  await api("api/rebuild/build", {});
-  while ((st = await api("api/rebuild/status")).building !== null) {
-    model.say = "BUILDING THE MODEL";
-    line(`Building the playable model: ${Math.round(st.building)} s. The first build takes a few minutes. Play on meanwhile.`);
+  await api("api/rebuild/build", ask ? { ask } : {});
+  while ((st = await api(`api/rebuild/status${q}`)).building !== null) {
+    model.say = ask ? "BUILDING THE MODEL AFTER THIS CHANGE" : "BUILDING THE MODEL";
+    line(ask
+      ? `Building the model as this change leaves it: ${Math.round(st.building)} s. Its module builds first, which takes a few minutes.`
+      : `Building the playable model: ${Math.round(st.building)} s. The first build takes a few minutes. Play on meanwhile.`);
     await new Promise((r) => setTimeout(r, 2000));
   }
   if (st.error || !st.built) throw new Error(st.error ?? "the build didn't finish");
   return st;
+}
+
+/** Where the model's page is served: main's build, or a card's look's. */
+function modelBase() {
+  return model.ask ? `rebuild-ask/${encodeURIComponent(model.ask)}/` : "rebuild/";
+}
+
+/** The model the screen plays: card `ask`'s change, or main's (null).
+ * Whether that changed; the caller loads it (a clip opening loads it). */
+function useModel(ask) {
+  ask = ask ?? null;
+  const changed = model.ask !== ask;
+  model.ask = ask;
+  document.body.dataset.modelAsk = ask ?? "";
+  beforeButton();
+  return changed;
+}
+
+/** Set while a gate card's LOOK AT IT opens its clip, which keeps the
+ * card's model; any other clip opened goes back to main's. */
+let cardOpening = false;
+
+/** Back to main's model, forgetting the card: whether it was on another. */
+function toMainModel() {
+  model.card = null;
+  return useModel(null);
+}
+
+/** The clip bar's BEFORE (main's model) or AFTER (the card's change),
+ * shown while a gate card's clip is on the screens. */
+function beforeButton() {
+  const b = $("clip-before");
+  if (!b) return;
+  b.hidden = !model.card || mode !== "clip";
+  b.textContent = model.ask ? "BEFORE" : "AFTER";
+  b.title = model.ask ? "The model on main, before this change" : "The model after this change, as the card would land it";
 }
 
 /** Loads the model's page into its frame (again), then starts it where
@@ -410,16 +457,18 @@ async function ensureBuilt() {
  * picture of the model stays on screen until the new one is on. */
 async function loadModel(why) {
   const mine = ++model.token;
+  model.loads++;
   // How many times the model was loaded, for a check of the page.
   document.body.dataset.loads = String(Number(document.body.dataset.loads ?? 0) + 1);
   model.ready = false;
   model.on = false;
+  const base = modelBase();
   try {
     const st = await ensureBuilt();
     if (mine !== model.token) return;
     model.build = st.build ?? null;
     try {
-      const pj = await api("rebuild/preview.json");
+      const pj = await api(`${base}preview.json`);
       model.visible = Array.isArray(pj.visible) ? pj.visible : null;
     } catch (e) { model.visible = null; }
     const f = $("model-frame");
@@ -429,15 +478,17 @@ async function loadModel(why) {
       model.onFailed = (why) => { clearTimeout(t); reject(new Error(`its preview didn't start: ${why}`)); };
       // files=here: the preview reads the build beside it, not the
       // browser's store of installed games.
-      f.src = `rebuild/index.html?control=1&files=here${lookParam()}&t=${Date.now()}`;
+      f.src = `${base}index.html?control=1&files=here${lookParam()}&t=${Date.now()}`;
     });
     if (mine !== model.token) return;
     await startModel(mine);
     if (why && mine === model.token) note(why);
   } catch (e) {
     if (mine !== model.token) return;
-    model.say = "THE MODEL COULDN'T START";
-    fault(`The model couldn't start: ${e.message ?? e}`, 10000);
+    model.say = model.ask ? "THE MODEL AFTER THIS CHANGE COULDN'T START" : "THE MODEL COULDN'T START";
+    fault(model.ask
+      ? `The model after this change couldn't start: ${e.message ?? e}. BEFORE shows main's.`
+      : `The model couldn't start: ${e.message ?? e}`, 10000);
   }
 }
 
@@ -460,7 +511,7 @@ async function startModel(mine = model.token) {
   draws.live = draws.from !== null ? { base: null, lags: 0, early: [], lines: [] } : null;
   try {
     const path = await sendPath(player.inputLog(0).split("\n").slice(0, frame + 2).join("\n") + "\n");
-    const r = await api("api/rebuild/start", { path, frame });
+    const r = await api("api/rebuild/start", { path, frame, ...(model.ask ? { ask: model.ask } : {}) });
     if (mine !== model.token || mode !== "live" || show.view === "solo") return;
     // The sites first heard of: recording starts now, so the start is
     // taken again from here, with every draw after it.
@@ -493,7 +544,7 @@ async function startModelAtClip(mine) {
   if (!c) return;
   try {
     c.path ??= await sendPath(c.log);
-    const r = await api("api/rebuild/start", { path: c.path, frame: c.start });
+    const r = await api("api/rebuild/start", { path: c.path, frame: c.start, ...(model.ask ? { ask: model.ask } : {}) });
     if (mine !== model.token || clip !== c) return;
     const text = "gp-frames 1\n" + c.polled.map(framesLine).join("\n") + "\n";
     let given;
@@ -580,8 +631,12 @@ function drawPair(haveModel) {
   $("screens").className = show.view;
   $("fig-b").hidden = !side;
   const pics = show.pictures === "game" ? "" : ` IN ${show.pictures.toUpperCase()}`;
-  $("cap-a").textContent = side ? "THE ORIGINAL" : show.view === "top" ? `THE MODEL OVER THE ORIGINAL, ${Math.round(show.opacity * 100)}%` : show.view === "solo" ? `THE MODEL ALONE${pics}` : "THE DIFFERENCE: BLACK WHERE THEY MATCH";
-  $("cap-b").textContent = `THE MODEL${pics}`;
+  // A gate card's change on the screen says so; BEFORE (main's model) says
+  // that it is main's while the card's clip is up.
+  const which = model.ask ? "AFTER THIS CHANGE: " : model.card && mode === "clip" ? "BEFORE THIS CHANGE: " : "";
+  $("cap-a").textContent = side ? "THE ORIGINAL" : show.view === "top" ? `${which}THE MODEL OVER THE ORIGINAL, ${Math.round(show.opacity * 100)}%` : show.view === "solo" ? `${which}THE MODEL ALONE${pics}` : `${which}THE DIFFERENCE: BLACK WHERE THEY MATCH`;
+  $("cap-b").textContent = `${which}THE MODEL${pics}`;
+  $("fig-b").classList.toggle("after", !!model.ask);
   if (show.view === "solo") {
     // The model at its own size: a theme's large art kept sharp.
     const c = $("model-frame").contentDocument?.getElementById("game");
@@ -651,7 +706,13 @@ function softOf(text) {
 async function openClip(n, mechanic, f) {
   if (recording) stopRecording(false);
   const key = `${mechanic ?? ""}/${n}`;
-  if (clip && clip.key === key) { seekClip(f); return; }
+  // Any clip but a gate card's (judgeOn) plays on main's model.
+  const back = cardOpening ? false : toMainModel();
+  if (clip && clip.key === key) {
+    seekClip(f);
+    if (back) void loadModel();
+    return;
+  }
   const q = mechanic ? `&mechanic=${encodeURIComponent(mechanic)}` : "";
   const meta = await api(`api/screen/clip?n=${n}${q}`);
   if (mode === "clip" && clip) backToClipless();
@@ -664,6 +725,8 @@ async function openClip(n, mechanic, f) {
 /** Shows the corpus clip a refine works on (api/screen/work-clip), looping
  * the window's frames [lo, hi] from the clip's start. */
 async function openWorkClip(id, lo, hi, name) {
+  // It loads the model again below, on main's unless a gate card opens it.
+  if (!cardOpening) toMainModel();
   const meta = await api(`api/screen/work-clip?id=${encodeURIComponent(id)}`);
   if (mode === "clip" && clip) backToClipless();
   await showClipLog({ key: `work/${id}`, n: null, mechanic: null, work: id, name: name ?? `THE CLIP YOUR AGENT REFINES: ${id.toUpperCase()}`, says: `corpus clip ${id}`, note: meta.name ?? "", start: meta.start, frames: meta.frames, log: meta.log, draws: meta.draws ?? null, drawSites: meta.draw_sites ?? null }, lo);
@@ -697,30 +760,46 @@ async function judgeOn(r) {
   $("screens").scrollIntoView({ behavior: "smooth", block: "start" });
   const lo = typeof c.from === "number" ? c.from : 0;
   const hi = typeof c.to === "number" ? c.to : null;
-  note(`Setting up ${judgeWords(r).toLowerCase()} for ${r.mechanic}.`, 60000);
+  // A gate card's clip plays the card's change (r.ask, the card's id: the
+  // model as its patch would leave it); a row's own clip plays main's.
+  model.card = r.ask ?? null;
+  const changed = useModel(r.ask ?? null);
+  const loads = model.loads;
+  note(`Setting up ${judgeWords(r).toLowerCase()} for ${r.mechanic}${r.ask ? ", the model after this change" : ""}.`, 60000);
   try {
-    if (c.id) await openWorkClip(c.id, lo, hi ?? lo, `TO JUDGE FOR ${r.mechanic.toUpperCase()}: ${String(c.id).toUpperCase()}`);
-    else {
-      await openClip(c.n, c.mechanic ?? r.mechanic, lo);
-      if (clip) $("clip-name").textContent = clipName(`TO JUDGE FOR ${r.mechanic.toUpperCase()}: CLIP ${c.n} OF ${String(c.mechanic ?? r.mechanic).toUpperCase()}`, clip.log);
-    }
+    cardOpening = true;
+    try {
+      if (c.id) await openWorkClip(c.id, lo, hi ?? lo, `TO JUDGE FOR ${r.mechanic.toUpperCase()}: ${String(c.id).toUpperCase()}`);
+      else {
+        await openClip(c.n, c.mechanic ?? r.mechanic, lo);
+        if (clip) $("clip-name").textContent = clipName(`TO JUDGE FOR ${r.mechanic.toUpperCase()}: CLIP ${c.n} OF ${String(c.mechanic ?? r.mechanic).toUpperCase()}`, clip.log);
+      }
+    } finally { cardOpening = false; }
     show.by = "person";
     if (!clip) return;
+    // The same clip was up already (no load): the other model loads now.
+    if (changed && model.loads === loads) void loadModel();
+    beforeButton();
     seekClip(lo, true);
     if (hi !== null && hi > lo) { clip.loop = [lo, Math.min(hi, clip.frames - 1)]; playClip(true); }
     else { clip.loop = null; playClip(false); }
     document.body.dataset.judging = r.mechanic;
-    note(`${r.mechanic}: ${judgeWords(r).toLowerCase()}, the original on the left. ${r.note ?? ""}`.trim(), 10000);
+    note(r.ask
+      ? `${r.mechanic}: ${judgeWords(r).toLowerCase()}, the original on the left, the model after this change on the right. BEFORE shows main's.`
+      : `${r.mechanic}: ${judgeWords(r).toLowerCase()}, the original on the left. ${r.note ?? ""}`.trim(), 10000);
     drawClips();
     report();
   } catch (e) { fault(`Couldn't set up the clip for ${r.mechanic}: ${e.message ?? e}`, 8000, "LOOK AT IT on the row"); }
 }
 
-/** A LOOK AT IT button for row `r`'s clip. */
+/** A LOOK AT IT button for row `r`'s clip; with `r.ask` (a gate card's),
+ * the model beside the original is the card's change. */
 function judgeButton(r) {
   const b = el("button", "judge", `LOOK AT IT: ${judgeWords(r)}`);
   b.type = "button";
-  b.title = "Sets this clip up on the screens above: the original beside the model, at the frames in question";
+  b.title = r.ask
+    ? "Sets this clip up on the screens above: the original beside the model after this change, at the frames in question (BEFORE shows main's)"
+    : "Sets this clip up on the screens above: the original beside the model, at the frames in question";
   b.addEventListener("click", (e) => { e.stopPropagation(); e.currentTarget.blur(); void judgeOn(r); });
   return b;
 }
@@ -810,6 +889,7 @@ async function showClipLog(c, f) {
   $("clip-scrub").max = String(length - 1);
   $("clip-name").textContent = clipName(c.name, log);
   $("clipbar").hidden = false;
+  beforeButton();
   $("record").disabled = true;
   seekClip(f ?? 0, true);
   const says = c.says[0].toUpperCase() + c.says.slice(1);
@@ -858,6 +938,8 @@ function backToLive() {
   if (mode === "live") return;
   mode = "live";
   clip = null;
+  // Live play is main's model.
+  toMainModel();
   $("clipbar").hidden = true;
   $("record").disabled = show.view === "solo";
   model.say = "THE MODEL IS STARTING";
@@ -1512,12 +1594,20 @@ function askRow(a) {
   return (step?.touches ?? []).find((t) => t.startsWith("row:"))?.split("/").slice(1).join("/") ?? null;
 }
 
-/** Row `r` with the clip to judge it on: its own, else that of an open
- * card for it (a gate's clip and frames), else null. */
+/** The card whose change a LOOK AT IT on card `a` plays (its id), when it
+ * lands a change to a game (a model gate's, ask_look.rs); null for any
+ * other card, whose clip plays main's model. */
+function cardAsk(a) {
+  return a?.command === "model gate" && !a.ran ? a.id : null;
+}
+
+/** Row `r` with the clip to judge it on: its own (on main's model), else
+ * that of an open card for it (a gate's clip and frames, on the card's
+ * change), else null. */
 function rowToJudge(r) {
   if (r.clip) return r;
   const a = asksNow.find((x) => x.clip && !x.ran && askRow(x) === r.mechanic);
-  return a ? { ...r, clip: a.clip } : null;
+  return a ? { ...r, clip: a.clip, ask: cardAsk(a) } : null;
 }
 async function refreshAsks() {
   let list = [];
@@ -1598,11 +1688,12 @@ async function refreshAsks() {
       card.append(go);
       // The clip the card's change is seen in (a gate's clip and frames),
       // else the row's clip to judge on.
+      // A gate's clip plays the card's change beside the original.
       const r = rows.find((x) => x.mechanic === row);
-      if (a.clip) card.append(judgeButton({ ...(r ?? { mechanic: row }), clip: a.clip }));
+      if (a.clip) card.append(judgeButton({ ...(r ?? { mechanic: row }), clip: a.clip, ask: cardAsk(a) }));
       else if (r?.clip) card.append(judgeButton(r));
     } else if (a.clip?.id) {
-      card.append(judgeButton({ mechanic: a.game ?? "the change", clip: a.clip }));
+      card.append(judgeButton({ mechanic: a.game ?? "the change", clip: a.clip, ask: cardAsk(a) }));
       card.append(el("span", "ask-detail", "Raised outside the loop: no quest-log item, no step."));
     } else {
       card.append(el("span", "ask-detail", a.step
@@ -2369,6 +2460,9 @@ function report() {
     work_clip: clip?.work ?? null, follow: follow.on,
     playing: clip ? clip.playing : mode === "live", recording: !!recording, error: askError,
     model: model.on ? "showing" : "starting",
+    // The gate card whose change the model plays (its ask id), or null
+    // for main's model.
+    model_ask: model.ask,
     // How the model took the original's random draws: taken of the
     // script's, and the first desync; null while it rolls its own.
     draws: model.draws,
@@ -2386,7 +2480,10 @@ async function applyAsk(a) {
   show.by = "agent";
   try {
     if ("clip" in a && a.clip === null) backToLive();
-    else if (typeof a.clip === "number") { agentHeldUntil = performance.now() + AGENT_HOLD_MS; await openClip(a.clip, a.mechanic, a.frame ?? 0); }
+    else if (typeof a.clip === "number") {
+      agentHeldUntil = performance.now() + AGENT_HOLD_MS;
+      await openClip(a.clip, a.mechanic, a.frame ?? 0);
+    }
     else if (typeof a.frame === "number" && clip) seekClip(a.frame, true);
   } catch (e) {
     console.error(e);
@@ -2443,7 +2540,9 @@ async function watchBuild() {
     await api("api/rebuild/build", {}).catch((e) => fault(`The model couldn't be built again: ${e.message ?? e}`, 8000));
     return;
   }
-  if (st.building === null && st.build && model.build && st.build !== model.build && model.ready) {
+  // A gate card's change on the screen is kept: main's new build shows
+  // once the screen is back on main's model.
+  if (!model.ask && st.building === null && st.build && model.build && st.build !== model.build && model.ready) {
     model.build = st.build;
     await loadModel("The new version of the model is showing.");
   }
@@ -2572,6 +2671,14 @@ function wire() {
   $("clip-scrub").addEventListener("input", (e) => { playClip(false); seekClip(Number(e.target.value), true); });
   $("clip-scrub").addEventListener("change", (e) => { e.target.blur(); show.by = "person"; report(); });
   $("clip-live").addEventListener("click", (e) => { e.currentTarget.blur(); show.by = "person"; backToLive(); drawClips(); });
+  // BEFORE: main's model at the card's clip; AFTER: the card's change again.
+  $("clip-before").addEventListener("click", (e) => {
+    e.currentTarget.blur();
+    if (!model.card || mode !== "clip") return;
+    show.by = "person";
+    useModel(model.ask ? null : model.card);
+    void loadModel(model.ask ? "The model after this change, as the card would land it." : "Main's model, before this change.");
+  });
   $("follow-on").addEventListener("click", (e) => { e.currentTarget.blur(); setFollow(!follow.on); report(); });
   // The quest log's box: Enter (NEW ITEM) makes a new item; SEND comments.
   $("tell").addEventListener("submit", (e) => { e.preventDefault(); void newRow(); });

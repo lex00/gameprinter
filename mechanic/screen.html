@@ -64,6 +64,9 @@
       <button type="button" id="clip-play" title="Space: play or stand still">PLAY</button>
       <input type="range" id="clip-scrub" min="0" max="1" value="0" aria-label="The clip's frame">
       <span id="clip-at"></span>
+      <!-- A gate card's LOOK AT IT plays the card's change (the model as
+           its patch would leave it); this goes between it and main's. -->
+      <button type="button" id="clip-before" hidden title="The model on main, before this change">BEFORE</button>
       <button type="button" id="clip-live" title="Esc: back to playing the game">BACK TO PLAYING</button>
     </div>
     <p id="line" aria-live="polite"></p>

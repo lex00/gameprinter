@@ -29,7 +29,7 @@ use gp_interp::mapping::Mapping;
 /// Where the preview is built: the model's, shared, so nothing private.
 /// Two slots, `a` and `b`: the page plays the one `current` names while a
 /// newer build goes into the other, which then becomes current.
-fn out_dir(paths: &Paths, game: &str) -> PathBuf {
+pub(crate) fn out_dir(paths: &Paths, game: &str) -> PathBuf {
     paths.home.join("work").join("mechanic-preview").join(game)
 }
 
@@ -60,7 +60,7 @@ pub(crate) fn is_built(paths: &Paths, game: &str) -> bool {
     built(&current(paths, game))
 }
 
-fn built(dir: &Path) -> bool {
+pub(crate) fn built(dir: &Path) -> bool {
     dir.join("gp_web.wasm").is_file() && dir.join("bundle.json").is_file()
 }
 
@@ -497,9 +497,12 @@ pub(crate) fn draw_sites_of(rb: &Rebuild) -> Value {
 
 /// The model and its mapping, opened once and kept while their files and
 /// the module are unchanged: each start of the rebuild needs them, and
-/// opening them (the module above all) takes seconds.
+/// opening them (the module above all) takes seconds. The last two are
+/// kept, so the screen going between main's model and a gate card's
+/// (BEFORE and AFTER, [`super::ask_look`]) opens neither again.
 pub(crate) type Opened = std::sync::Arc<(crate::hosted::Source, Mapping)>;
-static OPENED: Mutex<Option<(blake3::Hash, Opened)>> = Mutex::new(None);
+static OPENED: Mutex<Vec<(blake3::Hash, Opened)>> = Mutex::new(Vec::new());
+const OPENED_KEPT: usize = 2;
 
 pub(crate) fn opened(paths: &Paths, rb: &Rebuild, rom: &[u8]) -> Result<Opened> {
     let mut h = blake3::Hasher::new();
@@ -512,12 +515,13 @@ pub(crate) fn opened(paths: &Paths, rb: &Rebuild, rom: &[u8]) -> Result<Opened> 
     if let Some((_, sha)) = &rb.rom {
         h.update(sha.as_bytes());
     }
+    h.update(rb.game.as_os_str().as_encoded_bytes());
     let key = h.finalize();
-    let mut kept = OPENED.lock().expect("opened");
-    if let Some((k, o)) = kept.as_ref()
-        && *k == key
     {
-        return Ok(o.clone());
+        let kept = OPENED.lock().expect("opened");
+        if let Some((_, o)) = kept.iter().find(|(k, _)| *k == key) {
+            return Ok(o.clone());
+        }
     }
     let mfile = rb.game.join(gp_interp::mapping::MAPPING_FILE);
     let mapping = Mapping::parse(
@@ -528,7 +532,12 @@ pub(crate) fn opened(paths: &Paths, rb: &Rebuild, rom: &[u8]) -> Result<Opened> 
     let (source, _) =
         crate::hosted::Source::open_dir(&rb.game, Some(&assets), paths, rb.module.as_deref())?;
     let o: Opened = std::sync::Arc::new((source, mapping));
-    *kept = Some((key, o.clone()));
+    let mut kept = OPENED.lock().expect("opened");
+    kept.retain(|(k, _)| *k != key);
+    kept.push((key, o.clone()));
+    if kept.len() > OPENED_KEPT {
+        kept.remove(0);
+    }
     Ok(o)
 }
 
@@ -568,6 +577,18 @@ pub(crate) fn theme_times(paths: &Paths, game: &str) -> Vec<(String, u64)> {
 }
 
 pub(crate) fn file(paths: &Paths, repo: &Path, game: &str, name: &str) -> Result<Response> {
+    file_in(paths, repo, game, &current(paths, game), name)
+}
+
+/// A file of the preview built into `built` ([`file`] for main's, a gate
+/// card's look for one built from its patch, [`super::ask_look`]).
+pub(crate) fn file_in(
+    paths: &Paths,
+    repo: &Path,
+    game: &str,
+    built: &Path,
+    name: &str,
+) -> Result<Response> {
     if name.is_empty()
         || name.contains("..")
         || name.starts_with('/')
@@ -582,7 +603,7 @@ pub(crate) fn file(paths: &Paths, repo: &Path, game: &str, name: &str) -> Result
     // rebuilt game in a theme being made beside the original.
     let own = own_themes(paths, game);
     if name == "preview.json" && !own.is_empty() {
-        let Ok(b) = std::fs::read(current(paths, game).join(name)) else {
+        let Ok(b) = std::fs::read(built.join(name)) else {
             return Ok(Response::error(404, "not in the preview: build it first"));
         };
         let mut v: Value = serde_json::from_slice(&b).unwrap_or(Value::Null);
@@ -617,7 +638,7 @@ pub(crate) fn file(paths: &Paths, repo: &Path, game: &str, name: &str) -> Result
     let f = if PAGE_SCRIPTS.contains(&name) {
         repo.join("scripts/web/page").join(name)
     } else {
-        current(paths, game).join(name)
+        built.join(name)
     };
     let kind = match f.extension().and_then(|x| x.to_str()) {
         Some("html") => "text/html; charset=utf-8",

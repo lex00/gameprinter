@@ -560,6 +560,27 @@ beside the model, in that theme (game for the game's own pictures), at
 those frames, played in a loop (one frame: stood still there). The person
 judges and answers in the same item.
 
+A model gate's card plays its own change. Its LOOK AT IT, and the LOOK AT
+IT of a row that borrows the card's clip, set the clip up beside the model
+as the card's patch would leave it, not main's model, so the YES or NO is
+on what the yes would land. The server builds that model from the ask
+(`$GP_HOME/work/asks/ID.json`, its `--patch`): it copies the game's folder,
+applies the patch to the copy, builds the copy's module and lifts its
+pictures, and builds the preview into
+`$GP_HOME/work/mechanic-preview/GAME/asks/ID/` (crate::mechanic::ask_look).
+The page loads it from `rebuild-ask/ID/` and starts it with `ask` on
+`POST /api/rebuild/start`. The model's screen then says AFTER THIS CHANGE,
+and the clip bar's BEFORE switches to main's model at the same clip (BEFORE
+THIS CHANGE), then AFTER switches back. gp serve builds the looks of the
+game's open gate cards that have a clip in the background, one at a time,
+every half minute once main's preview is built, so LOOK AT IT seldom waits
+for a build. A look is built once, from the patch applied to main as it was
+then, and is removed when its card is no longer open. A patch that no
+longer applies, or that changes files outside the game's folder, gets no
+look: the model's screen says why and BEFORE still shows main's. A row's
+own clip, live play, a clip the agent shows and the work followed all play
+on main's model.
+
 A row asking about a look in the game's own pictures (`look` game) also
 has CONFIRM: IT LOOKS RIGHT in the quest log and in YOUR TURN. CONFIRM
 (`POST /api/confirm` with the row), or a plain yes typed as the answer

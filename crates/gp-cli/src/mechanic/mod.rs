@@ -47,6 +47,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 pub(crate) mod archive;
+pub(crate) mod ask_look;
 mod autoplay;
 mod demo;
 pub(crate) mod detect;

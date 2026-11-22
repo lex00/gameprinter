@@ -42,6 +42,9 @@ main { padding: 12px 16px; display: flex; flex-direction: column; align-items: c
 #screens figure { margin: 0; display: flex; flex-direction: column; align-items: center; gap: 4px; }
 #screens figure[hidden] { display: none; }
 figcaption { font: bold 12px var(--mono); letter-spacing: 0.08em; color: var(--muted); }
+/* A gate card's change on the model's screen (AFTER THIS CHANGE). */
+#fig-b.after figcaption { color: var(--fg); }
+#fig-b.after canvas { border-color: rgb(252, 160, 68); }
 canvas { display: block; background: #000; border: 2px solid var(--line); image-rendering: pixelated; width: var(--cw, 256px); height: var(--ch, 240px); }
 #clipbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; justify-content: center; font-size: 13px; }
 #clipbar[hidden] { display: none; }

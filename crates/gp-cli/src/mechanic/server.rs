@@ -30,6 +30,7 @@
 //! | `GET /api/sealed`, `/api/sealed/ID.log` | The sealed runs, for the person alone; nothing is written |
 //! | `GET /api/rebuild/scores` | The scoring status, `$GP_HOME/work/refine/GAME/status.json`, sealed rows left out |
 //! | `GET /api/rebuild/status`, `/api/rebuild/profiles`, `POST /api/rebuild/build`, `/api/rebuild/start`, `GET /rebuild/*` | The rebuild played live ([`super::live`]) |
+//! | `GET /api/rebuild/status?ask=ID`, `POST /api/rebuild/build` and `/api/rebuild/start` with `ask`, `GET /rebuild-ask/ID/*` | A gate card's look: the model as the card's patch would leave it ([`super::ask_look`]) |
 
 use std::fs;
 use std::net::{TcpListener, TcpStream};
@@ -515,6 +516,9 @@ pub(crate) fn prepare(paths: &Paths, a: &Start, port: u16) -> Result<(Arc<Server
                 std::thread::sleep(std::time::Duration::from_secs(30));
                 if let Some(rb) = &s.rebuild {
                     super::live::refresh(&s.paths, &s.repo, &s.game, rb, &s.rom);
+                    // The open gate cards' looks, so LOOK AT IT plays
+                    // their change without a wait.
+                    super::ask_look::refresh(&s.paths, &s.repo, &s.game, rb, &s.rom);
                 }
             }
         });
@@ -1452,11 +1456,18 @@ fn handle(s: &Server, req: &Request) -> Result<Response> {
         // The rebuild played live: the interpreter preview of the game's
         // model, built on request into $GP_HOME/work/mechanic-preview/GAME/
         // and driven by the page.
-        ("GET" | "HEAD", "/api/rebuild/status") => match s.live() {
-            Ok(rb) => Ok(Response::json(&super::live::status(
-                &s.paths, &s.repo, &s.game, rb,
-            ))),
-            Err(r) => Ok(r),
+        // A gate card's look (`ask`): the model as the card's patch would
+        // leave it, built and played beside main's (super::ask_look).
+        ("GET" | "HEAD", "/api/rebuild/status") => match (s.live(), req.param("ask")) {
+            (Ok(_), Some(id)) => {
+                let v = super::ask_look::status(&s.paths, &s.game, id);
+                Ok(Response::json(&v))
+            }
+            (Ok(rb), None) => {
+                let v = super::live::status(&s.paths, &s.repo, &s.game, rb);
+                Ok(Response::json(&v))
+            }
+            (Err(r), _) => Ok(r),
         },
         ("GET" | "HEAD", "/api/rebuild/profiles") => match s.live() {
             Ok(rb) => Ok(Response::json(&super::live::profiles(
@@ -1466,6 +1477,10 @@ fn handle(s: &Server, req: &Request) -> Result<Response> {
         },
         ("POST", "/api/rebuild/build") => match s.live() {
             Ok(rb) => {
+                let v: Value = serde_json::from_slice(&req.body).unwrap_or(Value::Null);
+                if let Some(id) = v["ask"].as_str() {
+                    return Ok(build_look(s, rb, id));
+                }
                 if let Err(e) = super::live::build(&s.paths, &s.repo, &s.game, rb, &s.rom) {
                     return Ok(Response::error(409, &format!("{e:#}")));
                 }
@@ -1476,8 +1491,16 @@ fn handle(s: &Server, req: &Request) -> Result<Response> {
             Err(r) => Ok(r),
         },
         ("POST", "/api/rebuild/start") => match s.live() {
-            Ok(rb) => {
+            Ok(main) => {
                 let v: Value = serde_json::from_slice(&req.body)?;
+                let ask = match v["ask"].as_str() {
+                    Some(id) => match super::ask_look::rebuild(&s.paths, &s.game, main, id) {
+                        Ok(r) => Some(r),
+                        Err(e) => return Ok(Response::error(409, &format!("{e:#}"))),
+                    },
+                    None => None,
+                };
+                let rb = ask.as_ref().unwrap_or(main);
                 match super::live::start(
                     &s.paths,
                     rb,
@@ -1508,10 +1531,38 @@ fn handle(s: &Server, req: &Request) -> Result<Response> {
             "text/plain; charset=utf-8",
             gp_arcade::romset::known_roms_toml().into_bytes(),
         )),
+        // A gate card's look's preview: the arcade player and the sets gp
+        // knows as main's, the rest from the look's build.
+        ("GET" | "HEAD", p) if p.starts_with("/rebuild-ask/") => {
+            let rest = &p["/rebuild-ask/".len()..];
+            let name = rest.split_once('/').map_or("", |(_, n)| n);
+            if name == "gp_arcade_play.wasm" && s.platform == Platform::Arcade {
+                return Ok(match fs::read(&s.wasm) {
+                    Ok(b) => Response::bytes("application/wasm", b),
+                    Err(_) => Response::error(404, "the arcade player isn't built"),
+                });
+            }
+            if name == "lift/sources.toml" {
+                return Ok(Response::bytes(
+                    "text/plain; charset=utf-8",
+                    gp_arcade::romset::known_roms_toml().into_bytes(),
+                ));
+            }
+            super::ask_look::file(&s.paths, &s.repo, &s.game, rest)
+        }
         ("GET" | "HEAD", p) if p.starts_with("/rebuild/") => {
             super::live::file(&s.paths, &s.repo, &s.game, &p["/rebuild/".len()..])
         }
         _ => Ok(Response::error(404, "not found")),
+    }
+}
+
+/// `POST /api/rebuild/build` with `ask`: a gate card's look built
+/// ([`super::ask_look`]), and its status.
+fn build_look(s: &Server, rb: &super::review::Rebuild, id: &str) -> Response {
+    match super::ask_look::build(&s.paths, &s.repo, &s.game, rb, &s.rom, id) {
+        Ok(()) => Response::json(&super::ask_look::status(&s.paths, &s.game, id)),
+        Err(e) => Response::error(409, &format!("{e:#}")),
     }
 }
 
