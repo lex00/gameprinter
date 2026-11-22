@@ -22,7 +22,7 @@ Themes: a theme can restyle part of a board game's picture and keep the rest, an
 
 Tapper: attract mode, the demo, the GET READY screen, levels 1 to 4 and the first bonus round draw as the original does, and you've confirmed each one.
 
-Releases now go through chant's release train, with builds for Mac (Apple silicon and Intel), Linux (x86_64 and ARM) and Windows. With Homebrew: `brew install lex00/tap/gp` (or `brew upgrade gp`).
+Releases now go through chant's release train, with builds for Mac (Apple silicon and Intel) and Linux (x86_64 and ARM). Windows comes in a later release; until then, build gp from source there. With Homebrew: `brew install lex00/tap/gp` (or `brew upgrade gp`).
 
 The Mac binary is not signed with an Apple developer certificate yet. The install page says what a Mac shows and how to allow it.
 

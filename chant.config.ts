@@ -25,8 +25,9 @@ const builds = [
   { name: "darwin-amd64", runner: "macos-15-intel", target: "x86_64-apple-darwin" },
   { name: "linux-amd64", runner: "ubuntu-24.04", target: "x86_64-unknown-linux-gnu" },
   { name: "linux-arm64", runner: "ubuntu-24.04-arm", target: "aarch64-unknown-linux-gnu" },
-  // A .zip with gp.exe in it, built in Git Bash with MSVC's linker.
-  { name: "windows-amd64", runner: "windows-2025", target: "x86_64-pc-windows-msvc" },
+  // Windows waits on chant loading chant.config.ts from a Windows path
+  // (row chant-windows-config): its Node ESM loader is given D:\\... where it
+  // needs a file:// URL, so chant release stamp fails there.
 ].map(({ name, runner, target }) => ({
   name,
   runner,

@@ -149,36 +149,8 @@ jobs:
           path: chant-release-build-linux-arm64.tar
           if-no-files-found: error
           retention-days: 1
-  build-windows-amd64:
-    needs: gate
-    runs-on: "windows-2025"
-    permissions:
-      contents: read
-    defaults:
-      run:
-        shell: bash
-    env:
-      CHANT_RELEASE_LABEL: ${{ needs.gate.outputs.label }}
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-        with:
-          ref: ${{ needs.gate.outputs.commit }}
-          fetch-depth: 0
-          persist-credentials: false
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
-        with:
-          node-version: 24.13.1
-          registry-url: https://registry.npmjs.org
-      - run: "bash scripts/release/chant-build.sh x86_64-pc-windows-msvc"
-      - run: "tar -cf chant-release-build-windows-amd64.tar -- dist/gp-x86_64-pc-windows-msvc.zip"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: chant-release-build-windows-amd64
-          path: chant-release-build-windows-amd64.tar
-          if-no-files-found: error
-          retention-days: 1
   cut:
-    needs: [gate, build-darwin-arm64, build-darwin-amd64, build-linux-amd64, build-linux-arm64, build-windows-amd64]
+    needs: [gate, build-darwin-arm64, build-darwin-amd64, build-linux-amd64, build-linux-arm64]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -226,11 +198,6 @@ jobs:
           name: chant-release-build-linux-arm64
           path: ${{ runner.temp }}/chant-release-builds
       - run: tar -xkf "$RUNNER_TEMP/chant-release-builds/chant-release-build-linux-arm64.tar"
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
-        with:
-          name: chant-release-build-windows-amd64
-          path: ${{ runner.temp }}/chant-release-builds
-      - run: tar -xkf "$RUNNER_TEMP/chant-release-builds/chant-release-build-windows-amd64.tar"
       - run: |
           git config user.name "chant release"
           git config user.email "chant-release@localhost"
@@ -245,7 +212,7 @@ jobs:
           if-no-files-found: error
           retention-days: 1
   publish:
-    needs: [gate, cut, build-darwin-arm64, build-darwin-amd64, build-linux-amd64, build-linux-arm64, build-windows-amd64]
+    needs: [gate, cut, build-darwin-arm64, build-darwin-amd64, build-linux-amd64, build-linux-arm64]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -287,11 +254,6 @@ jobs:
           name: chant-release-build-linux-arm64
           path: ${{ runner.temp }}/chant-release-builds
       - run: tar -xf "$RUNNER_TEMP/chant-release-builds/chant-release-build-linux-arm64.tar"
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
-        with:
-          name: chant-release-build-windows-amd64
-          path: ${{ runner.temp }}/chant-release-builds
-      - run: tar -xf "$RUNNER_TEMP/chant-release-builds/chant-release-build-windows-amd64.tar"
       - run: npx --yes @intentius/chant@0.124.110 release stamp "$CHANT_RELEASE_LABEL"
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
