@@ -44,7 +44,7 @@ pub fn decide(
     args: &Value,
     reply: &Value,
     worker: Option<&str>,
-    ask: impl FnOnce(&[&str]) -> Result<Value, String>,
+    mut ask: impl FnMut(&[&str]) -> Result<Value, String>,
 ) -> Value {
     if let Some(step) = worker.filter(|s| !s.trim().is_empty()) {
         return json!({"id": step, "who": "agent", "says": WORKER_SAYS});
@@ -64,6 +64,13 @@ pub fn decide(
     }
     match ask(&a) {
         Ok(v) => of_answer(&v).unwrap_or_else(no_step),
+        // The game or copy the call named may not be there (a game new that
+        // failed, a name mistyped): the call's own reply says why, and the
+        // next step is the home's, so "no game X" never reads as the reason.
+        Err(_) if a.len() > 2 => match ask(&a[..2]) {
+            Ok(v) => of_answer(&v).unwrap_or_else(no_step),
+            Err(e) => json!({"id": null, "why": crate::activity::cut(&e, 200)}),
+        },
         Err(e) => json!({"id": null, "why": crate::activity::cut(&e, 200)}),
     }
 }
@@ -150,6 +157,34 @@ mod tests {
             },
         );
         assert_eq!(asked, ["progress", "--next", "--copy", "theme/moss"]);
+    }
+
+    #[test]
+    fn a_game_not_there_yet_gives_the_homes_step_not_no_game() {
+        let mut asked: Vec<Vec<String>> = Vec::new();
+        let s = decide(
+            "gp_run",
+            &json!({"command": "game new", "args": {"game": "hilltop"}}),
+            &json!({"exit": 2, "error": "the games here are under more than one namespace"}),
+            None,
+            |a| {
+                asked.push(a.iter().map(|s| s.to_string()).collect());
+                if a.len() > 2 {
+                    Err("no game hilltop in /x/games".into())
+                } else {
+                    Ok(json!({"next": {"id": "s2", "who": "agent", "says": "Start a game."}}))
+                }
+            },
+        );
+        assert_eq!(s["id"], "s2");
+        assert!(!s.to_string().contains("no game"), "{s}");
+        assert_eq!(
+            asked,
+            [
+                vec!["progress", "--next", "--template", "hilltop"],
+                vec!["progress", "--next"]
+            ]
+        );
     }
 
     #[test]

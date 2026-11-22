@@ -931,6 +931,31 @@ pub fn output(
     Ok((o, parsed))
 }
 
+/// What gp said when a command couldn't run, in its own words: the JSON
+/// it printed's `error`, else its error line on stderr (`gp: WHY`, which
+/// gp prints last; `gp COMMAND: WHY` for a refusal before it ran), else
+/// stderr's last line. Whole, never cut or shortened.
+pub fn gp_said(ran: &Ran, parsed: Option<&Value>) -> Option<String> {
+    if let Some(e) = parsed.and_then(|v| v["error"].as_str()) {
+        return Some(e.to_owned());
+    }
+    let stderr = String::from_utf8_lossy(&ran.stderr);
+    let lines: Vec<&str> = stderr
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .collect();
+    if let Some(l) = lines.iter().rev().find_map(|l| l.strip_prefix("gp: ")) {
+        return Some(l.trim().to_owned());
+    }
+    lines
+        .iter()
+        .rev()
+        .find(|l| l.starts_with("gp ") && l.contains(": "))
+        .or(lines.last())
+        .map(|l| (*l).to_owned())
+}
+
 /// The keys under which commands report what they wrote.
 const WROTE_KEYS: &[&str] = &[
     "wrote", "written", "writes", "out", "output", "file", "files", "dir", "folder", "path",
@@ -1658,6 +1683,11 @@ pub fn run_in(
     // (or none) is a command that couldn't run.
     let failed = ran.code != Some(0) && ran.code != Some(1);
     Ok(if failed {
+        // gp's own words for why it couldn't run, first, so nothing else in
+        // the reply (its next step, a hint) reads as the reason.
+        if let Some(e) = gp_said(&ran, parsed.as_ref()) {
+            o.insert("error".into(), json!(e));
+        }
         Reply::refused(reply)
     } else {
         Reply::ok(reply)
@@ -2282,6 +2312,48 @@ mod tests {
             );
             std::thread::sleep(Duration::from_millis(50));
         }
+    }
+
+    #[test]
+    fn a_command_that_couldnt_run_names_gps_own_error() {
+        let dir = tempfile::tempdir().unwrap();
+        // As gp prints it: a hint and a bad roms.toml said first, its error last.
+        let gp = fake_gp(
+            dir.path(),
+            "echo 'workflow: port, step 1' >&2; echo 'gp: a roms.toml in /x/games/a reads badly' >&2; echo 'gp: the games in /x/games are under more than one namespace (acme, someone): pass --namespace' >&2; exit 2",
+        );
+        let c = config(dir.path(), &gp);
+        let r = call(&c, json!({"command": "env"}));
+        assert!(r.is_error);
+        assert_eq!(
+            r.json["error"],
+            "the games in /x/games are under more than one namespace (acme, someone): pass --namespace"
+        );
+        let ran = |stderr: &str| Ran {
+            code: Some(2),
+            stdout: Vec::new(),
+            stderr: stderr.as_bytes().to_vec(),
+            timed_out: false,
+            seconds: 0.0,
+        };
+        // The JSON's own error first; a refusal before it ran; a bare line.
+        assert_eq!(
+            gp_said(&ran("gp: other"), Some(&json!({"error": "its own"}))).as_deref(),
+            Some("its own")
+        );
+        assert_eq!(
+            gp_said(&ran("hint\ngp game new: a worker's shell\n"), None).as_deref(),
+            Some("gp game new: a worker's shell")
+        );
+        assert_eq!(
+            gp_said(&ran("hint\nbroke\n"), None).as_deref(),
+            Some("broke")
+        );
+        assert_eq!(gp_said(&ran(""), None), None);
+        // A command that ran has no error added.
+        let gp = fake_gp(dir.path(), "echo 'gp: fine' >&2; exit 1");
+        let r = call(&config(dir.path(), &gp), json!({"command": "env"}));
+        assert!(r.json.get("error").is_none(), "{}", r.json);
     }
 
     #[test]

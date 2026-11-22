@@ -1138,7 +1138,7 @@ enum GameCmd {
         #[arg(long)]
         title: Option<String>,
         /// The package's namespace, NS in NS/GAME (default: the one the other
-        /// games in the checkout share)
+        /// games in the checkout share, or local for the checkout's first game)
         #[arg(long)]
         namespace: Option<String>,
         /// The games checkout (default: $GP_GAMES_DIR, else a `games` folder

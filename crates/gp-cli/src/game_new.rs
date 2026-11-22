@@ -149,10 +149,34 @@ fn q(s: &str) -> String {
     toml::Value::String(s.to_owned()).to_string()
 }
 
-/// The namespace the other packages in the checkout share, if they agree.
-fn shared_namespace(games: &Path) -> Option<String> {
+/// The namespace a person's first game takes, in a games checkout with no
+/// game yet: the one `gp game share` publishes to on this computer.
+pub const FIRST_NAMESPACE: &str = "local";
+
+/// The namespace a new game takes when `--namespace` names none: the one
+/// the other games in the checkout share, or [`FIRST_NAMESPACE`] when there
+/// is no game yet. Games under more than one namespace are refused, naming
+/// them.
+fn default_namespace(games: &Path) -> Result<String> {
+    let seen = namespaces(games);
+    match seen.len() {
+        0 => Ok(FIRST_NAMESPACE.to_owned()),
+        1 => Ok(seen.into_iter().next().unwrap_or_default()),
+        _ => bail!(
+            "the games in {} are under more than one namespace ({}): pass --namespace with the one this game takes",
+            games.display(),
+            seen.into_iter().collect::<Vec<_>>().join(", ")
+        ),
+    }
+}
+
+/// The namespaces of the game packages in the checkout.
+fn namespaces(games: &Path) -> std::collections::BTreeSet<String> {
     let mut seen = std::collections::BTreeSet::new();
-    for e in fs::read_dir(games).ok()?.filter_map(Result::ok) {
+    let Ok(entries) = fs::read_dir(games) else {
+        return seen;
+    };
+    for e in entries.filter_map(Result::ok) {
         let Ok(text) = fs::read_to_string(e.path().join("package.toml")) else {
             continue;
         };
@@ -175,7 +199,7 @@ fn shared_namespace(games: &Path) -> Option<String> {
             seen.insert(ns.to_owned());
         }
     }
-    (seen.len() == 1).then(|| seen.into_iter().next().unwrap_or_default())
+    seen
 }
 
 /// The ROM file `--rom` names: the path as given when it is a file there,
@@ -223,8 +247,7 @@ pub fn run(a: &New<'_>, paths: &Paths) -> Result<Outcome> {
     }
     let namespace = match a.namespace {
         Some(n) => n.to_owned(),
-        None => shared_namespace(&games)
-            .context("the games here don't share one namespace: pass --namespace")?,
+        None => default_namespace(&games)?,
     };
 
     // The ROM, by its hash, in $GP_ROM_DIR, and named by no game yet.
@@ -1395,6 +1418,72 @@ mod tests {
             // the screen's pixels, which need no marker.
             assert_eq!(m.board_units, device == Device::Arcade);
         }
+    }
+
+    /// A game package under namespace `ns` in `games`, as far as
+    /// [`namespaces`] reads one.
+    fn package_in(games: &Path, game: &str, ns: &str) {
+        fs::create_dir_all(games.join(game)).unwrap();
+        fs::write(
+            games.join(game).join("package.toml"),
+            format!("[package]\nname = \"{ns}/{game}\"\nkind = \"game\"\n"),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn a_first_game_takes_local_and_a_later_one_the_namespace_the_others_share() {
+        let d = tempfile::tempdir().unwrap();
+        let games = d.path().join("games");
+        fs::create_dir_all(&games).unwrap();
+        // An empty games folder: the person's first game.
+        assert_eq!(default_namespace(&games).unwrap(), FIRST_NAMESPACE);
+        // A theme package isn't a game, and names no namespace for one.
+        fs::create_dir_all(games.join("moss")).unwrap();
+        fs::write(
+            games.join("moss/package.toml"),
+            "[package]\nname = \"acme/moss\"\nkind = \"theme\"\n",
+        )
+        .unwrap();
+        assert_eq!(default_namespace(&games).unwrap(), "local");
+        package_in(&games, "rooftop", "someone");
+        package_in(&games, "hilltop", "someone");
+        assert_eq!(default_namespace(&games).unwrap(), "someone");
+        package_in(&games, "seaside", "acme");
+        let e = default_namespace(&games).unwrap_err().to_string();
+        assert!(
+            e.contains("acme, someone") && e.contains("--namespace"),
+            "{e}"
+        );
+    }
+
+    #[test]
+    fn a_first_game_in_an_empty_games_folder_is_made_with_no_namespace_given() {
+        let d = tempfile::tempdir().unwrap();
+        let home = d.path().join("home");
+        let paths = Paths {
+            home: home.clone(),
+            store: home.join("store"),
+            roms: home.join("roms"),
+        };
+        fs::create_dir_all(paths.roms.join("nes")).unwrap();
+        let rom = paths.roms.join("nes/test.nes");
+        fs::write(&rom, image()).unwrap();
+        let games = d.path().join("games");
+        fs::create_dir_all(&games).unwrap();
+        let a = New {
+            game: "test-hop",
+            rom: &rom,
+            genre: "platformer",
+            title: None,
+            namespace: None,
+            games: Some(&games),
+            source: None,
+            date: "2026-11-21",
+            draws: false,
+        };
+        let out = run(&a, &paths).unwrap();
+        assert_eq!(out.json["package"], "local/test-hop");
     }
 
     #[test]
