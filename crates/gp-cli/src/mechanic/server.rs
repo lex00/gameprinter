@@ -1098,7 +1098,17 @@ fn handle(s: &Server, req: &Request) -> Result<Response> {
             "text/plain; charset=utf-8",
             gp_arcade::romset::known_roms_toml().into_bytes(),
         )),
-        ("GET" | "HEAD", "/api/session") => Ok(Response::json(&s.open_session()?.state()?)),
+        ("GET" | "HEAD", "/api/session") => {
+            let mut st = s.open_session()?.state()?;
+            // While no agent connected to gp mcp this week, the page says
+            // how to connect one (gp_mcp::clients).
+            if let Some(o) = st.as_object_mut() {
+                let now = gp_mcp::asks::now_ms();
+                let line = gp_mcp::clients::no_agent(&s.paths.home, now);
+                o.insert("no_agent".into(), json!(line));
+            }
+            Ok(Response::json(&st))
+        }
         ("GET" | "HEAD", "/api/working") => working(s, req.param("mechanic")),
         // Every quest-log row's clips and talk, for the screen page's list
         // under the screens, where the person comments on a row or a clip:

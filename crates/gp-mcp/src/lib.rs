@@ -18,6 +18,7 @@ pub mod asks;
 pub mod asset_edit;
 pub mod board_trip;
 pub mod catalog;
+pub mod clients;
 pub mod contexts;
 pub mod critic;
 pub mod edit;

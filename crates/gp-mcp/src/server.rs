@@ -9,9 +9,9 @@
 use std::sync::Arc;
 
 use rmcp::model::{
-    CallToolRequestParams, CallToolResponse, CallToolResult, Implementation, ListToolsResult,
-    PaginatedRequestParams, ProgressNotificationParam, ServerCapabilities, ServerConfig,
-    ServerRequest, Tool,
+    CallToolRequestParams, CallToolResponse, CallToolResult, Implementation,
+    InitializeRequestParams, InitializeResult, ListToolsResult, PaginatedRequestParams,
+    ProgressNotificationParam, ServerCapabilities, ServerConfig, ServerRequest, Tool,
 };
 use rmcp::service::{PeerRequestOptions, RequestContext};
 use rmcp::{ErrorData, RoleServer, ServerHandler, ServiceExt};
@@ -82,6 +82,24 @@ impl Server {
 }
 
 impl ServerHandler for Server {
+    /// The default start, after recording the client in the home
+    /// (crate::clients), so gp knows an agent is connected.
+    async fn initialize(
+        &self,
+        request: InitializeRequestParams,
+        context: RequestContext<RoleServer>,
+    ) -> Result<InitializeResult, ErrorData> {
+        if let Ok(start) = serde_json::to_value(&request) {
+            let now = crate::asks::now_ms();
+            let home = &self.config.home;
+            if let Err(e) = crate::clients::record(home, &start, &self.version, now) {
+                eprintln!("gp mcp: couldn't record the client: {e}");
+            }
+        }
+        context.peer.set_peer_info(request.clone());
+        self.negotiate_initialize(&request)
+    }
+
     fn get_info(&self) -> ServerConfig {
         ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::new("game-printer", &*self.version))

@@ -508,6 +508,8 @@ pub const TABLE: &[Row] = &[
         J,
         Rule::Refuse("it is this server; it is already running."),
     ),
+    // With --write it writes an agent's config in the person's home.
+    r("mcp setup", J, Write),
     r("mechanic approve", J, Write),
     r("mechanic autoplay", S, Write),
     r("mechanic busy", J, Write),

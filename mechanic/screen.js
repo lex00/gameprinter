@@ -1407,6 +1407,9 @@ async function refreshLists(force) {
   try {
     const [s, c] = await Promise.all([api("api/session"), api("api/screen/clips")]);
     session = s;
+    const noAgent = document.getElementById("no-agent");
+    noAgent.hidden = !s.no_agent;
+    noAgent.textContent = s.no_agent ?? "";
     rows = s.queue ?? [];
     clipsBy = c.mechanics ?? [];
     drawQueue();

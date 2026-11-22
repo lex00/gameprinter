@@ -8,7 +8,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow, bail};
-use clap::Args;
+use clap::{Args, Subcommand};
 use serde_json::json;
 
 use gp_evidence::Paths;
@@ -16,7 +16,10 @@ use gp_evidence::Paths;
 use crate::Outcome;
 
 #[derive(Args)]
+#[command(args_conflicts_with_subcommands = true)]
 pub struct McpArgs {
+    #[command(subcommand)]
+    pub(crate) cmd: Option<McpCmd>,
     /// The repo whose templates/ and baselines/ the tools read, and that
     /// evidence refs are read against (default: the git work tree of the
     /// current directory).
@@ -43,6 +46,14 @@ pub struct McpArgs {
     /// commands there, all but the gates, which land on --games.
     #[arg(long, value_name = "DIR")]
     worker_games: Option<PathBuf>,
+}
+
+#[derive(Subcommand)]
+pub enum McpCmd {
+    /// How to connect your agent (Claude Code, Codex, Cursor) to gp mcp: what
+    /// this machine has of each, the line that connects it, and with --write
+    /// the connection made after printing what it writes.
+    Setup(crate::mcp_setup::SetupArgs),
 }
 
 fn absolute(p: &Path) -> Result<PathBuf> {
@@ -116,6 +127,9 @@ fn work_for(given: Option<&Path>, paths: &Paths) -> Result<PathBuf> {
 }
 
 pub(crate) fn run(args: &McpArgs, paths: &Paths) -> Result<Outcome> {
+    if let Some(McpCmd::Setup(s)) = &args.cmd {
+        return crate::mcp_setup::run(s);
+    }
     let repo = repo_for(args.repo.as_deref(), &std::env::current_dir()?)?;
     let work = work_for(args.work.as_deref(), paths)?;
     let config = gp_mcp::Config {

@@ -97,6 +97,7 @@ mod loop_hook;
 mod mcp;
 #[cfg(test)]
 mod mcp_keeps_up;
+mod mcp_setup;
 mod mechanic;
 mod mechanics;
 mod metrics_cmd;
@@ -1960,6 +1961,24 @@ fn games_flag(m: &clap::ArgMatches) -> Option<std::path::PathBuf> {
     }
 }
 
+/// Whether command `name` prints the no-agent line now: a person's
+/// command in a terminal (not gp mcp, a loop worker, a gp a gp started, or
+/// a test's home), no agent connected this week, none printed today.
+fn nudged(name: &str) -> bool {
+    use std::io::IsTerminal as _;
+    if matches!(first_word(name), "" | "mcp" | "worker" | "help" | "self")
+        || !std::io::stderr().is_terminal()
+        || std::env::var("GP_NO_HINTS").is_ok_and(|v| !v.is_empty() && v != "0")
+        || std::env::var_os(gp_mcp::steps::STEP_ENV).is_some_and(|v| !v.is_empty())
+        || gp_mcp::steps::test_home()
+        || gp_mcp::steps::inside()
+    {
+        return false;
+    }
+    gp_evidence::Paths::from_env()
+        .is_ok_and(|p| gp_mcp::clients::nudge_due(&p.home, gp_mcp::asks::now_ms()))
+}
+
 fn first_word(name: &str) -> &str {
     name.split(' ').next().unwrap_or("")
 }
@@ -2003,6 +2022,11 @@ fn main() -> ExitCode {
             return ExitCode::from(3);
         }
     }
+    // A person running gp by hand while no agent connected this week is
+    // told how to connect one, once a day at most (gp_mcp::clients).
+    if !cli.json && nudged(&name) {
+        eprintln!("gp: {}", gp_mcp::clients::LINE);
+    }
     // Every reader of a recording or an input log asks the sealed-run guard.
     if let Ok(p) = gp_evidence::Paths::from_env() {
         sealed::install(&p.home);
@@ -2018,7 +2042,7 @@ fn main() -> ExitCode {
     if let Err(e) = roms_cmd::know_sets(games_flag(&matches).as_deref()) {
         eprintln!("gp: {e:#}");
     }
-    if cli.json && matches!(cli.cmd, Cmd::Mcp(_)) {
+    if cli.json && matches!(&cli.cmd, Cmd::Mcp(a) if a.cmd.is_none()) {
         // gp prints its JSON on stdout when a command ends, which for `gp
         // mcp` is the MCP channel.
         eprintln!("gp: gp mcp speaks JSON-RPC on stdout, so it takes no --json");

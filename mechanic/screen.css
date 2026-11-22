@@ -31,6 +31,7 @@ select { padding: 1px 4px; }
 #record-seal[hidden] { display: none; }
 #follow-on.on { background: var(--accent); color: var(--bg); border-color: var(--accent); }
 /* Which the screen is doing: following the agent's work, or the person's. */
+#no-agent { margin: 0 0 6px; padding: 3px 10px; font: bold 13px var(--mono); text-align: center; max-width: 100ch; color: var(--gold); border: 2px solid var(--gold); }
 #follow { margin: 0; padding: 3px 10px; font: bold 13px var(--mono); text-align: center; max-width: 100ch; border: 2px solid var(--panel); }
 #follow.following { color: var(--bg); background: var(--accent); border-color: var(--accent); }
 #follow.you { color: var(--gold); border-color: var(--gold); }

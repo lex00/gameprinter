@@ -66,7 +66,9 @@ pub enum SelfCmd {
         check: bool,
     },
     /// Say what works on this machine and what doesn't, in plain words:
-    /// gp's home, the page's files (carried in a released gp, or read from
+    /// gp's home, an agent (whether one connected to gp mcp this week,
+    /// which agents this machine has, and the line that connects one), the
+    /// page's files (carried in a released gp, or read from
     /// a checkout), your ROMs, a games folder, curl, git, Rust, the build
     /// sandbox, Node, a headless browser and MAME, each with what needs it
     /// and how to get it, then whether this machine is ready to make a

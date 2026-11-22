@@ -63,7 +63,7 @@ struct Item {
 }
 
 /// The file `name` on PATH, with `.exe` on Windows.
-fn on_path(name: &str) -> Option<PathBuf> {
+pub(crate) fn on_path(name: &str) -> Option<PathBuf> {
     let exe = if cfg!(windows) {
         format!("{name}.exe")
     } else {
@@ -153,6 +153,51 @@ fn roms_in(dir: &Path) -> (usize, usize) {
     (nes, zips)
 }
 
+/// The Agent line: whether an agent connected to gp mcp in the last week
+/// (gp_mcp::clients), which agents this machine has, and the line that
+/// connects the first one found (crate::mcp_setup).
+fn agent_item(paths: &Paths) -> Item {
+    use crate::mcp_setup::{Harness, harnesses, line};
+    let now = gp_mcp::asks::now_ms();
+    let last = gp_mcp::clients::recent(&paths.home, now, gp_mcp::clients::WEEK_MS);
+    let found = crate::mcp_setup::user_home()
+        .map(|u| harnesses(&u, &|p: &str| on_path(p).is_some()))
+        .unwrap_or_default();
+    let here: Vec<String> = found
+        .iter()
+        .filter(|f| f.here)
+        .map(|f| format!("{} ({})", f.harness.words(), f.found))
+        .collect();
+    let on_machine = if here.is_empty() {
+        "no Claude Code, Codex or Cursor found on this machine".to_owned()
+    } else {
+        format!("on this machine: {}", here.join("; "))
+    };
+    let said = match &last {
+        Some(c) => format!(
+            "{} {} connected {} (gp {}); {on_machine}",
+            c["name"].as_str().unwrap_or(""),
+            c["version"].as_str().unwrap_or(""),
+            gp_mcp::clients::ago(c["at_ms"].as_u64().unwrap_or(0), now),
+            c["gp"].as_str().unwrap_or("")
+        ),
+        None => format!("none connected to gp mcp in the last week; {on_machine}"),
+    };
+    let first = found.iter().find(|f| f.here);
+    let first = first.map_or(Harness::Claude, |f| f.harness);
+    Item {
+        what: "an agent",
+        ok: last.is_some(),
+        found: said,
+        for_what: "gp is used through your agent: it runs the steps, and gp's tools reach it over gp mcp",
+        fix: format!(
+            "{}; gp mcp setup prints the line for each agent",
+            line(first, &crate::mcp_setup::gp_command())
+        ),
+        needed_by: vec![Work::Theme, Work::Game, Work::Port],
+    }
+}
+
 fn checks(paths: &Paths) -> Vec<Item> {
     use Work::*;
     let mut items = Vec::new();
@@ -169,6 +214,8 @@ fn checks(paths: &Paths) -> Vec<Item> {
         fix: "set GP_HOME to a folder you own, outside any git repo".into(),
         needed_by: vec![Theme, Game, Port],
     });
+
+    items.push(agent_item(paths));
 
     let checkout = crate::repo::find_repo(|d| {
         d.join("mechanic/index.html").is_file() && d.join("Cargo.toml").is_file()
@@ -517,6 +564,16 @@ mod tests {
         for k in ["theme", "game", "port"] {
             assert!(o.json["ready"][k]["ready"].is_boolean(), "{k}");
         }
+        // No agent connected to this home: it says how to connect one.
+        let none = "missing an agent: none connected";
+        assert!(o.text.contains(none), "{}", o.text);
+        assert!(o.text.contains("gp mcp setup"), "{}", o.text);
+        let start = json!({"clientInfo": {"name": "claude-code", "version": "2.1.0"}});
+        let now = gp_mcp::asks::now_ms();
+        gp_mcp::clients::record(&paths.home, &start, "0.1.2", now).unwrap();
+        let o = run(&paths).unwrap();
+        let one = "ok      an agent: claude-code 2.1.0 connected just now (gp 0.1.2)";
+        assert!(o.text.contains(one), "{}", o.text);
         // No ROM folder: every kind of work says it needs your ROMs.
         assert!(o.text.contains("missing your ROMs"), "{}", o.text);
         assert!(
