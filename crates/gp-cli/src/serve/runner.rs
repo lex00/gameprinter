@@ -251,7 +251,10 @@ pub(crate) fn plan(
             .flatten()
             .filter_map(|t| t.as_str().map(str::to_owned))
             .collect();
-        if touches.iter().any(|t| taken.contains(t)) {
+        // A game's row with a target claims its scoreboard line, and runs
+        // beside the game's rows of other lines; one with none claims the
+        // whole game (crate::steps::clashes).
+        if touches.iter().any(|t| crate::steps::clashes(&taken, t)) {
             continue;
         }
         taken.extend(touches);
@@ -416,6 +419,17 @@ fn run_yeses(ctx: &Arc<Ctx>) {
             continue;
         }
         let id = a["id"].as_str().unwrap_or("").to_owned();
+        // A gate's patch made on top of cards not landed (`--after`) runs
+        // after them: held, its yes kept alive, while one waits; failed
+        // with why once one was refused.
+        if let Some(why) = hold_for_after(&home, &a, now) {
+            if let Err(e) = why
+                && gp_mcp::asks::claim_for_runner(&home, &id).is_some()
+            {
+                let _ = gp_mcp::asks::set_ran(&home, &id, "failed", &[e]);
+            }
+            continue;
+        }
         // Counted before it is taken, so the move onto a new gp (reload.rs,
         // which marks itself sealed and then counts the yeses) either sees
         // it or is seen here: none is cut off by the exec.
@@ -528,6 +542,46 @@ fn run_yeses(ctx: &Arc<Ctx>) {
             let _ = fs::remove_file(&out_f);
             let _ = fs::remove_file(&err_f);
         });
+    }
+}
+
+/// The values of `flag` in an ask's arguments.
+fn arg_values(a: &Value, flag: &str) -> Vec<String> {
+    let argv: Vec<&str> = a["argv"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .collect();
+    argv.windows(2)
+        .filter(|w| w[0] == flag)
+        .map(|w| w[1].to_owned())
+        .collect()
+}
+
+/// Whether a yes to a model gate with `--after` waits: Some(Ok) while a
+/// card it stands on hasn't landed (its yes is kept alive, `after_held_ms`,
+/// and the card says why in `after_waits`), Some(Err(why)) once one was
+/// refused, None when it runs now.
+fn hold_for_after(home: &Path, a: &Value, now: u64) -> Option<Result<(), String>> {
+    if a["command"] != json!("model gate") {
+        return None;
+    }
+    let after = arg_values(a, "--after");
+    if after.is_empty() {
+        return None;
+    }
+    let id = a["id"].as_str().unwrap_or("");
+    match crate::gate::stands_on(home, &after, now) {
+        crate::gate::StandsOn::Landed(_) => None,
+        crate::gate::StandsOn::Refused(why) => Some(Err(why)),
+        crate::gate::StandsOn::Waiting(why) => {
+            let _ = gp_mcp::asks::mark(home, id, "after_held_ms", json!(now));
+            if a["after_waits"] != json!(why) {
+                let _ = gp_mcp::asks::mark(home, id, "after_waits", json!(why));
+            }
+            Some(Ok(()))
+        }
     }
 }
 
@@ -1814,8 +1868,9 @@ fn left_of(report: &str) -> String {
         .join(" ")
 }
 
-/// The worker's worktree, made from main the first time.
-fn worktree(setup: &Setup, id: &str, games: bool) -> anyhow::Result<(PathBuf, String)> {
+/// The worker's worktree, made from main the first time, with whether its
+/// branch was made from main just now (so its pending patches go on it).
+fn worktree(setup: &Setup, id: &str, games: bool) -> anyhow::Result<(PathBuf, String, bool)> {
     // A game's step works in the games checkout (in_games); any other
     // step in the repo the agent works on.
     let repo = if games { &setup.games } else { &setup.repo };
@@ -1828,7 +1883,7 @@ fn worktree(setup: &Setup, id: &str, games: bool) -> anyhow::Result<(PathBuf, St
     let path = loop_state::loop_dir(&setup.home).join("trees").join(id);
     let branch = format!("loop/{id}");
     if path.join(".git").exists() {
-        return Ok((path, branch));
+        return Ok((path, branch, false));
     }
     fs::create_dir_all(path.parent().unwrap_or(&path))?;
     let p = path.to_string_lossy().into_owned();
@@ -1847,7 +1902,227 @@ fn worktree(setup: &Setup, id: &str, games: bool) -> anyhow::Result<(PathBuf, St
     } else {
         super::work::git_ok(repo, &["worktree", "add", "-q", "-b", &branch, &p, "main"])?;
     }
-    Ok((path, branch))
+    Ok((path, branch, !has_branch))
+}
+
+/// One of a game's pending patches as a worker's tree took it: its card's
+/// id, row, what it changes, and why it was left out when it didn't apply.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub(crate) struct Pending {
+    pub id: String,
+    pub row: Option<String>,
+    pub what: String,
+    pub skipped: Option<String>,
+}
+
+/// Whether a model gate card is still pending: open, holding a yes, or
+/// running.
+fn is_pending(a: &Value, now: u64) -> bool {
+    gp_mcp::asks::is_open(a, now) || gp_mcp::asks::is_yes(a, now) || a["state"] == json!("running")
+}
+
+/// `game`'s pending patches: its model gate cards open, holding a yes or
+/// running, in the order they were raised.
+pub(crate) fn pending_cards(home: &Path, game: &str, now: u64) -> Vec<Value> {
+    let mut v: Vec<Value> = gp_mcp::asks::all(home)
+        .into_iter()
+        .filter(|a| {
+            a["command"] == json!("model gate")
+                && a["game"].as_str() == Some(game)
+                && is_pending(a, now)
+        })
+        .collect();
+    v.sort_by_key(|a| a["made_ms"].as_u64().unwrap_or(0));
+    v
+}
+
+/// A card's patch: the file its `--patch` names, else the copy its look
+/// kept (crate::mechanic::ask_look) once the worker's tree that wrote it
+/// is gone.
+fn card_patch(home: &Path, game: &str, a: &Value) -> Result<Vec<u8>, String> {
+    let Some(p) = arg_values(a, "--patch").pop() else {
+        return Err("its card names no --patch".into());
+    };
+    let id = a["id"].as_str().unwrap_or("");
+    let kept = home
+        .join("work/mechanic-preview")
+        .join(game)
+        .join("asks")
+        .join(id)
+        .join("ask.patch");
+    fs::read(&p)
+        .or_else(|_| fs::read(&kept))
+        .map_err(|e| format!("its patch {p} can't be read: {e}"))
+}
+
+/// `git` in `dir` with the loop's own name on its commits, Err with git's
+/// words.
+fn git_in(dir: &Path, args: &[&str]) -> anyhow::Result<String> {
+    let o = Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .env("GIT_AUTHOR_NAME", "gp loop")
+        .env("GIT_AUTHOR_EMAIL", "loop@game-printer.invalid")
+        .env("GIT_COMMITTER_NAME", "gp loop")
+        .env("GIT_COMMITTER_EMAIL", "loop@game-printer.invalid")
+        .stdin(Stdio::null())
+        .output()?;
+    if !o.status.success() {
+        bail!(
+            "git {}: {}",
+            args.first().copied().unwrap_or(""),
+            String::from_utf8_lossy(&o.stderr).trim()
+        );
+    }
+    Ok(String::from_utf8_lossy(&o.stdout).trim().to_owned())
+}
+
+/// The game's pending patches put on the worker's tree `wt` (its branch
+/// just made from main), oldest raised first, each one a commit of its
+/// own (git's plumbing: no hooks, nothing leaves the branch). A patch
+/// that doesn't apply on what is below it is left out, with why. The
+/// patches are kept in the worker's folder `dir`. Returns each card as it
+/// was taken and the commit the worker's own change starts from.
+fn stack_pending(
+    home: &Path,
+    wt: &Path,
+    dir: &Path,
+    game: &str,
+    now: u64,
+) -> anyhow::Result<(Vec<Pending>, String)> {
+    let mut out = Vec::new();
+    for a in pending_cards(home, game, now) {
+        let id = a["id"].as_str().unwrap_or("").to_owned();
+        let row = ask_row(home, &a).map(|(_, r)| r);
+        let what = card_what(&a);
+        let mut p = Pending {
+            id: id.clone(),
+            row,
+            what,
+            skipped: None,
+        };
+        let applied = card_patch(home, game, &a).and_then(|text| {
+            let f = dir.join(format!("pending-{id}.patch"));
+            fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+            fs::write(&f, &text).map_err(|e| e.to_string())?;
+            let f = f.to_string_lossy().into_owned();
+            git_in(wt, &["apply", "--index", "--whitespace=nowarn", &f]).map_err(|e| {
+                let e = format!("{e:#}");
+                let e = e.lines().find(|l| l.contains("error")).unwrap_or(&e);
+                format!(
+                    "it doesn't apply on main with the cards before it ({})",
+                    e.trim()
+                )
+            })?;
+            let tree = git_in(wt, &["write-tree"]).map_err(|e| format!("{e:#}"))?;
+            let msg = format!("pending card {id}: {}", p.what);
+            let c = git_in(wt, &["commit-tree", &tree, "-p", "HEAD", "-m", &msg])
+                .map_err(|e| format!("{e:#}"))?;
+            git_in(wt, &["update-ref", "HEAD", &c]).map_err(|e| format!("{e:#}"))?;
+            Ok(())
+        });
+        if let Err(why) = applied {
+            // Nothing of it stays: the index and files as the last commit.
+            let _ = git_in(wt, &["reset", "-q", "--hard", "HEAD"]);
+            p.skipped = Some(why);
+        }
+        out.push(p);
+    }
+    let base = git_in(wt, &["rev-parse", "HEAD"])?;
+    Ok((out, base))
+}
+
+/// A row with a target whose gap the pending patches on its tree `wt`
+/// already close (its line measured there meets it): set in line, waiting
+/// on the row of the newest such card (the gates land them in the order
+/// they were raised, so that one lands last), with a note, and the why
+/// for the worker's record. None when the row has no target, no patch
+/// went on the tree, the measure can't be made, or it isn't met.
+fn closed_by_pending(
+    setup: &Setup,
+    wt: &Path,
+    dir: &Path,
+    game: &str,
+    row: &str,
+    pending: &[Pending],
+) -> Option<String> {
+    let on: Vec<&Pending> = pending.iter().filter(|p| p.skipped.is_none()).collect();
+    let last = on.last()?;
+    let qf = setup.home.join("mechanics").join(game).join("queue.json");
+    let target = crate::mechanic::session::read_queue(&qf)
+        .into_iter()
+        .find(|r| r["mechanic"] == json!(row))?["target"]
+        .as_str()?
+        .to_owned();
+    let (met, reading) =
+        crate::scoreboard::met_in(&setup.home, dir, wt, game, &target, &setup.gp).ok()?;
+    if !met {
+        return None;
+    }
+    let cards: Vec<String> = on.iter().map(|p| format!("card {}", p.id)).collect();
+    let other = on
+        .iter()
+        .rev()
+        .find(|p| p.row.as_deref().is_some_and(|r| r != row));
+    let wait = other.and_then(|p| p.row.clone());
+    let note = match &wait {
+        Some(r) => format!(
+            "Its gap is closed by the patches still on cards ({}): its target ({target}) measures {reading} on main with them, so it isn't worked again. It waits on {r}, whose card {} lands last of them, and closes on its measure once they land.",
+            cards.join(", "),
+            last.id
+        ),
+        None => format!(
+            "Its own card {} closes its gap: its target ({target}) measures {reading} on main with it, so it isn't worked again. It closes on its measure once the card lands.",
+            last.id
+        ),
+    };
+    let mut q = crate::mechanic::session::read_queue(&qf);
+    let r = q.iter_mut().find(|r| r["mechanic"] == json!(row))?;
+    let o = r.as_object_mut()?;
+    let now = gp_mcp::asks::now_ms();
+    o.insert("status".into(), json!("in line"));
+    o.insert("note".into(), json!(note));
+    o.remove("worker");
+    if let Some(w) = &wait {
+        o.insert("waits_on".into(), json!(format!("{game}/{w}")));
+        o.insert("waits_since".into(), json!(now));
+    }
+    o.insert("changed_ms".into(), json!(now));
+    crate::mechanic::session::write_queue(&qf, &q).ok()?;
+    Some(format!(
+        "its row's target is met on main with the pending patches ({reading}): no worker needed"
+    ))
+}
+
+/// The brief's words on the pending patches the worker's tree has.
+fn pending_words(game: &str, pending: &[Pending], base: &str) -> String {
+    let (on, off): (Vec<&Pending>, Vec<&Pending>) =
+        pending.iter().partition(|p| p.skipped.is_none());
+    if pending.is_empty() {
+        return String::new();
+    }
+    let name = |p: &Pending| match &p.row {
+        Some(r) => format!("card {} (row {r}): {}", p.id, p.what),
+        None => format!("card {}: {}", p.id, p.what),
+    };
+    let mut b = Vec::new();
+    if !on.is_empty() {
+        let ids: Vec<&str> = on.iter().map(|p| p.id.as_str()).collect();
+        b.push(format!(
+            "Your worktree is main plus {game}'s pending patches, the model gate cards not landed yet, applied in the order they were raised, each a commit on your branch: {}. Build on these, don't remake them: a gap one of them closes is closed. Make your patch with git diff {base} (main plus them; a diff from main would carry them again), and name the cards it stands on to the gate: gp_run model gate with after [{}]. The gate lands it after them, or refuses it if one of them is refused. A dry run is on main without them, so it may say a patch that needs them doesn't apply: raise the card anyway.",
+            on.iter().map(|p| name(p)).collect::<Vec<_>>().join("; "),
+            ids.join(", ")
+        ));
+    }
+    for p in off {
+        b.push(format!(
+            "Left out of your worktree: {}, since {}.",
+            name(p),
+            p.skipped.as_deref().unwrap_or("it didn't apply")
+        ));
+    }
+    b.join("\n")
 }
 
 /// The worker's brief: the step, the rules, and the clip's brief when the
@@ -2125,16 +2400,42 @@ fn work(setup: &Setup, live: &Live, rec: &mut Value, resume: bool) -> anyhow::Re
         None => setup,
     };
     let in_games = in_games(&step);
-    let (wt, branch) = worktree(setup, &id, in_games)?;
+    let (wt, branch, fresh) = worktree(setup, &id, in_games)?;
     rec["worktree"] = json!(wt);
     rec["branch"] = json!(branch);
+    let dir = files_dir(&setup.home, &id);
+    fs::create_dir_all(&dir)?;
+    // A game row's worker starts from main plus the game's pending
+    // patches, so it builds on the fixes waiting on a card or in the
+    // gate's queue instead of making them again; a row whose target they
+    // already meet waits for them, with no worker.
+    if fresh
+        && in_games
+        && let Some((game, row)) = row_of(&step)
+    {
+        match stack_pending(&setup.home, &wt, &dir, &game, gp_mcp::asks::now_ms()) {
+            Ok((pending, base)) => {
+                rec["pending"] = json!(pending);
+                rec["base"] = json!(base);
+                write(&setup.home, rec);
+                if let Some(why) = closed_by_pending(setup, &wt, &dir, &game, &row, &pending) {
+                    rec["state"] = json!("done");
+                    rec["why"] = json!(why);
+                    return Ok(());
+                }
+            }
+            Err(e) => rec["pending_error"] = json!(format!("{e:#}")),
+        }
+    }
+    let pending: Vec<Pending> = serde_json::from_value(rec["pending"].clone()).unwrap_or_default();
+    let base = rec["base"].as_str().unwrap_or("main").to_owned();
+    let row_game = row_of(&step).map(|(g, _)| g).unwrap_or_default();
+    let on_pending = pending_words(&row_game, &pending, &base);
     // A games step's gp writes (corpus import's clips, a probe's saves) go
     // to its own worktree, never into the person's checkout, which a
     // landing may be using; they reach it only through a gate, and the
     // gates still run on the person's checkout, the one they land on.
     let games = if in_games { &wt } else { &setup.games };
-    let dir = files_dir(&setup.home, &id);
-    fs::create_dir_all(&dir)?;
     let mcp = dir.join("mcp.json");
     let mut env = json!({"GP_HOME": setup.home, "GP_GAMES_DIR": games});
     env[loop_state::STEP_ENV] = json!(id);
@@ -2177,6 +2478,11 @@ fn work(setup: &Setup, live: &Live, rec: &mut Value, resume: bool) -> anyhow::Re
         } else {
             rec["tries"] = json!(n);
             let brief_path = dir.join(format!("brief.{n}.txt"));
+            let before = [on_pending.as_str(), before.as_str()]
+                .into_iter()
+                .filter(|s| !s.is_empty())
+                .collect::<Vec<_>>()
+                .join("\n\n");
             fs::write(&brief_path, brief(setup, &step, &wt, &branch, &before))?;
             let log = File::create(&log_path)?;
             let mut argv: Vec<String> = setup.argv[1..].to_vec();
@@ -3662,5 +3968,299 @@ mod tests {
             b2.contains("Your try 1 at this step ended with exit 3"),
             "{b2}"
         );
+    }
+
+    /// A row of game g's quest log as a step, its claim made from its
+    /// target as row_steps makes it.
+    fn row_step(id: &str, row: &str, target: Option<&str>) -> Value {
+        let r = match target {
+            Some(t) => json!({"mechanic": row, "target": t}),
+            None => json!({"mechanic": row}),
+        };
+        let claim = crate::steps::claim_of("g", &r);
+        s(id, "agent", &[&format!("row:g/{row}"), &claim])
+    }
+
+    #[test]
+    fn a_rows_target_claims_its_line_and_rows_of_other_lines_run_beside_it() {
+        let ids = |v: Vec<Value>| -> Vec<String> {
+            v.iter()
+                .map(|x| x["id"].as_str().unwrap().to_owned())
+                .collect()
+        };
+        let l1 = row_step(
+            "s000000000011",
+            "a",
+            Some("level 1 sprites at least 330 of 336"),
+        );
+        assert_eq!(l1["touches"][1], json!("line:g/level 1"));
+        let l1b = row_step(
+            "s000000000012",
+            "b",
+            Some("Level 1 background at least 300"),
+        );
+        let l2 = row_step("s000000000013", "c", Some("level 2 sprites at least 10"));
+        let whole = row_step("s000000000014", "d", None);
+        assert_eq!(whole["touches"][1], json!("game:g"));
+        let none = BTreeSet::new();
+        // Rows of two lines of one game run side by side; a second row of
+        // the same line waits, and so does a row with no target, which
+        // claims the whole game.
+        let open = [l1.clone(), l1b.clone(), l2.clone(), whole.clone()];
+        assert_eq!(
+            ids(plan(&open, &[], &none, 5, 0)),
+            ["s000000000011", "s000000000013"]
+        );
+        // A row with no target first holds every line of the game.
+        let open = [whole.clone(), l1.clone(), l2.clone()];
+        assert_eq!(ids(plan(&open, &[], &none, 5, 0)), ["s000000000014"]);
+        // A live worker on a line holds that line and the whole game, not
+        // the other lines; max_workers still caps them.
+        let workers = [json!({"step": l1.clone(), "state": "working"})];
+        let live: BTreeSet<String> = ["s000000000011".to_owned()].into();
+        let open = [l1b.clone(), whole.clone(), l2.clone()];
+        assert_eq!(ids(plan(&open, &workers, &live, 5, 0)), ["s000000000013"]);
+        assert!(plan(&open, &workers, &live, 1, 0).is_empty());
+        // A row of another game's line is free of game g's claims.
+        let other = s("s000000000015", "agent", &["row:h/x", "game:h"]);
+        let open = [other];
+        assert_eq!(ids(plan(&open, &workers, &live, 5, 0)), ["s000000000015"]);
+    }
+
+    /// A model gate card of game `game` in `home`, made `made` ms after a
+    /// minute ago (so their order is theirs), for the
+    /// step `step` of row `row` (its worker's record written), with its
+    /// patch `patch`.
+    #[allow(clippy::too_many_arguments)]
+    fn card(
+        home: &Path,
+        id: &str,
+        game: &str,
+        state: &str,
+        made: u64,
+        step: &str,
+        row: &str,
+        patch: &Path,
+    ) {
+        let now = gp_mcp::asks::now_ms();
+        let a = json!({"id": id, "command": "model gate", "game": game, "state": state,
+            "made_ms": now - 60_000 + made, "answered_ms": now, "step": step,
+            "argv": ["--patch", patch, "--message", format!("{game}: fix {row}. Expect: x"), game]});
+        let d = gp_mcp::asks::dir(home);
+        fs::create_dir_all(&d).unwrap();
+        fs::write(d.join(format!("{id}.json")), a.to_string()).unwrap();
+        write(
+            home,
+            &json!({"step": {"id": step, "touches": [format!("row:{game}/{row}")]}, "state": "done"}),
+        );
+    }
+
+    #[test]
+    fn a_game_rows_worker_starts_from_main_with_the_games_pending_patches() {
+        let t = tempfile::tempdir().unwrap();
+        let out = t.path().join("seen");
+        let setup = rig(
+            t.path(),
+            &format!(
+                "cat > {o}\necho '--- log' >> {o}\ngit log --format=%s >> {o}\necho '--- files' >> {o}\ncat g.txt h.txt >> {o}\n",
+                o = out.display()
+            ),
+        );
+        let p = |name: &str, text: &str| {
+            let f = t.path().join(name);
+            fs::write(&f, text).unwrap();
+            f
+        };
+        let g1 = p(
+            "g1.patch",
+            "diff --git a/g.txt b/g.txt\n--- a/g.txt\n+++ b/g.txt\n@@ -1 +1 @@\n-g\n+g1\n",
+        );
+        let h = p(
+            "h.patch",
+            "diff --git a/h.txt b/h.txt\nnew file mode 100644\n--- /dev/null\n+++ b/h.txt\n@@ -0,0 +1 @@\n+h\n",
+        );
+        let bad = p(
+            "bad.patch",
+            "diff --git a/g.txt b/g.txt\n--- a/g.txt\n+++ b/g.txt\n@@ -1 +1 @@\n-x\n+y\n",
+        );
+        let home = &setup.home;
+        // Raised out of order: the tree takes them oldest first.
+        card(
+            home,
+            "2-bbb",
+            "g",
+            "yes",
+            2000,
+            "s0000000000b2",
+            "slide",
+            &h,
+        );
+        card(
+            home,
+            "1-aaa",
+            "g",
+            "open",
+            1000,
+            "s0000000000b1",
+            "gap",
+            &g1,
+        );
+        card(
+            home,
+            "3-ccc",
+            "g",
+            "open",
+            3000,
+            "s0000000000b3",
+            "late",
+            &bad,
+        );
+        // Not pending, or another game's: left out.
+        card(
+            home,
+            "4-ddd",
+            "g",
+            "no",
+            4000,
+            "s0000000000b4",
+            "nope",
+            &bad,
+        );
+        card(
+            home,
+            "5-eee",
+            "other",
+            "open",
+            5000,
+            "s0000000000b5",
+            "x",
+            &bad,
+        );
+        let id = "s0000000000b9";
+        let mut st = row_step(id, "r", None);
+        st["repo"] = json!("games");
+        spawn(setup.clone(), st).join().unwrap();
+        let seen = fs::read_to_string(&out).unwrap();
+        let (brief, rest) = seen.split_once("--- log\n").unwrap();
+        let (log, files) = rest.split_once("--- files\n").unwrap();
+        // Each pending patch is a commit on the worker's branch, oldest
+        // raised first, above main's; the one that doesn't apply isn't.
+        let log: Vec<&str> = log.lines().collect();
+        assert_eq!(log.len(), 3, "{log:?}");
+        assert!(
+            log[0].starts_with("pending card 2-bbb: fix slide"),
+            "{log:?}"
+        );
+        assert!(log[1].starts_with("pending card 1-aaa: fix gap"), "{log:?}");
+        assert_eq!(log[2], "first");
+        assert_eq!(files, "g1\nh\n");
+        // The brief lists them, says to build on them, how to make the
+        // patch above them and which cards to name to the gate.
+        let r = record(home, id);
+        let base = r["base"].as_str().unwrap();
+        assert!(brief.contains("card 1-aaa (row gap): fix gap"), "{brief}");
+        assert!(
+            brief.contains("card 2-bbb (row slide): fix slide"),
+            "{brief}"
+        );
+        assert!(
+            brief.contains("Build on these, don't remake them"),
+            "{brief}"
+        );
+        assert!(brief.contains(&format!("git diff {base}")), "{brief}");
+        assert!(brief.contains("after [1-aaa, 2-bbb]"), "{brief}");
+        assert!(
+            brief.contains("Left out of your worktree: card 3-ccc (row late)"),
+            "{brief}"
+        );
+        assert!(
+            !brief.contains("4-ddd") && !brief.contains("5-eee"),
+            "{brief}"
+        );
+        assert_eq!(r["state"], "done", "{r}");
+        let took: Vec<Pending> = serde_json::from_value(r["pending"].clone()).unwrap();
+        assert_eq!(took.len(), 3);
+        assert!(
+            took[2]
+                .skipped
+                .as_deref()
+                .unwrap()
+                .contains("doesn't apply")
+        );
+        // Its patches are kept beside its brief.
+        assert!(files_dir(home, id).join("pending-1-aaa.patch").is_file());
+    }
+
+    #[test]
+    fn a_yes_to_a_patch_made_on_top_waits_for_the_cards_under_it() {
+        let t = tempfile::tempdir().unwrap();
+        let home = t.path();
+        let f = t.path().join("x.patch");
+        let now = gp_mcp::asks::now_ms();
+        card(
+            home,
+            "1-base",
+            "g",
+            "open",
+            1000,
+            "s0000000000d1",
+            "gap",
+            &f,
+        );
+        card(
+            home,
+            "2-top",
+            "g",
+            "yes",
+            2000,
+            "s0000000000d2",
+            "slide",
+            &f,
+        );
+        let d = gp_mcp::asks::dir(home).join("2-top.json");
+        let mut top: Value = serde_json::from_str(&fs::read_to_string(&d).unwrap()).unwrap();
+        top["argv"] = json!(["--patch", f, "--after", "1-base", "g"]);
+        // Answered long ago: a yes the runner holds stays alive.
+        top["answered_ms"] = json!(now - 2 * gp_mcp::asks::YES_FOR_MS);
+        fs::write(&d, top.to_string()).unwrap();
+        let read = |id: &str| gp_mcp::asks::read(home, id).unwrap();
+        let set = |id: &str, k: &str, v: Value| gp_mcp::asks::mark(home, id, k, v).unwrap();
+        // The base waits for the person: the yes is held, kept alive and
+        // says why.
+        assert_eq!(hold_for_after(home, &read("2-top"), now), Some(Ok(())));
+        let held = read("2-top");
+        assert_eq!(held["after_held_ms"], json!(now));
+        assert!(gp_mcp::asks::is_yes(&held, now + 1000));
+        assert!(held["after_waits"].as_str().unwrap().contains("1-base"));
+        // The base runs on its yes: still held.
+        set("1-base", "state", json!("running"));
+        assert_eq!(hold_for_after(home, &read("2-top"), now), Some(Ok(())));
+        // The base landed: the yes runs now.
+        set("1-base", "state", json!("used"));
+        set("1-base", "ran", json!({"state": "landed"}));
+        assert_eq!(hold_for_after(home, &read("2-top"), now), None);
+        // The base failed, or the person said NO to it: the yes fails, why
+        // named, and the gate itself refuses the patch.
+        set("1-base", "ran", json!({"state": "failed"}));
+        let why = hold_for_after(home, &read("2-top"), now)
+            .unwrap()
+            .unwrap_err();
+        assert!(why.contains("1-base") && why.contains("failed"), "{why}");
+        set("1-base", "ran", Value::Null);
+        set("1-base", "state", json!("no"));
+        let why = hold_for_after(home, &read("2-top"), now)
+            .unwrap()
+            .unwrap_err();
+        assert!(why.contains("said NO"), "{why}");
+        match crate::gate::stands_on(home, &["1-base".into()], now) {
+            crate::gate::StandsOn::Refused(w) => assert!(w.contains("1-base"), "{w}"),
+            o => panic!("{o:?}"),
+        }
+        // A card gone holds nothing back; a yes with no --after runs.
+        assert!(matches!(
+            crate::gate::stands_on(home, &["9-gone".into()], now),
+            crate::gate::StandsOn::Landed(g) if g.len() == 1
+        ));
+        assert_eq!(hold_for_after(home, &read("1-base"), now), None);
     }
 }

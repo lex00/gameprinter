@@ -63,6 +63,6 @@ While working, run the tests of the crate you change: `cargo test -p <crate>`. A
 
 1. Make a worktree and run the setup above.
 2. Change what the task asks, and make sure `just check` passes in that worktree (it needs `just setup` run in the repo).
-3. Make a patch with `git diff > "$GP_WORKER_OUT/fix.patch"`, or `git format-patch` for a commit with its own message and author.
+3. Make a patch with `git diff > "$GP_WORKER_OUT/fix.patch"`, or `git format-patch` for a commit with its own message and author. A worker gp serve's runner started on a game's row has the game's pending patches (its model gate cards not landed yet) as commits on its branch above main, and its brief names them and the commit above them: build on them rather than making them again, diff from that commit (`git diff BASE`), never from main, and name the cards the patch stands on to the gate with `--after ID` (repeated), so it lands after them or is refused if one of them is ([loop.md](loop.md), "A game row's worker starts from the pending patches").
 4. Land it with the gate for that repo ([docs/gate.md](gate.md)).
 5. Write your report and stop.

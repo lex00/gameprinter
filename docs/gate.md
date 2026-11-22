@@ -12,7 +12,7 @@ One exception: `site/` in `games`, the list of games, holds no game code, and th
 gp model gate GAME --patch "$GP_WORKER_OUT/fix.patch" --onto main -m "GAME: ..."
 ```
 
-`gp model gate` scores the game's corpus on the tip of `games`, applies the patch, builds the game's module if its hooks changed, scans the package for ROM data, checks the model, and scores the corpus again. If no clip got worse, the commit lands on the branch. A patch that removes a clip from the corpus has to name it with `--removes`, and one that changes a clip's recipe with `--replaces`, or the gate refuses it. `--dry-run` says PASS or FAIL and lands nothing.
+`gp model gate` scores the game's corpus on the tip of `games`, applies the patch, builds the game's module if its hooks changed, scans the package for ROM data, checks the model, and scores the corpus again. If no clip got worse, the commit lands on the branch. A patch that removes a clip from the corpus has to name it with `--removes`, and one that changes a clip's recipe with `--replaces`, or the gate refuses it. `--dry-run` says PASS or FAIL and lands nothing. A patch made on top of cards not landed yet names them with `--after ASK` (repeated): the gate refuses it while one of them waits, holds a yes or runs, and once one was refused or failed, and gp serve's runner runs a YES to it only after they land (docs/loop.md, "A game row's worker starts from the pending patches"). A dry run with `--after` says which haven't landed and goes on, on the tip without them.
 
 In order, a try of a patch (or of a batch's patches, below) on the tip:
 

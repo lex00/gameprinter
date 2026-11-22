@@ -140,10 +140,15 @@ pub fn is_open(v: &Value, now: u64) -> bool {
         && now.saturating_sub(v["made_ms"].as_u64().unwrap_or(0)) < OPEN_FOR_MS
 }
 
-/// Whether an ask holds a yes not yet used and not too old.
+/// Whether an ask holds a yes not yet used and not too old. A yes the
+/// runner holds until the cards it stands on land (`after_held_ms`, a gate
+/// with `--after`) is as old as the runner's last look at those cards.
 pub fn is_yes(v: &Value, now: u64) -> bool {
-    v["state"] == json!("yes")
-        && now.saturating_sub(v["answered_ms"].as_u64().unwrap_or(0)) < YES_FOR_MS
+    let at = v["answered_ms"]
+        .as_u64()
+        .unwrap_or(0)
+        .max(v["after_held_ms"].as_u64().unwrap_or(0));
+    v["state"] == json!("yes") && now.saturating_sub(at) < YES_FOR_MS
 }
 
 /// The asks a person may still answer, and the yeses not yet used: what

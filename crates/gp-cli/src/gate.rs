@@ -103,6 +103,79 @@ pub struct GateArgs {
     /// The pictures to watch --clip in: a theme's name, or game.
     #[arg(long, requires = "clip")]
     pub look: Option<String>,
+    /// A card this patch was made on top of: its ask's id, repeated. gp
+    /// serve's runner gives a game row's worker a tree of main with the
+    /// game's pending model gate cards applied, so a patch made there may
+    /// need them. The gate refuses the patch while one hasn't landed, and
+    /// once one was refused or failed; the runner runs a YES to it only
+    /// after they land. A dry run says which haven't landed and goes on.
+    #[arg(long = "after", value_name = "ASK")]
+    pub after: Vec<String>,
+}
+
+/// Where the cards a patch stands on (`--after`) are.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum StandsOn {
+    /// All landed (or gone, so nothing holds the patch), with a line for
+    /// each one gone.
+    Landed(Vec<String>),
+    /// One or more still wait for the person, hold their yes or run: why.
+    Waiting(String),
+    /// One was refused, failed or ran out: why.
+    Refused(String),
+}
+
+/// Where the cards `ids` (asks in the person's home) stand at `now`.
+pub(crate) fn stands_on(home: &Path, ids: &[String], now: u64) -> StandsOn {
+    use gp_mcp::asks;
+    let mut gone = Vec::new();
+    let mut waiting = Vec::new();
+    for id in ids {
+        let Some(a) = asks::read(home, id) else {
+            gone.push(format!(
+                "card {id} it stands on is gone, so nothing holds it back"
+            ));
+            continue;
+        };
+        let what = crate::serve::runner::card_what(&a);
+        let ran = a["ran"]["state"].as_str();
+        match (a["state"].as_str(), ran) {
+            (_, Some("landed" | "passed")) => {}
+            (Some("used"), None) => {}
+            (_, Some("failed")) => {
+                return StandsOn::Refused(format!(
+                    "it stands on card {id} ({what}), which failed: make the change again on main"
+                ));
+            }
+            (Some("no"), _) => {
+                return StandsOn::Refused(format!(
+                    "it stands on card {id} ({what}), which the person said NO to: make the change again on main"
+                ));
+            }
+            _ if asks::is_open(&a, now) || asks::is_yes(&a, now) => {
+                waiting.push(format!("{id} ({what})"));
+            }
+            (Some("running"), _) => waiting.push(format!("{id} ({what})")),
+            _ => {
+                return StandsOn::Refused(format!(
+                    "it stands on card {id} ({what}), which ran out with no answer: make the change again on main"
+                ));
+            }
+        }
+    }
+    if waiting.is_empty() {
+        StandsOn::Landed(gone)
+    } else {
+        StandsOn::Waiting(format!(
+            "it stands on {} not landed yet: {}",
+            if waiting.len() == 1 {
+                "a card"
+            } else {
+                "cards"
+            },
+            waiting.join(", ")
+        ))
+    }
 }
 
 /// What every try reads.
@@ -1510,6 +1583,27 @@ pub(crate) fn run(a: &GateArgs, paths: &Paths) -> Result<Outcome> {
     let private = gp_evidence::paths::enclosing_git_work_tree(&game).is_none();
     if !game.is_dir() && (private || a.score_only) {
         bail!("{}: No such folder", a.game.display());
+    }
+    // A patch made on top of cards not landed (`--after`) lands after them:
+    // refused while one waits, and once one was refused. A dry run on the
+    // tip without them goes on, saying so.
+    if !a.after.is_empty() {
+        match stands_on(&paths.home, &a.after, gp_mcp::asks::now_ms()) {
+            StandsOn::Refused(why) => bail!("{why}"),
+            StandsOn::Waiting(why) if a.dry_run => eprintln!(
+                "gp model gate: {why}; this dry run is on the tip without them, so a patch that needs them may not apply here"
+            ),
+            StandsOn::Waiting(why) => {
+                bail!(
+                    "{why}: the patch lands after them (gp serve's runner runs its YES once they land)"
+                )
+            }
+            StandsOn::Landed(gone) => {
+                for l in gone {
+                    eprintln!("gp model gate: {l}");
+                }
+            }
+        }
     }
     let near = game
         .ancestors()

@@ -1239,6 +1239,47 @@ pub(crate) fn target_says(board: Option<&Value>, target: &str) -> String {
     }
 }
 
+/// Whether a row's `target` is met on `game` as the checkout `games` (a
+/// worker's tree, main with the game's pending patches) has it: its line's
+/// clip measured there now, with the reading in words. Err when it can't
+/// be measured there: the state column (the gate's status gives it), or a
+/// line the tree's board hasn't. An own-draws score is written under
+/// `scratch`, apart from the board's.
+pub(crate) fn met_in(
+    home: &Path,
+    scratch: &Path,
+    games: &Path,
+    game: &str,
+    target: &str,
+    gp: &Path,
+) -> Result<(bool, String), String> {
+    let t = parse_target(target)?;
+    if t.column == Column::State {
+        return Err("a state target is read from the gate's status, not measured on a tree".into());
+    }
+    let dir = games.join(game);
+    let lines = lines(&dir).ok_or_else(|| format!("{game} has no {FILE}"))??;
+    let Some(line) = lines.iter().find(|l| l.name.to_lowercase() == t.line) else {
+        return Err(format!("{game}'s scoreboard has no line {:?}", t.line));
+    };
+    let module = module_for(home, &dir, game, &BTreeMap::new());
+    let n = if line.own_draws {
+        measure_own(gp, scratch, games, game, &line.clip, module.as_deref())?
+    } else {
+        measure(gp, games, game, &line.clip, module.as_deref())?
+    };
+    let [m, of] = match t.column {
+        Column::Background => n.background,
+        Column::Sprites => n.sprites,
+        Column::Own => n.own.ok_or("the measure gave no own-draws numbers")?,
+        Column::State => unreachable!("refused above"),
+    };
+    Ok((
+        m as f64 >= t.at_least,
+        format!("{} {m} of {of}", t.column.key()),
+    ))
+}
+
 /// Checks a target names a line of the game's board; Err says why not.
 pub(crate) fn check_target(board: Option<&Value>, game: &str, target: &str) -> Result<(), String> {
     let t = parse_target(target)?;

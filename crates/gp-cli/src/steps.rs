@@ -109,7 +109,7 @@ pub(crate) fn settle(
         }
         s.commands = s.how.cli.as_deref().map(commands_of).unwrap_or_default();
         s.id = id_of(journey, subject, s, facts);
-        if s.touches.iter().all(|t| !taken.contains(t)) {
+        if s.touches.iter().all(|t| !clashes(&taken, t)) {
             taken.extend(s.touches.iter().cloned());
             open.push(s.clone());
         }
@@ -137,6 +137,35 @@ pub(crate) const ROW_CLI: &str = "gp mechanic show GAME ROW, gp mechanic start G
 
 /// What a row of the tool's work runs besides: the gate it lands through.
 pub(crate) const TOOL_ROW_CLI: &str = ", gp tool gate --patch FILE";
+
+/// What a game's quest-log row claims besides itself: the scoreboard line
+/// its target names (`line:GAME/LINE`, the line lower case, as targets are
+/// read), else the whole game (`game:GAME`).
+pub(crate) fn claim_of(game: &str, row: &Value) -> String {
+    match row["target"]
+        .as_str()
+        .and_then(|t| crate::scoreboard::parse_target(t).ok())
+    {
+        Some(t) => format!("line:{game}/{}", t.line),
+        None => format!("game:{game}"),
+    }
+}
+
+/// Whether claim `t` clashes with one in `taken`: the same claim, or a
+/// game's whole claim (`game:GAME`) and a line of it (`line:GAME/LINE`).
+pub(crate) fn clashes(taken: &BTreeSet<String>, t: &str) -> bool {
+    if taken.contains(t) {
+        return true;
+    }
+    if let Some(g) = t.strip_prefix("game:") {
+        let lines = format!("line:{g}/");
+        return taken.iter().any(|x| x.starts_with(&lines));
+    }
+    if let Some((g, _)) = t.strip_prefix("line:").and_then(|l| l.split_once('/')) {
+        return taken.contains(&format!("game:{g}"));
+    }
+    false
+}
 
 /// The quest-log items that wait for work, as steps of the agent's: each
 /// game's rows that are next or being worked on, in the log's order, one
@@ -210,14 +239,17 @@ pub(crate) fn row_steps(paths: &gp_evidence::Paths, games: Option<&Path>) -> Vec
             // gameprinter worktree of its own, and the tool gate merges each
             // patch onto the tip (a conflict sends the row back to be redone
             // there), so tool rows run side by side up to the runner's limit.
-            // A game's row holds the game too: one worker at a time changes
-            // its model, so two patches never share a base and they land in
-            // the log's order.
+            // A game's row with a target holds the scoreboard line it names
+            // (`line:GAME/LINE`), so rows of other lines of the game run
+            // beside it: each worker's tree has the game's pending patches
+            // (serve/runner.rs, pending_patches) and the gate's order settles
+            // their patches. A game's row with no target holds the whole
+            // game, which every line of it clashes with ([`clashes`]).
             let tools = r["repo"] == json!("tools");
             let touches = if tools {
                 vec![format!("row:{g}/{row}")]
             } else {
-                vec![format!("row:{g}/{row}"), format!("game:{g}")]
+                vec![format!("row:{g}/{row}"), claim_of(g, &r)]
             };
             // A tool row lands through the tool gate.
             let cli = if r["repo"] == json!("tools") {
@@ -292,7 +324,7 @@ pub(crate) fn open_of(answers: &[Answer], held: &[Value]) -> Vec<Value> {
     let mut out = Vec::new();
     for a in answers {
         for s in &a.open {
-            if ids.contains(s.id.as_str()) || s.touches.iter().all(|t| !taken.contains(t)) {
+            if ids.contains(s.id.as_str()) || s.touches.iter().all(|t| !clashes(&taken, t)) {
                 taken.extend(s.touches.iter().cloned());
                 out.push(listed(a, s));
             }
