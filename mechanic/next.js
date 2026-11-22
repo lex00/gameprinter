@@ -156,6 +156,8 @@ export function startNext(page) {
   // gp_run left, gp_mcp::asks), under the line on every tab: what it does
   // in plain words, with YES and NO. A yes shows until the agent uses it.
   let asksDrawn = "";
+  // What is typed in each card's answer box, kept across redraws.
+  const askWords = new Map();
   // A picture the agent proposes for the person's theme is a card here
   // too (picture-card.js): the oldest open one, with how many wait, and
   // answers the agent hasn't read yet. A sound change it proposes for the
@@ -204,6 +206,17 @@ export function startNext(page) {
         n.textContent = "Your agent can go ahead, once.";
         card.appendChild(n);
       } else {
+        // The answer box, open on the card: its words go with YES or NO
+        // (POST /api/asks/ID, words) to the card's row.
+        const t = document.createElement("input");
+        t.className = "ask-words";
+        t.placeholder = "Say anything about this (goes with YES or NO)";
+        t.setAttribute("aria-label", "Your answer on this card");
+        t.value = askWords.get(y.id) ?? "";
+        t.addEventListener("input", () => askWords.set(y.id, t.value));
+        t.addEventListener("keydown", (ev) => ev.stopPropagation());
+        t.addEventListener("click", (ev) => ev.stopPropagation());
+        card.appendChild(t);
         for (const [word, val] of [["YES", "yes"], ["NO", "no"]]) {
           const b = document.createElement("button");
           b.type = "button";
@@ -218,8 +231,9 @@ export function startNext(page) {
               const r = await fetch(`/api/asks/${encodeURIComponent(y.id)}`, {
                 method: "POST",
                 headers: { "content-type": "application/json" },
-                body: JSON.stringify({ answer: val }),
+                body: JSON.stringify(t.value.trim() ? { answer: val, words: t.value.trim() } : { answer: val }),
               });
+              if (r.ok) askWords.delete(y.id);
               if (!r.ok) says.textContent = `${y.says} (Your answer didn't save: ${(await r.json().catch(() => ({}))).error ?? r.status}.)`;
             } catch (err) {
               says.textContent = `${y.says} (Your answer didn't save. Is the page's server still running?)`;

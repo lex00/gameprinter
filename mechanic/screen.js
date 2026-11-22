@@ -1707,28 +1707,39 @@ async function refreshAsks() {
     } else if (a.state === "yes") {
       card.append(el("span", "ask-detail", "The loop's runner runs the yeses one at a time, in the order you said them, while it is on."));
     } else {
-      // A box for words, opened by WORDS so the card's face stays one line:
-      // what is wrong with what the card showed (sent with NO, the row goes
-      // back to its worker with them), or what to keep in mind (with YES).
+      // The answer box, always open on the card: what the person wants to
+      // say about what the card shows. ANSWER sends the words alone to the
+      // card's row (its talk, as the person's turn) and leaves the card
+      // open; YES and NO send them with the answer.
       const t = el("input", "ask-words");
-      t.placeholder = "What's wrong, or what to keep (goes with YES or NO)";
-      t.setAttribute("aria-label", "Your words with your answer");
+      t.placeholder = "Say anything about this (ANSWER sends it; YES and NO send it too)";
+      t.setAttribute("aria-label", "Your answer on this card");
       t.value = askWords.get(a.id) ?? "";
-      t.hidden = !asksWording.has(a.id);
       t.addEventListener("input", () => askWords.set(a.id, t.value));
-      t.addEventListener("keydown", (ev) => { ev.stopPropagation(); if (ev.code === "Escape") t.blur(); });
       t.addEventListener("click", (ev) => ev.stopPropagation());
-      const w = el("button", "ask-words-open", "WORDS");
+      const w = el("button", "ask-words-send", "ANSWER");
       w.type = "button";
-      w.title = "Say what is wrong, or what to keep, with your YES or NO";
-      w.hidden = asksWording.has(a.id);
-      w.addEventListener("click", (e) => {
-        e.currentTarget.blur();
-        asksWording.add(a.id);
-        card.classList.add("wording");
-        w.hidden = true;
-        t.hidden = false;
-        t.focus();
+      w.title = "Sends what you wrote to this card's row, for its agent to read; the card stays for your YES or NO";
+      const sendWords = async () => {
+        const text = t.value.trim();
+        if (!text) { t.focus(); return; }
+        const m = askRow(a);
+        w.disabled = true;
+        try {
+          if (m) await api("api/talk", { text, clips: [], mechanic: m });
+          else throw new Error("this card has no row to carry your words: press NO with them");
+          t.value = "";
+          askWords.delete(a.id);
+          note(`Your answer went to ${m}'s agent.`, 5000);
+        } catch (err) {
+          fault(`Your answer didn't save: ${err.message ?? err}`, 8000);
+        } finally { w.disabled = false; }
+      };
+      w.addEventListener("click", (e) => { e.stopPropagation(); e.currentTarget.blur(); void sendWords(); });
+      t.addEventListener("keydown", (ev) => {
+        ev.stopPropagation();
+        if (ev.code === "Escape") t.blur();
+        if (ev.code === "Enter") { ev.preventDefault(); void sendWords(); }
       });
       for (const [word, val] of [["YES", "yes"], ["NO", "no"]]) {
         const b = el("button", `ask-${val}`, word);
@@ -1762,7 +1773,7 @@ async function refreshAsks() {
         });
         card.append(b);
       }
-      card.append(w, t);
+      card.append(t, w);
     }
     box.append(card);
     if (typing === a.id) card.querySelector(".ask-words")?.focus();

@@ -517,13 +517,19 @@ export function mountJourney(box, kind, name, nav) {
       card.append(el("span", "ask-head", y.state === "yes" ? "YOU SAID YES" : "YOUR AGENT ASKS"), el("span", "ask-says", y.says));
       if (y.state === "yes") card.append(el("span", "muted", "Your agent can go ahead, once."));
       else {
+        // The answer box, open on the card: its words go with YES or NO.
+        const t = el("input", "ask-words");
+        t.placeholder = "Say anything about this (goes with YES or NO)";
+        t.setAttribute("aria-label", "Your answer on this card");
+        t.addEventListener("keydown", (ev) => ev.stopPropagation());
+        card.append(t);
         for (const [word, val] of [["YES", "yes"], ["NO", "no"]]) {
           const b = el("button", `ask-${val}`, word);
           b.type = "button";
           b.title = val === "yes" ? "Let your agent do this, once" : "Your agent won't do this";
           b.addEventListener("click", async () => {
             for (const x of card.querySelectorAll("button")) x.disabled = true;
-            try { await nav.api(`/api/asks/${encodeURIComponent(y.id)}`, { answer: val }); } catch (e) { errors.set("ask", e.message ?? String(e)); }
+            try { await nav.api(`/api/asks/${encodeURIComponent(y.id)}`, t.value.trim() ? { answer: val, words: t.value.trim() } : { answer: val }); } catch (e) { errors.set("ask", e.message ?? String(e)); }
             drawn = "";
             await load();
           });

@@ -172,11 +172,10 @@ canvas { display: block; background: #000; border: 2px solid var(--line); image-
 #asks button { flex: none; font: bold 12px var(--mono); padding: 0 10px; }
 #asks .ask-yes { color: var(--bg); background: var(--gold); border: 2px solid var(--gold); }
 #asks .ask-no { color: var(--fg); background: transparent; border: 2px solid var(--muted); }
-/* WORDS opens a box for the person's words, sent with YES or NO. */
-#asks .ask-words-open { color: var(--fg); background: transparent; border: 2px solid var(--line); font-size: 11px; }
+/* A card's answer box, open: the person's words, sent alone or with YES or NO. */
+#asks .ask-words-send { order: 5; color: var(--bg); background: var(--gold); border: 2px solid var(--gold); font-size: 11px; }
 #asks .ask-card.wording { flex-wrap: wrap; }
-#asks .ask-words { flex-basis: 100%; order: 4; min-width: 0; font: 13px var(--mono); background: var(--bg); color: var(--fg); border: 2px solid var(--gold); padding: 2px 6px; }
-#asks .ask-words[hidden], #asks .ask-words-open[hidden] { display: none; }
+#asks .ask-words { flex: 1 1 60%; order: 4; min-width: 0; font: 13px var(--mono); background: var(--bg); color: var(--fg); border: 2px solid var(--gold); padding: 2px 6px; }
 /* Comments on a quest-log row or a clip, and the talk they go into. */
 .comment-open { font: bold 11px var(--mono); padding: 0 6px; margin-left: 6px; }
 form.comment { display: flex; gap: 6px; flex-basis: 100%; margin-top: 4px; }
