@@ -1122,7 +1122,9 @@ enum GameCmd {
         /// The game's id: lower-case letters, digits and dashes (rooftop-usa).
         /// With --empty, the new game's name: letters, digits and _ (my_hop)
         game: String,
-        /// The ROM, already in $GP_ROM_DIR (`gp roms add` puts it there)
+        /// The ROM, already in $GP_ROM_DIR (`gp roms add` puts it there): a
+        /// path to it, or its path in $GP_ROM_DIR as `gp roms scan` prints
+        /// it (nes/rooftop.nes)
         #[arg(long, required_unless_present = "empty")]
         rom: Option<PathBuf>,
         /// The genre: platformer, topdown, gridhop, events or other

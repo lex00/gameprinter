@@ -22,7 +22,7 @@ gp roms add --move ~/Downloads/game.nes     # or moves it there
 gp roms add ~/Downloads/rbtapper.zip        # a romset, into $GP_ROM_DIR/arcade/
 ```
 
-`roms add` checks that each file is a valid NES image or a romset it knows, writes it and reads it back to confirm the copy. It then prints its identity (the headerless SHA-256) and the game whose `roms.toml` names it. A ROM no game names yet is added too, as unknown: that's the one `gp game new` starts a game from. It refuses to overwrite a different file with the same name.
+`roms add` checks that each file is a valid NES image or a romset it knows, writes it and reads it back to confirm the copy. It then prints its identity (the headerless SHA-256) and the game whose `roms.toml` names it. A ROM no game names yet is added too, as unknown, with the line that starts a game from it: `gp game new ID --rom nes/FILE.nes --genre GENRE`. `roms scan` prints the same line for each unknown ROM, and every ROM by its path in `$GP_ROM_DIR`, the path `game new --rom` takes as it is (a path to the file from where you are works too). It refuses to overwrite a different file with the same name.
 
 A dump with junk around the game data can go in cleaned instead (see [Junk around a dump](#junk-around-a-dump)):
 

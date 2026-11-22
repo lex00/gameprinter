@@ -178,6 +178,32 @@ fn shared_namespace(games: &Path) -> Option<String> {
     (seen.len() == 1).then(|| seen.into_iter().next().unwrap_or_default())
 }
 
+/// The ROM file `--rom` names: the path as given when it is a file there,
+/// else, for a relative path, the same path in the ROM folder, which is how
+/// `gp roms scan` prints it (`nes/rooftop.nes`). Neither: an error naming
+/// both places and `gp roms scan`.
+pub fn rom_file(given: &Path, roms: &Path) -> Result<PathBuf> {
+    if given.is_file() {
+        return Ok(given.to_path_buf());
+    }
+    let in_roms = roms.join(given);
+    if given.is_relative() && in_roms.is_file() {
+        return Ok(in_roms);
+    }
+    if given.is_relative() {
+        bail!(
+            "no ROM at {} nor at {} in $GP_ROM_DIR: `gp roms scan` lists the ROMs there by the path --rom takes",
+            given.display(),
+            in_roms.display()
+        );
+    }
+    bail!(
+        "no ROM at {}: `gp roms scan` lists the ROMs in $GP_ROM_DIR ({}) by the path --rom takes",
+        given.display(),
+        roms.display()
+    );
+}
+
 pub fn run(a: &New<'_>, paths: &Paths) -> Result<Outcome> {
     let game = a.game;
     if !name_ok(game) {
@@ -202,17 +228,18 @@ pub fn run(a: &New<'_>, paths: &Paths) -> Result<Outcome> {
     };
 
     // The ROM, by its hash, in $GP_ROM_DIR, and named by no game yet.
-    let bytes = fs::read(a.rom).with_context(|| format!("reading {}", a.rom.display()))?;
+    let rom_path = rom_file(a.rom, &paths.roms)?;
+    let bytes = fs::read(&rom_path).with_context(|| format!("reading {}", rom_path.display()))?;
     let rom = crate::roms::Rom::of_bytes(bytes)
-        .map_err(|e| anyhow::anyhow!("{}: {e:#}", a.rom.display()))?;
+        .map_err(|e| anyhow::anyhow!("{}: {e:#}", rom_path.display()))?;
     let sha = rom.sha256.clone();
     let found = crate::roms::find(std::slice::from_ref(&sha), &[], &paths.roms)?;
     if !found.contains_key(&sha) {
         bail!(
             "{} isn't in $GP_ROM_DIR ({}): add it with `gp roms add {}` first",
-            a.rom.display(),
+            rom_path.display(),
             paths.roms.display(),
-            a.rom.display()
+            rom_path.display()
         );
     }
     let (reg, _) = crate::roms_cmd::sources(Some(&games))?;
@@ -238,7 +265,7 @@ pub fn run(a: &New<'_>, paths: &Paths) -> Result<Outcome> {
     let (files, about) = match rom.platform {
         crate::roms::Platform::Nes => {
             let image = gp_evidence::source::identify_nes(&rom.bytes)
-                .map_err(|e| anyhow::anyhow!("{}: {e}", a.rom.display()))?;
+                .map_err(|e| anyhow::anyhow!("{}: {e}", rom_path.display()))?;
             nes_files(a, &namespace, &title, &shape, &name, &image, &rom.bytes)?
         }
         crate::roms::Platform::Arcade => arcade_files(a, &namespace, &title, &shape, &name, &rom)?,
@@ -1151,9 +1178,19 @@ mod tests {
         fs::write(&rom, image()).unwrap();
         let games = d.path().join("games");
         fs::create_dir_all(&games).unwrap();
+        // A path that is nowhere is refused, naming both places and scan.
+        let e = rom_file(Path::new("nes/none.nes"), &paths.roms)
+            .err()
+            .unwrap()
+            .to_string();
+        assert!(
+            e.contains("nes/none.nes") && e.contains("gp roms scan"),
+            "{e}"
+        );
+        // The ROM by its path in the ROM folder, as `gp roms scan` prints it.
         let a = New {
             game: "test-hop",
-            rom: &rom,
+            rom: Path::new("nes/test.nes"),
             genre: "platformer",
             title: Some("Test Hop"),
             namespace: Some("someone"),
