@@ -1261,8 +1261,8 @@ function drawQueue() {
   const live = shown.map((r) => workerOn(r)?.worker ?? null);
   const key = JSON.stringify([session?.mechanic, rows, live, clipsBy.map((g) => [g.mechanic, (g.talk ?? []).length]), cardClips]);
   if (q.dataset.key === key) { markTarget(); return; }
-  // Details opened stay open when the log is drawn again.
-  const opened = new Set([...q.querySelectorAll("li[data-mechanic]")].filter((li) => [...li.querySelectorAll("details")].some((d) => d.open)).map((li) => li.dataset.mechanic));
+  // Cards opened stay open when the log is drawn again.
+  const opened = new Set([...q.querySelectorAll("li.expanded[data-mechanic]")].map((li) => li.dataset.mechanic));
   q.dataset.key = key;
   q.textContent = "";
   for (const g of Object.keys(FOLDED)) {
@@ -1286,50 +1286,80 @@ function drawQueue() {
   markTarget();
 }
 
-/** A quest-log row. A click opens its details; only RECORD INTO THIS ROW
- * moves where the next recording goes. */
+/** A card's short title: a row's name in words, its trailing hash left
+ * off (trouble-...-9e73e7). */
+function cardTitle(name) {
+  return String(name ?? "").replace(/-[0-9a-f]{6,}$/, "").replace(/[-_]+/g, " ");
+}
+
+/** A card's one line of what: the first sentence of its words, the loop's
+ * "Proposed by the loop:" left off. */
+function cardLine(text) {
+  return oneSentence(String(text ?? "").replace(/^\s*Proposed by the loop:\s*/i, ""), 120);
+}
+
+/** A quest-log row as a small card: its badge, a short title, who is on it
+ * and one line of what; a click shows the rest (its notes, target, talk,
+ * RECORD INTO THIS ROW and COMMENT). Only RECORD INTO THIS ROW moves where
+ * the next recording goes. LOOK AT IT and CONFIRM stay on the card. */
 function queueRow(r, g, open) {
-  const li = el("li", `qrow-${g}`);
+  const li = el("li", `qcard qrow-${g}`);
   li.dataset.mechanic = r.mechanic;
   const status = g === "working" ? "agent working" : String(r.status ?? "");
-  li.append(el("span", `st st-${status.replace(/ /g, "-")}`, badgeOf(r)), el("span", "qname", r.mechanic));
+  const head = el("div", "qhead");
+  const name = el("span", "qname", cardTitle(r.mechanic));
+  name.title = r.mechanic;
+  head.append(el("span", `st st-${status.replace(/ /g, "-")}`, badgeOf(r)), name);
   if (g === "working") {
     li.classList.add("active");
     const who = r.worker ?? workerOn(r)?.worker;
-    li.append(el("span", "qworker", who ? `ACTIVE: ${String(who).toUpperCase()}` : "ACTIVE"));
+    head.append(el("span", "qworker", who ? String(who).toUpperCase() : "AGENT"));
   }
-  li.append(el("span", "qto", ""));
+  head.append(el("span", "qto", ""));
+  li.append(head);
+  const what = cardLine(r.asked || r.note || r.target_says || "");
+  if (what) li.append(el("div", "qline", what));
+  const judge = rowToJudge(r);
+  const yes = confirmButton(r);
+  if (judge || yes) {
+    const acts = el("div", "qacts");
+    if (judge) acts.append(judgeButton(judge));
+    if (yes) acts.append(yes);
+    li.append(acts);
+  }
+  const more = el("div", "qmore");
+  more.append(el("div", "qnote qfull", r.mechanic));
+  if (r.scores) more.append(noteLine("SCORES", r.scores, "qscore"));
+  // Its target closes it when the scoreboard's measure gets there.
+  if (r.target_says) more.append(noteLine("TARGET", r.target_says, "qscore"));
+  else if (r.measure_needed) more.append(noteLine("NO MEASURE YET", `what would measure it: ${r.measure_needed}`, "qscore"));
+  // Parked on another row: the runner moves it to next when that one lands.
+  if (r.waits_on && r.status === "in line") more.append(noteLine("WAITS ON", `${r.waits_on}: the loop takes it up when that lands or is done`, "qscore"));
+  // Who wrote it: the person's words from the page (by: person) stay theirs
+  // (asked) once the agent's note takes the row over.
+  if (r.asked) more.append(noteLine("YOU ASKED", r.asked));
+  if (r.note) more.append(noteLine(r.by === "person" && !r.asked ? "YOU WROTE" : "AGENT WROTE", r.note));
+  const turns = talkOf(r.mechanic);
+  if (turns.length) more.append(talkLines(turns));
+  const acts = el("div", "qacts");
   const here = el("button", "qhere", "RECORD INTO THIS ROW");
   here.type = "button";
   here.title = "Recordings go to this row from now on";
   here.addEventListener("click", (e) => { e.stopPropagation(); e.currentTarget.blur(); void pickRow(r.mechanic); });
-  li.append(here);
-  if (r.scores) li.append(noteLine("SCORES", r.scores, "qscore"));
-  // Its target closes it when the scoreboard's measure gets there.
-  if (r.target_says) li.append(noteLine("TARGET", r.target_says, "qscore"));
-  else if (r.measure_needed) li.append(noteLine("NO MEASURE YET", `what would measure it: ${r.measure_needed}`, "qscore"));
-  // Parked on another row: the runner moves it to next when that one lands.
-  if (r.waits_on && r.status === "in line") li.append(noteLine("WAITS ON", `${r.waits_on}: the loop takes it up when that lands or is done`, "qscore"));
-  // Who wrote it: the person's words from the page (by: person) stay theirs
-  // (asked) once the agent's note takes the row over.
-  if (r.asked) li.append(noteLine("YOU ASKED", r.asked));
-  if (r.note) li.append(noteLine(r.by === "person" && !r.asked ? "YOU WROTE" : "AGENT WROTE", r.note));
-  const judge = rowToJudge(r);
-  if (judge) li.append(judgeButton(judge));
-  const yes = confirmButton(r);
-  if (yes) li.append(yes);
-  const turns = talkOf(r.mechanic);
-  if (turns.length) li.append(talkLines(turns));
-  li.append(commentBox(li, r.mechanic, [], `A comment on ${r.mechanic} for your agent`));
+  acts.append(here, commentBox(more, r.mechanic, [], `A comment on ${r.mechanic} for your agent`));
+  more.append(acts);
+  li.append(more);
   if (r.mechanic === session?.mechanic) li.classList.add("open");
+  li.classList.toggle("expanded", open);
   for (const d of li.querySelectorAll("details")) d.open = open;
   li.title = r.clip
-    ? `Click: set up ${judgeWords(r).toLowerCase()} on the screens above, and show or hide its details`
-    : "Click: show or hide its details (RAM tests, addresses, hashes)";
-  li.addEventListener("click", () => {
-    const ds = [...li.querySelectorAll("details")];
-    const to = !ds.some((d) => d.open);
-    for (const d of ds) d.open = to;
+    ? `Click: set up ${judgeWords(r).toLowerCase()} on the screens above, and show or hide the rest`
+    : "Click: show or hide the rest";
+  li.addEventListener("click", (e) => {
+    if (e.target.closest("form, button, summary")) return;
+    const to = !li.classList.contains("expanded");
+    li.classList.toggle("expanded", to);
+    for (const d of li.querySelectorAll("details")) d.open = to;
     // A row with a clip to judge on sets it up on the screens.
     if (r.clip && to) void judgeOn(r);
   });
@@ -2011,8 +2041,9 @@ function drawNowLoop(v) {
 // The loop's steps -----------------------------------------------------
 //
 // The open steps of the home (GET /api/steps: crate::steps, docs/loop.md),
-// each with who does it, its words and its id, and WRONG: the person's
-// words on why, sent as POST /api/steps/ID/wrong, which halts the loop
+// each a small card with who does it and one line of its words; a click
+// shows all its words, its id and OBJECT TO THIS STEP (the page's WRONG):
+// the person's words on why, sent as POST /api/steps/ID/wrong, which halts the loop
 // until a change to the tool that names the objection lands. While it is
 // halted the list is empty and the halt says why.
 
@@ -2121,30 +2152,52 @@ async function refreshSteps() {
   halt.hidden = !v.halted;
   halt.textContent = v.halted?.says ?? "";
   const list = $("steps");
+  // Cards opened stay open when the steps are drawn again.
+  const opened = new Set([...list.querySelectorAll("li.expanded[data-step]")].map((li) => li.dataset.step));
   list.textContent = "";
   const WHO = { person: "YOU", agent: "YOUR AGENT", tools: "THE TOOLS" };
   const game = session?.game ?? "";
   const mine = (v.open ?? []).filter((s) => !game || (s.touches ?? []).some((t) => t === `game:${game}` || t.startsWith(`row:${game}/`)) || s.subject === game);
   for (const s of mine) {
-    const li = el("li");
+    // A small card: who, the row it is for and one line of what; a click
+    // shows all its words, its id, OPEN THE ROW and OBJECT TO THIS STEP.
+    const li = el("li", "scard");
+    li.dataset.step = s.id;
     const row = (s.touches ?? []).find((t) => t.startsWith(`row:${game}/`))?.slice(`row:${game}/`.length) ?? null;
-    li.append(el("span", `swho swho-${s.who}`, WHO[s.who] ?? (s.who ?? "").toUpperCase()));
-    li.append(el("span", "ssays", s.says));
+    const head = el("div", "shead");
+    head.append(el("span", `swho swho-${s.who}`, WHO[s.who] ?? (s.who ?? "").toUpperCase()));
     if (row) {
-      li.append(el("span", "srow", `for ${row}`));
-      li.classList.add("srow-link");
-      li.title = `Open ${row} in the quest log`;
-      li.addEventListener("click", (e) => {
-        if (e.target.closest("form, button")) return;
-        toQuestLog(row);
-      });
-    } else {
-      li.title = `Step ${s.id}`;
+      const name = el("span", "srow", cardTitle(row));
+      name.title = row;
+      head.append(name);
     }
-    const b = el("button", "swrong", "WRONG");
+    li.append(head);
+    const says = String(s.says ?? "");
+    // "Work on ROW: WORDS" says the row twice beside its title: the words.
+    const lead = `Work on ${row ?? ""}`;
+    const rest = row && says.startsWith(lead) ? says.slice(lead.length).replace(/^[.:]\s*/, "") : says;
+    li.append(el("div", "ssays", cardLine(rest || "Work on it.")));
+    const more = el("div", "smore");
+    more.append(el("div", "sfull", says), el("div", "sid", `step ${s.id}`));
+    const acts = el("div", "sacts");
+    if (row) {
+      const open = el("button", "sopen", "OPEN THE ROW");
+      open.type = "button";
+      open.title = `Open ${row} in the quest log`;
+      open.addEventListener("click", (e) => { e.stopPropagation(); toQuestLog(row); });
+      acts.append(open);
+    }
+    li.classList.toggle("expanded", opened.has(s.id));
+    li.title = "Click: show or hide the rest";
+    li.addEventListener("click", (e) => {
+      if (e.target.closest("form, button")) return;
+      li.classList.toggle("expanded");
+    });
+    const b = el("button", "swrong", "OBJECT TO THIS STEP");
     b.type = "button";
-    b.title = "This step is wrong: say why, and the loop halts until a change to the tool fixes the rule";
-    b.addEventListener("click", () => {
+    b.title = "Say why this step is wrong: the loop halts until a change to the tool fixes the rule";
+    b.addEventListener("click", (e) => {
+      e.stopPropagation();
       if (li.querySelector("form")) return;
       stepsWriting = true;
       const f = el("form");
@@ -2169,10 +2222,12 @@ async function refreshSteps() {
         void refreshSteps();
       });
       f.append(why, send, keep);
-      li.append(f);
+      more.append(f);
       why.focus();
     });
-    li.append(b);
+    acts.append(b);
+    more.append(acts);
+    li.append(more);
     list.append(li);
   }
   if (mine.length === 0 && !v.halted) list.append(el("li", "", "Nothing open for this game."));

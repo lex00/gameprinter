@@ -52,7 +52,7 @@ A `claude` worker is started the same on every machine: on `runner.model` and `r
 
 ## Wrong
 
-The person can mark any open step wrong: WRONG beside it in STEPS on the screen page (mechanic/screen.html, which lists the open steps with who does each and its words), or `gp loop wrong STEP --why WORDS` in their own terminal. gp serve's routes are `GET /api/steps` (`{open, halted, settings}`) and `POST /api/steps/ID/wrong` with `{why}`. The code is crates/gp-cli/src/wrong.rs.
+The person can mark any open step wrong: OBJECT TO THIS STEP in STEPS on the loop's page (mechanic/screen.html?page=loop, which lists the open steps as small cards, each with who does it and one line of its words; a click on a card shows all its words, its id, OPEN THE ROW and OBJECT TO THIS STEP), or `gp loop wrong STEP --why WORDS` in their own terminal. gp serve's routes are `GET /api/steps` (`{open, halted, settings}`) and `POST /api/steps/ID/wrong` with `{why}`. The code is crates/gp-cli/src/wrong.rs.
 
 An objection is `$GP_HOME/work/loop/wrong/ID.json`: its id (`w` and 12 hex digits), `state` (`open` or `cleared`), the step as `gp loop steps` listed it, the person's `why`, `at_ms`, and `facts`, the facts the step's answer was decided from, so a test can pin the case. While an objection is open the loop is halted:
 

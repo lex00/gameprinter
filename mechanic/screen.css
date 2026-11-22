@@ -88,6 +88,22 @@ canvas { display: block; background: #000; border: 2px solid var(--line); image-
 #queue .qtech summary { display: inline; cursor: pointer; font: bold 11px var(--mono); }
 #queue .qtech[open] span { display: block; font-family: var(--mono); }
 #queue .qhere { font: bold 11px var(--mono); }
+/* A row and a step as a small card: a head (badge, short title, who), one
+   line of what, and the rest (.qmore, .smore) only once it is clicked open. */
+#queue li.qcard, #steps li.scard { display: block; padding: 5px 8px; }
+#queue .qhead, #steps .shead { display: flex; gap: 8px; align-items: baseline; min-width: 0; }
+#queue .qhead .qname, #steps .shead .srow { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+#queue .qline, #steps .scard .ssays { margin-top: 2px; color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#queue .qacts, #steps .sacts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+#queue .qmore, #steps .smore { display: none; margin-top: 4px; padding-top: 4px; border-top: 1px solid var(--line); }
+#queue li.expanded .qmore, #steps li.expanded .smore { display: block; }
+#queue li.expanded .qline { white-space: normal; }
+#queue .qfull, #steps .sfull { font-size: 12px; }
+#queue .qfull { font-family: var(--mono); }
+#steps li.scard { cursor: pointer; }
+#steps li.scard:hover { border-color: var(--muted); }
+#steps li.expanded { border-color: var(--fg); }
+#steps .smore form { margin-top: 4px; }
 #tell { display: flex; gap: 6px; margin-top: 8px; }
 #tell-text { flex: 1; min-width: 0; font: 13px var(--mono); background: var(--bg); color: var(--fg); border: 2px solid var(--line); padding: 2px 6px; }
 #clips h3 { margin: 8px 0 2px; font: bold 12px var(--mono); color: var(--fg); letter-spacing: 0.06em; }

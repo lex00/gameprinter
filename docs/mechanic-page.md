@@ -436,7 +436,12 @@ in words with its count: NEEDS YOU (triage asks the person, or the row is
 asking them), AGENT WORKING (marked agent working, or a live worker of the
 runner's is on the row, whose status stays next while it works), UP NEXT,
 IN LINE and DONE; IN LINE and DONE stay folded until their heading is
-clicked. Each note says who wrote it:
+clicked. Each row is a small card: its badge, a short title (its name in
+words, a trailing hash left off), the worker on it, and one line of what
+(the first sentence of what the person asked or its note), with LOOK AT IT
+and CONFIRM on the card when it has them. A click on the card shows the
+rest: its full name, scores, target, notes, talk, RECORD INTO THIS ROW and
+COMMENT. Each note says who wrote it:
 YOU WROTE for a row the person made on the page, AGENT WROTE for the
 agent's; once the agent's note replaces the person's, their words stay as
 YOU ASKED (`asked` in `queue.json`, kept by `gp mechanic queue`). The
