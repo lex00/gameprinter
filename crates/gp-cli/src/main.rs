@@ -112,6 +112,7 @@ mod module;
 mod moments;
 mod movie;
 mod mutants;
+mod new_game_name;
 mod next;
 mod observe;
 mod odds;
@@ -1134,7 +1135,8 @@ enum GameCmd {
         /// my_game --empty
         #[arg(long, conflicts_with_all = ["rom", "genre", "namespace", "games", "no_draws", "source"])]
         empty: bool,
-        /// The game's title (default: GAME)
+        /// The game's title (default: the ROM's name in the games checkout's
+        /// known list or its arcade set's, else GAME)
         #[arg(long)]
         title: Option<String>,
         /// The package's namespace, NS in NS/GAME (default: the one the other

@@ -92,7 +92,7 @@ pub fn run(cmd: &RomsCmd, paths: &Paths) -> Result<Outcome> {
     match cmd {
         RomsCmd::Scan { games } => {
             let (reg, from) = sources(games.as_deref())?;
-            scan(paths, &reg, &from)
+            scan(paths, &reg, &from, games_dir(games.as_deref()).as_deref())
         }
         RomsCmd::Add {
             files,
@@ -101,7 +101,16 @@ pub fn run(cmd: &RomsCmd, paths: &Paths) -> Result<Outcome> {
             games,
         } => {
             let (reg, from) = sources(games.as_deref())?;
-            add(files, *move_files, *clean, paths, &reg, &from)
+            let games = games_dir(games.as_deref());
+            add(
+                files,
+                *move_files,
+                *clean,
+                paths,
+                &reg,
+                &from,
+                games.as_deref(),
+            )
         }
         RomsCmd::Clean {
             file,
@@ -224,10 +233,10 @@ pub fn sources(given: Option<&Path>) -> Result<(Registry, String)> {
     }
 }
 
-/// The game id `gp roms scan` proposes for a ROM no game names, from its
-/// file name: lower-case letters and digits, dashes between
+/// The game id `gp roms scan` proposes for a ROM no game names and no list
+/// knows, from its file name: lower-case letters and digits, dashes between
 /// (`Rooftop (USA).nes` gives `rooftop-usa`).
-fn game_id_of(rel: &Path) -> String {
+pub(crate) fn game_id_of(rel: &Path) -> String {
     let stem = rel
         .file_stem()
         .map(|s| s.to_string_lossy().to_lowercase())
@@ -260,22 +269,40 @@ fn shell_word(p: &Path) -> String {
 
 /// The `gp game new` line that starts a port of a ROM no game names, with
 /// the path relative to the ROM folder as `scan` prints it, which `game new
-/// --rom` takes as it is. The genre is the person's choice, so it's GENRE.
-pub fn game_new_line(rel: &Path) -> String {
-    format!(
-        "gp game new {} --rom {} --genre GENRE",
-        game_id_of(rel),
-        shell_word(rel)
-    )
+/// --rom` takes as it is. The id is from the file name, or, with `named`,
+/// the ROM's known id and title (crate::new_game_name). The genre is the
+/// person's choice, so it's GENRE.
+pub fn game_new_line(rel: &Path, named: Option<(&str, &str)>) -> String {
+    match named {
+        None => format!(
+            "gp game new {} --rom {} --genre GENRE",
+            game_id_of(rel),
+            shell_word(rel)
+        ),
+        Some((id, title)) => format!(
+            "gp game new {id} --rom {} --genre GENRE --title {}",
+            shell_word(rel),
+            shell_word(Path::new(title))
+        ),
+    }
 }
 
-/// The note `scan` and `add` give a ROM no game names: the line to run.
-fn start_note(rel: &Path) -> String {
-    format!(
-        "unknown: start its port with {} (GENRE one of {})",
-        game_new_line(rel),
+/// What `scan` and `add` give a ROM no game names: the line that starts
+/// its port, the note that says so, and what its game is called
+/// (crate::new_game_name), the same for everyone with this ROM.
+fn unknown(
+    games: Option<&Path>,
+    rel: &Path,
+    sha256: &str,
+    system: Option<&str>,
+) -> (String, String, Value) {
+    let p = crate::new_game_name::propose(games, rel, sha256, system);
+    let line = p.line(rel);
+    let note = format!(
+        "unknown: start its port with {line} (GENRE one of {})",
         crate::game_new::GENRES.join(", ")
-    )
+    );
+    (line, note, p.json())
 }
 
 fn known_json(reg: &Registry, sha256: &str) -> Value {
@@ -285,7 +312,7 @@ fn known_json(reg: &Registry, sha256: &str) -> Value {
 
 /// What `scan` and `add` say of a romset: its set, its identity and what
 /// else the zip held. Never its bytes.
-fn romset_json(set: &gp_arcade::Romset, rel: &Path, reg: &Registry) -> Value {
+fn romset_json(set: &gp_arcade::Romset, rel: &Path, reg: &Registry, games: Option<&Path>) -> Value {
     let title = gp_arcade::romset::set(set.name).map_or("", |s| s.title);
     let mut notes: Vec<String> = vec![format!("{} ({title})", set.name)];
     if set.ssio_prom.is_none() {
@@ -295,9 +322,11 @@ fn romset_json(set: &gp_arcade::Romset, rel: &Path, reg: &Registry) -> Value {
     }
     notes.extend(set.extras.iter().cloned());
     let known = known_json(reg, &set.identity);
-    let game_new = known.is_null().then(|| game_new_line(rel));
+    let (mut game_new, mut new_game) = (Value::Null, Value::Null);
     if known.is_null() {
-        notes.push(start_note(rel));
+        let (line, note, named) = unknown(games, rel, &set.identity, Some(set.name));
+        notes.push(note);
+        (game_new, new_game) = (json!(line), named);
     }
     json!({
         "path": rel,
@@ -305,10 +334,11 @@ fn romset_json(set: &gp_arcade::Romset, rel: &Path, reg: &Registry) -> Value {
         "known": known,
         "notes": notes,
         "game_new": game_new,
+        "new_game": new_game,
     })
 }
 
-fn scan(paths: &Paths, reg: &Registry, from: &str) -> Result<Outcome> {
+fn scan(paths: &Paths, reg: &Registry, from: &str, games: Option<&Path>) -> Result<Outcome> {
     if !paths.roms.is_dir() {
         return Ok(Outcome::ok(
             json!({ "roms_dir": paths.roms, "exists": false, "roms": [] }),
@@ -332,7 +362,7 @@ fn scan(paths: &Paths, reg: &Registry, from: &str) -> Result<Outcome> {
         if read && gp_arcade::romset::looks_like_zip(&head) {
             let bytes = fs::read(path).with_context(|| format!("reading {}", path.display()))?;
             match gp_arcade::Romset::from_zip(&bytes) {
-                Ok(set) => romsets.push(romset_json(&set, &rel, reg)),
+                Ok(set) => romsets.push(romset_json(&set, &rel, reg, games)),
                 Err(e) => problems.push(
                     json!({ "path": rel, "error": e.to_string(), "line": format!("a zip that is no romset gp knows: {e}") }),
                 ),
@@ -352,11 +382,13 @@ fn scan(paths: &Paths, reg: &Registry, from: &str) -> Result<Outcome> {
             Ok(img) => {
                 let known = known_json(reg, &img.sha256);
                 let (report, mut notes) = romclean::scan_findings(&bytes, &name, reg)?;
-                let game_new = known.is_null().then(|| game_new_line(&rel));
+                let (mut game_new, mut new_game) = (Value::Null, Value::Null);
                 if known.is_null() {
-                    notes.push(start_note(&rel));
+                    let (line, note, named) = unknown(games, &rel, &img.sha256, None);
+                    notes.push(note);
+                    (game_new, new_game) = (json!(line), named);
                 }
-                roms.push(json!({ "path": rel, "image": img, "known": known, "report": report, "notes": notes, "game_new": game_new }));
+                roms.push(json!({ "path": rel, "image": img, "known": known, "report": report, "notes": notes, "game_new": game_new, "new_game": new_game }));
             }
             Err(e) => problems.push(
                 json!({ "path": rel, "error": e.to_string(), "line": romclean::problem_line(&e) }),
@@ -418,6 +450,7 @@ fn add(
     paths: &Paths,
     reg: &Registry,
     from: &str,
+    games: Option<&Path>,
 ) -> Result<Outcome> {
     let dir = paths.roms.join("nes");
     if let Some(repo) = gp_evidence::paths::enclosing_git_work_tree(&paths.roms) {
@@ -438,7 +471,7 @@ fn add(
                     file.display()
                 );
             }
-            let (r, line) = add_romset(file, &original, move_files, paths, reg)?;
+            let (r, line) = add_romset(file, &original, move_files, paths, reg, games)?;
             text.extend(line);
             results.push(r);
             continue;
@@ -511,9 +544,11 @@ fn add(
         ));
         let (report, mut notes) = romclean::scan_findings(&original, &name.to_string_lossy(), reg)?;
         let rel = dest.strip_prefix(&paths.roms).unwrap_or(&dest);
-        let game_new = known.is_none().then(|| game_new_line(rel));
+        let (mut game_new, mut new_game) = (Value::Null, Value::Null);
         if known.is_none() {
-            notes.push(start_note(rel));
+            let (line, note, named) = unknown(games, rel, &img.sha256, None);
+            notes.push(note);
+            (game_new, new_game) = (json!(line), named);
         }
         text.extend(notes.iter().map(|l| format!("      {l}")));
         results.push(json!({
@@ -526,6 +561,7 @@ fn add(
             "removed": job.as_ref().map(|j| j.cleaned.removed()),
             "sidecar": sidecar,
             "game_new": game_new,
+            "new_game": new_game,
         }));
     }
     if unknown_cleaned > 0 {
@@ -586,6 +622,7 @@ fn add_romset(
     move_files: bool,
     paths: &Paths,
     reg: &Registry,
+    games: Option<&Path>,
 ) -> Result<(Value, Vec<String>)> {
     let set = gp_arcade::Romset::from_zip(bytes)
         .map_err(|e| anyhow::anyhow!("{} is not a romset gp knows: {e}", file.display()))?;
@@ -595,7 +632,7 @@ fn add_romset(
         .strip_prefix(&paths.roms)
         .unwrap_or(&dest)
         .to_path_buf();
-    let mut r = romset_json(&set, &rel, reg);
+    let mut r = romset_json(&set, &rel, reg, games);
     let mut lines = vec![format!(
         "{action:<14} {}  {}  {}",
         &set.identity[..16],
@@ -654,6 +691,7 @@ mod tests {
             &p,
             &reg,
             &from,
+            Some(&games),
         )
         .unwrap();
         assert_eq!(out.exit, 0);
@@ -670,38 +708,77 @@ mod tests {
         assert_eq!(out.json["added"][1]["game_new"], line);
         assert!(out.json["added"][0]["game_new"].is_null());
         // Again: already there, and the originals are untouched.
-        let again = add(&[d.path().join("a.nes")], false, false, &p, &reg, &from).unwrap();
+        let again = add(
+            &[d.path().join("a.nes")],
+            false,
+            false,
+            &p,
+            &reg,
+            &from,
+            None,
+        )
+        .unwrap();
         assert_eq!(again.json["added"][0]["action"], "already there");
         assert!(d.path().join("a.nes").is_file());
         // Scan finds both, one named, and gives the unknown one the line
-        // to run, whose --rom path `gp game new` takes as it is.
-        let s = scan(&p, &reg, &from).unwrap();
+        // to run, whose --rom path `gp game new` takes as it is, and what
+        // its game is called: by its file's name, in the namespace game new
+        // gives a checkout's first game.
+        let s = scan(&p, &reg, &from, Some(&games)).unwrap();
         assert_eq!(s.json["roms"].as_array().unwrap().len(), 2);
         assert!(s.text.contains("a-test"));
         assert!(s.text.contains(line), "{}", s.text);
         assert_eq!(s.json["roms"][1]["path"], "nes/b.nes");
         assert_eq!(s.json["roms"][1]["game_new"], line);
+        assert!(s.json["roms"][0]["new_game"].is_null());
+        assert_eq!(s.json["roms"][1]["new_game"]["id"], "b");
+        assert_eq!(s.json["roms"][1]["new_game"]["namespace"], "local");
         assert_eq!(
             crate::game_new::rom_file(Path::new("nes/b.nes"), &p.roms).unwrap(),
             p.roms.join("nes/b.nes")
         );
+        // With the games checkout's known list naming it, by that name, on
+        // every scan alike.
+        fs::create_dir_all(games.join("known")).unwrap();
+        let sha = identify_nes(&b).unwrap().sha256;
+        fs::write(
+            games.join(crate::game_new::KNOWN_FILE),
+            format!("[[source]]\nid = \"hilltop-usa\"\ntitle = \"Hill Top\"\nplatform = \"nes\"\nregion = \"ntsc\"\nsha256 = \"{sha}\"\nstatus = \"unverified\"\n"),
+        )
+        .unwrap();
+        let s = scan(&p, &reg, &from, Some(&games)).unwrap();
+        let ng = &s.json["roms"][1]["new_game"];
+        assert_eq!(
+            (ng["id"].as_str(), ng["title"].as_str()),
+            (Some("hilltop-usa"), Some("Hill Top"))
+        );
+        let again = scan(&p, &reg, &from, Some(&games)).unwrap();
+        assert_eq!(ng, &again.json["roms"][1]["new_game"]);
+        let line = "gp game new hilltop-usa --rom nes/b.nes --genre GENRE --title 'Hill Top'";
+        assert_eq!(s.json["roms"][1]["game_new"], line);
+        assert!(s.text.contains(line), "{}", s.text);
     }
 
     /// The id proposed from a file name, and a path with a space or a
-    /// quote in it, quoted so the line runs as printed.
+    /// quote in it, quoted so the line runs as printed; a known name gives
+    /// its id and its title.
     #[test]
     fn the_game_new_line_proposes_an_id_and_quotes_the_path() {
         assert_eq!(
-            game_new_line(Path::new("nes/Rooftop (USA) [!].nes")),
+            game_new_line(Path::new("nes/Rooftop (USA) [!].nes"), None),
             "gp game new rooftop-usa --rom 'nes/Rooftop (USA) [!].nes' --genre GENRE"
         );
         assert_eq!(
-            game_new_line(Path::new("nes/it's.nes")),
+            game_new_line(Path::new("nes/it's.nes"), None),
             r"gp game new it-s --rom 'nes/it'\''s.nes' --genre GENRE"
         );
         assert_eq!(
-            game_new_line(Path::new("arcade/hilltop.zip")),
+            game_new_line(Path::new("arcade/hilltop.zip"), None),
             "gp game new hilltop --rom arcade/hilltop.zip --genre GENRE"
+        );
+        assert_eq!(
+            game_new_line(Path::new("nes/x.nes"), Some(("hilltop-usa", "Hill Top"))),
+            "gp game new hilltop-usa --rom nes/x.nes --genre GENRE --title 'Hill Top'"
         );
         assert_eq!(game_id_of(Path::new("nes/___.nes")), "my-game");
     }
@@ -712,10 +789,11 @@ mod tests {
         let p = paths(d.path());
         let (reg, from) = (Registry::default(), String::new());
         fs::write(d.path().join("a.nes"), image(1)).unwrap();
-        add(&[d.path().join("a.nes")], true, false, &p, &reg, &from).unwrap();
+        let a = [d.path().join("a.nes")];
+        add(&a, true, false, &p, &reg, &from, None).unwrap();
         assert!(!d.path().join("a.nes").exists());
         fs::write(d.path().join("a.nes"), image(2)).unwrap();
-        assert!(add(&[d.path().join("a.nes")], false, false, &p, &reg, &from).is_err());
+        assert!(add(&a, false, false, &p, &reg, &from, None).is_err());
     }
 
     #[test]
@@ -731,6 +809,7 @@ mod tests {
             &p,
             &Registry::default(),
             "",
+            None,
         )
         .err()
         .unwrap();
@@ -750,7 +829,7 @@ mod tests {
         fs::write(p.roms.join("arcade/nothing.zip"), &empty_zip).unwrap();
         fs::create_dir_all(p.roms.join("nes")).unwrap();
         fs::write(p.roms.join("nes/a.nes"), image(1)).unwrap();
-        let out = scan(&p, &Registry::default(), "nowhere").unwrap();
+        let out = scan(&p, &Registry::default(), "nowhere", None).unwrap();
         assert_eq!(out.json["roms"].as_array().unwrap().len(), 1);
         assert_eq!(out.json["romsets"].as_array().unwrap().len(), 0);
         let problem = out.json["problems"][0]["line"].as_str().unwrap();
@@ -763,7 +842,8 @@ mod tests {
         );
         let src = d.path().join("other.zip");
         fs::write(&src, &empty_zip).unwrap();
-        let e = add(&[src], false, false, &p, &Registry::default(), "nowhere")
+        let reg = Registry::default();
+        let e = add(&[src], false, false, &p, &reg, "nowhere", None)
             .err()
             .unwrap();
         assert!(e.to_string().contains("not a romset gp knows"), "{e}");
@@ -772,7 +852,7 @@ mod tests {
     #[test]
     fn scan_with_no_rom_folder_says_how_to_make_one() {
         let d = tempfile::tempdir().unwrap();
-        let s = scan(&paths(d.path()), &Registry::default(), "").unwrap();
+        let s = scan(&paths(d.path()), &Registry::default(), "", None).unwrap();
         assert_eq!(s.json["exists"], false);
         assert!(s.text.contains("gp roms add"));
     }

@@ -157,7 +157,7 @@ pub const FIRST_NAMESPACE: &str = "local";
 /// the other games in the checkout share, or [`FIRST_NAMESPACE`] when there
 /// is no game yet. Games under more than one namespace are refused, naming
 /// them.
-fn default_namespace(games: &Path) -> Result<String> {
+pub(crate) fn default_namespace(games: &Path) -> Result<String> {
     let seen = namespaces(games);
     match seen.len() {
         0 => Ok(FIRST_NAMESPACE.to_owned()),
@@ -282,7 +282,16 @@ pub fn run(a: &New<'_>, paths: &Paths) -> Result<Outcome> {
             games.display()
         );
     }
-    let title = a.title.unwrap_or(game).to_owned();
+    // The ROM's known name, as `gp roms scan` proposes it, else the id.
+    let title = a.title.map_or_else(
+        || {
+            let system = rom.system.as_deref();
+            crate::new_game_name::propose(Some(games.as_path()), &rom_path, &sha, system)
+                .title
+                .unwrap_or_else(|| game.to_owned())
+        },
+        str::to_owned,
+    );
     let shape = shape(a.genre);
     let name = model_name(game);
     let (files, about) = match rom.platform {

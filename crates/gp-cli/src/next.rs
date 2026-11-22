@@ -465,6 +465,9 @@ pub(crate) struct Facts {
     pub games: Vec<String>,
     /// The ROM files in the ROM folder, by name (read before any game).
     pub roms: Vec<String>,
+    /// The new games those ROMs would make, by their known names
+    /// (crate::new_game_name), for the ROMs no game names.
+    pub new_games: Vec<crate::new_game_name::NewGame>,
     pub rom_found: bool,
     pub player: Option<String>,
     pub player_mapped: bool,
@@ -740,6 +743,37 @@ fn play_step(f: &Facts, r: &Row) -> Step {
         .act(Act::PlayFrom {
             row: r.mechanic.clone(),
         })
+}
+
+/// Stage 2's step with one ROM: the agent sets the game up by the id and
+/// title from the ROM's known name and the namespace game new gives it
+/// (crate::new_game_name), so every agent on this ROM makes the same
+/// folder.
+fn set_up_step(f: &Facts) -> Step {
+    let Some(ng) = f.new_games.first() else {
+        return step(
+            Who::Agent,
+            format!(
+                "Your agent can set up the game from {}. It takes about a minute and needs nothing from you.",
+                f.roms[0]
+            ),
+        )
+        .cli("gp roms scan, then gp game new GAME --rom ROM --genre other");
+    };
+    let p = &ng.proposal;
+    let name = p
+        .namespace
+        .as_ref()
+        .map_or_else(|| p.id.clone(), |ns| format!("{ns}/{}", p.id));
+    step(
+        Who::Agent,
+        format!(
+            "Your agent can set up {} from {} as {name}. It takes about a minute and needs nothing from you.",
+            p.title(),
+            ng.rom
+        ),
+    )
+    .cli(p.line(&ng.rel))
 }
 
 /// The tools' quest-log step: free, so the page's LET THE TOOLS TRY starts
@@ -1120,13 +1154,7 @@ pub(crate) fn answer(f: &Facts) -> Answer {
             .cli("gp progress --next --template GAME"),
         ),
         1 => steps.push(step(Who::Person, BRING_YOUR_COPY)),
-        2 if f.roms.len() == 1 => steps.push(
-            step(
-                Who::Agent,
-                format!("Your agent can set up the game from {}. It takes about a minute and needs nothing from you.", f.roms[0]),
-            )
-            .cli("gp roms scan, then gp game new GAME --rom ROM --genre other"),
-        ),
+        2 if f.roms.len() == 1 => steps.push(set_up_step(f)),
         2 => steps.push(step(
             Who::Person,
             format!("Say which of them to bring over: {}.", few(&f.roms)),
@@ -1158,7 +1186,7 @@ pub(crate) fn answer(f: &Facts) -> Answer {
     let mut seen = BTreeSet::new();
     steps.retain(|s| seen.insert(s.says.clone()));
     let s = f.scores.clone().unwrap_or_default();
-    let facts = json!({
+    let mut facts = json!({
         "title": f.title,
         "rom_found": f.rom_found,
         "player_mapped": f.player_mapped,
@@ -1185,6 +1213,18 @@ pub(crate) fn answer(f: &Facts) -> Answer {
         "published": f.published,
         "background": {"on": f.background.on, "jobs": f.background.jobs.len()},
     });
+    if !f.new_games.is_empty() {
+        facts["new_games"] = f
+            .new_games
+            .iter()
+            .map(|ng| {
+                let mut v = ng.proposal.json();
+                v["rom"] = json!(ng.rel);
+                v["game_new"] = json!(ng.proposal.line(&ng.rel));
+                v
+            })
+            .collect();
+    }
     let open = crate::steps::settle("port", f.game.as_deref(), &facts, &mut steps);
     let next = steps.remove(0);
     // The others, the person's first when the next isn't theirs.
@@ -1478,7 +1518,15 @@ pub(crate) fn games_in(dir: &Path) -> Vec<String> {
 /// The ROM files in the ROM folder and its folders, by name; not the
 /// sealed or patched ones.
 fn rom_files(dir: &Path) -> Vec<String> {
-    fn walk(d: &Path, depth: u8, out: &mut Vec<String>) {
+    rom_paths(dir)
+        .iter()
+        .filter_map(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
+        .collect()
+}
+
+/// The same files' paths, by name.
+fn rom_paths(dir: &Path) -> Vec<PathBuf> {
+    fn walk(d: &Path, depth: u8, out: &mut Vec<PathBuf>) {
         for e in std::fs::read_dir(d).into_iter().flatten().flatten() {
             let p = e.path();
             let name = e.file_name().to_string_lossy().into_owned();
@@ -1490,13 +1538,13 @@ fn rom_files(dir: &Path) -> Vec<String> {
                     walk(&p, depth + 1, out);
                 }
             } else if crate::roms::is_rom_file(&p) {
-                out.push(name);
+                out.push(p);
             }
         }
     }
     let mut out = Vec::new();
     walk(dir, 0, &mut out);
-    out.sort();
+    out.sort_by_key(|p| p.file_name().map(std::ffi::OsStr::to_os_string));
     out
 }
 
@@ -1695,6 +1743,10 @@ pub(crate) fn gather(
     let (Some(g), Some(gd)) = (subject, games_dir) else {
         if all.is_empty() {
             f.roms = rom_files(&paths.roms);
+            if f.roms.len() == 1 {
+                let files = rom_paths(&paths.roms);
+                f.new_games = crate::new_game_name::new_games(games, &paths.roms, &files, 1);
+            }
         }
         return Ok(f);
     };

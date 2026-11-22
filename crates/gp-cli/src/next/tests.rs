@@ -207,6 +207,41 @@ fn p2_a_rom_and_no_game_sets_it_up_or_asks_which() {
         "Your game file Acme.nes is here, but no game is set up from it yet."
     );
     assert_eq!(a.next.who, Who::Agent);
+    // The step names the game new by the file's name, then by the known
+    // list's once it names the ROM, the same on every ask.
+    assert!(
+        a.next
+            .says
+            .starts_with("Your agent can set up acme from Acme.nes as local/acme."),
+        "{}",
+        a.next.says
+    );
+    assert_eq!(
+        a.next.how.cli.as_deref(),
+        Some("gp game new acme --rom nes/Acme.nes --genre GENRE")
+    );
+    let rom = fx.root.join("roms/nes/Acme.nes");
+    let sha = crate::template::sha256_hex(&fs::read(&rom).unwrap()[16..]);
+    write(
+        &fx.games().join(crate::game_new::KNOWN_FILE),
+        &format!(
+            "[[source]]\nid = \"hilltop-usa\"\ntitle = \"Hill Top\"\nplatform = \"nes\"\nregion = \"ntsc\"\nsha256 = \"{sha}\"\nstatus = \"unverified\"\n"
+        ),
+    );
+    let a = fx.answer(None);
+    assert!(
+        a.next
+            .says
+            .starts_with("Your agent can set up Hill Top from Acme.nes as local/hilltop-usa."),
+        "{}",
+        a.next.says
+    );
+    assert_eq!(
+        a.next.how.cli.as_deref(),
+        Some("gp game new hilltop-usa --rom nes/Acme.nes --genre GENRE --title 'Hill Top'")
+    );
+    assert_eq!(a.facts["new_games"][0]["id"], "hilltop-usa");
+    assert_eq!(a.next.id, fx.answer(None).next.id);
     fx.rom("Other.nes", 2);
     let a = fx.answer(None);
     assert_eq!(a.next.who, Who::Person);

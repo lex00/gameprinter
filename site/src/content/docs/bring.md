@@ -62,7 +62,7 @@ Each file gets named after the game whose `roms.toml` in your [games checkout](h
 
 A ROM hack's entry in `roms.toml` (`kind = "patched"`) holds the hashes of the base ROM, the author's patch and the patched image. Game Printer doesn't apply patches. Make the patched image yourself from your own base, outside Game Printer, and `gp roms add` will know it by its hash like any other dump. The patch and the patched image never go in a repo.
 
-`gp roms scan` lists what's in the folder and which game each file belongs to.
+`gp roms scan` lists what's in the folder and which game each file belongs to. For a ROM no game names yet, it also prints the `gp game new` line that starts one, named from the ROM itself (`game_new` in its JSON, with the name in `new_game`). When the games checkout's `known/sources.toml` lists the ROM's hash, the game's id and title are the ones it gives. A romset takes its arcade set's name, and any other ROM takes its file's name. `gp game new` gives it the namespace the checkout's games share, or `local` for the first game. Two people starting from the same ROM in the same checkout get the same folder this way, so use that line, with your genre for GENRE, unless you want other names.
 
 If the game has several revisions, compare them and pick one as the target. `gp roms diff a.nes b.nes --summary` lists each range of PRG and CHR that differs, named from the first ROM's asset map and labels (graphics, level data, a table, code), without quoting any bytes. When the two programs sit at different offsets, `--cpu C000-FFFF` compares what the CPU sees there instead. `docs/roms-diff.md` in the gameprinter repo has the rest.
 
