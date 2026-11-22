@@ -82,7 +82,7 @@
          AGENTS ARE DOING. -->
     <section id="your-turn" aria-live="polite" aria-label="Your turn">
       <h2>YOUR TURN</h2>
-      <div id="asks"></div>
+      <div id="asks" class="asks"></div>
       <ol id="turn"></ol>
       <p id="turn-none">NOTHING NEEDS YOU</p>
     </section>
@@ -104,6 +104,13 @@
       <details id="agents">
         <summary><span id="agents-title">WHAT THE AGENTS ARE DOING</span> <span id="agents-counts"></span></summary>
         <p id="agents-held" class="how" hidden>Held still while you read or type here: it catches up when you move away.</p>
+        <!-- The cards the person has answered: a yes waiting its turn, the
+             one running, and what landed, passed or failed in the last
+             minute. YOUR TURN keeps only the cards still asking. -->
+        <section id="cards-said" aria-label="Cards you answered" hidden>
+          <h2>CARDS YOU ANSWERED</h2>
+          <div id="asks-said" class="asks"></div>
+        </section>
       <section id="below">
         <section id="quest" aria-label="The quest log">
           <h2>QUEST LOG</h2>

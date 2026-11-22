@@ -1611,9 +1611,11 @@ async function tell(e) {
 // TURN, the strip over the window's bottom right corner (out of the
 // page's flow, so the screens never move): one line a card, its question
 // and YES and NO (POST /api/asks/ID); a click on the question opens what
-// it does, the command and its message. A yes'd card is one line in the
-// runner's turn (RUNNING NOW, WAITS n OF m), and one the runner finished
-// says LANDED, DONE or FAILED with why, then leaves a minute later.
+// it does, the command and its message. A yes'd card leaves YOUR TURN for
+// CARDS YOU ANSWERED under WHAT THE AGENTS ARE DOING (#asks-said): one
+// line in the runner's turn (RUNNING NOW, WAITS n OF m), and one the
+// runner finished says LANDED, DONE or FAILED with why, then leaves a
+// minute later.
 
 /** How long a card the runner finished stays on the strip. */
 const ASK_DONE_SHOWS_MS = 60 * 1000;
@@ -1660,7 +1662,10 @@ async function refreshAsks() {
       ? a.ran.state === "running" || now - (a.ran.done_ms ?? a.ran.at_ms ?? 0) < ASK_DONE_SHOWS_MS
       : a.state === "open" || a.state === "yes");
   } catch (e) { /* the next look */ }
-  asksShown = list.length;
+  // YOUR TURN holds only the cards still asking; one said yes to, running
+  // or finished is under WHAT THE AGENTS ARE DOING (#asks-said).
+  const asking = (a) => !a.ran && a.state === "open";
+  asksShown = list.filter(asking).length;
   asksNow = list;
   drawNowWork();
   drawProgress();
@@ -1677,11 +1682,14 @@ async function refreshAsks() {
   if (key === asksDrawn) { drawYourTurn(); return; }
   asksDrawn = key;
   const box = $("asks");
+  const said = $("asks-said");
   // The card being written on keeps the person's cursor through a redraw.
   const typing = document.activeElement?.classList?.contains("ask-words")
     ? document.activeElement.closest(".ask-card")?.dataset.ask : null;
   box.textContent = "";
-  box.hidden = list.length === 0;
+  said.textContent = "";
+  box.hidden = asksShown === 0;
+  $("cards-said").hidden = asksShown === list.length;
   drawYourTurn();
   for (const a of list) {
     const card = el("div", `ask-card${a.ran || a.state === "yes" ? " ran" : ""}${asksOpen.has(a.id) ? " open" : ""}${asksWording.has(a.id) ? " wording" : ""}`);
@@ -1702,7 +1710,9 @@ async function refreshAsks() {
     let what = msg.replace(new RegExp(`^${game}\\s*:\\s*`, "i"), "");
     what = what.split(/(?<=[a-z0-9)])[.;]\s|\s\(|: /)[0].trim();
     const verb = a.command === "model gate" ? "Land" : a.command === "registry publish" ? "Publish" : "Allow";
-    let question = what ? `${verb} in ${game || "the game"}: ${what}?` : `${a.says ?? ""}`;
+    // A card still asking asks; one answered says what it is.
+    let question = !what ? `${a.says ?? ""}`
+      : asking(a) ? `${verb} in ${game || "the game"}: ${what}?` : `${what}${/[.!?]$/.test(what) ? "" : "."}`;
     // A failed run says why on its one line: its last line.
     const why = a.ran?.state === "failed" ? String((a.ran.lines ?? []).filter((l) => String(l).trim()).at(-1) ?? "").trim() : "";
     if (why) question = `${why} (${question})`;
@@ -1818,7 +1828,7 @@ async function refreshAsks() {
       }
       card.append(t, w);
     }
-    box.append(card);
+    (asking(a) ? box : said).append(card);
     if (typing === a.id) card.querySelector(".ask-words")?.focus();
   }
 }
@@ -1826,7 +1836,8 @@ async function refreshAsks() {
 // Your turn ------------------------------------------------------------
 //
 // Right under the screens, only what the person can do now, each with a
-// button that does it: the yes cards above (#asks), the loop's steps for
+// button that does it: the yes cards still asking (#asks; one answered is
+// under WHAT THE AGENTS ARE DOING, #asks-said), the loop's steps for
 // this game that are the person's and have a button (PLAY FROM HERE: the
 // row's start point, recording into the row), and the questions of the
 // rows (askOf: a worker's question in the talk or its status line, or a
@@ -1860,6 +1871,9 @@ function askOf(r) {
   }
   if (g?.busy && isQuestion(g.busy)) return { says: g.busy, from: "busy", clip: null };
   if (r.status !== "asking you") return null;
+  // A look to confirm never had a card: it asks in its own words, with
+  // LOOK AT IT, CONFIRM and the answer box (its note may say YES).
+  if (confirmable(r)) return { says: confirmSays(r), from: "confirm", clip: null };
   if (ofCard(r.note)) {
     const cards = cardsOf(r.mechanic);
     // Its card is here (YOUR TURN shows it with YES and NO), or running.
@@ -1869,6 +1883,16 @@ function askOf(r) {
     return { says: "Its card is no longer on your page. What should happen with it?", from: "gone", clip: null, was: r.note };
   }
   return { says: r.note || "Your agent asks you about this row.", from: "note", clip: null };
+}
+
+/** What a look to confirm asks: its plain sentence, else "Watch PART beside
+ * the original. ..." with PART the scoreboard line it came from (a
+ * confirm-LINE row's from) or its name. */
+function confirmSays(r) {
+  if (r.plain) return r.plain;
+  const line = /^scoreboard line (.+), measured\b/.exec(String(r.from ?? ""))?.[1];
+  const part = line ?? (cardTitle(r.mechanic).replace(/^confirm\s+/i, "") || "it");
+  return `Watch ${part} beside the original. If it looks right, press CONFIRM; if not, say what is wrong.`;
 }
 
 /** What is typed in a words box not sent yet, by its row (and kind), kept
@@ -1980,7 +2004,7 @@ function drawYourTurn() {
       li.append(lookButton(r.mechanic, q.clip));
       clips = [q.clip.n];
     }
-    li.append(answerBox(r.mechanic, clips));
+    li.append(answerBox(r.mechanic, clips, q.from === "confirm" ? { placeholder: "Not right? Say what is wrong" } : {}));
     list.append(li);
   }
   $("turn-none").hidden = asksShown + plays.length + asking.length > 0;

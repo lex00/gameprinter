@@ -1505,8 +1505,12 @@ pub(crate) fn ask_looks(home: &Path, games: &Path, game: &str) -> Vec<String> {
             "by": "loop",
             "from": format!("scoreboard line {name}, measured near full"),
             "note": format!(
-                "Watch {name} beside the original (LOOK AT IT). If it looks right, say YES and it stays that way: no later change can make it look worse. Measured: {state}background {} of {}, sprites {} of {}.",
+                "Watch {name} beside the original (LOOK AT IT). If it looks right, press CONFIRM and it stays that way: no later change can make it look worse. Measured: {state}background {} of {}, sprites {} of {}.",
                 bg.0, bg.1, sp.0, sp.1
+            ),
+            // What the person's page shows: it never had a card.
+            "plain": format!(
+                "Watch {name} beside the original. If it looks right, press CONFIRM; if not, say what is wrong."
             ),
             "clip": {
                 "id": l["clip"],
@@ -1778,6 +1782,13 @@ level = "field"
         assert!(note.contains("LOOK AT IT"), "{note}");
         let measured = "state 100%, background 200 of 200, sprites 199 of 200";
         assert!(note.contains(measured), "{note}");
+        // It never has a card: it says CONFIRM, never YES, and the page
+        // shows its plain sentence.
+        assert!(!note.contains("YES"), "{note}");
+        assert_eq!(
+            r["plain"],
+            "Watch level 1 beside the original. If it looks right, press CONFIRM; if not, say what is wrong."
+        );
         assert_eq!(q.len(), 2, "level 2 is short and own draws isn't a look");
         assert!(ask_looks(h, d.path(), "hop").is_empty(), "once");
         // A row by the name, with no clip, is left as well.

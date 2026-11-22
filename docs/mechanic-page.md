@@ -525,12 +525,16 @@ does). It leads with progress (owner, loop-page-progress-first):
   waiting for the person's YES, landing, landed and being measured, or
   waiting for an agent. A bar that moved since the page was opened says by
   how much. A game with no scoreboard says so in one line.
-- YOUR TURN, the screen page's, under it: each card with its clip and its
-  box for words open (no WORDS to press), and each row's question with its
-  clip and its ANSWER box; NOTHING NEEDS YOU when there is none.
+- YOUR TURN, the screen page's, under it: each card still asking, with its
+  clip and its box for words open (no WORDS to press), and each row's
+  question with its clip and its ANSWER box; NOTHING NEEDS YOU when there
+  is none.
 - WHAT THE AGENTS ARE DOING, one heading, folded until clicked (kept in the
   browser), with the counts on it: rows in work, rows waiting, rows done
-  today (`done_ms` on the scoreboard's endpoint). Open, it holds the quest
+  today (`done_ms` on the scoreboard's endpoint). Open, it holds CARDS YOU
+  ANSWERED first (a yes waiting its turn, the one running, and one that
+  landed, passed or failed in the last minute, each saying what it is, not
+  asking), then the quest
   log with the NEW ITEM box at its top (Enter makes a new item, SEND
   comments on the open row), the steps, the workers and the runner's
   switches, and the clips, drawn as before; while the pointer is on it or
@@ -551,7 +555,8 @@ IS STOPPED: THE RUNNER IS OFF, THE LOOP IS HALTED, or THE LOOP HAS NOTHING
 TO DO.
 
 YOUR TURN lists only what the person can do now,
-each with the button that does it: the agent's yes cards (YES and NO), the
+each with the button that does it: the agent's yes cards still asking (YES
+and NO; once answered a card is under WHAT THE AGENTS ARE DOING), the
 loop's steps for this game that are the person's and have a button (PLAY
 FROM HERE: the row opens, its request's path plays to its frame, the model
 starts there and RECORD records into the row, so the clip goes to the step's
@@ -609,7 +614,12 @@ own clip, live play, a clip the agent shows and the work followed all play
 on main's model.
 
 A row asking about a look in the game's own pictures (`look` game) also
-has CONFIRM: IT LOOKS RIGHT in the quest log and in YOUR TURN. CONFIRM
+has CONFIRM: IT LOOKS RIGHT in the quest log and in YOUR TURN. Such a row
+never had a card, so YOUR TURN asks in its own words: its `plain`, else
+"Watch PART beside the original. If it looks right, press CONFIRM; if not,
+say what is wrong.", PART the scoreboard line it came from, with LOOK AT
+IT, CONFIRM and its answer box (a confirm row the scoreboard adds has that
+sentence as its `plain`). CONFIRM
 (`POST /api/confirm` with the row), or a plain yes typed as the answer
 ("yes", "looks right", "lock it"), is the owner's yes: the row goes in line
 with `confirmed`, and gp serve's runner locks it with no worker, running

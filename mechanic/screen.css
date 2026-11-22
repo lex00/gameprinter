@@ -161,21 +161,21 @@ canvas { display: block; background: #000; border: 2px solid var(--line); image-
 #turn-none[hidden] { display: none; }
 /* The agent's asks in YOUR TURN: one line a card, its question and YES
    and NO; a click on the question opens its detail. */
-#asks { display: flex; flex-direction: column; gap: 3px; }
-#asks[hidden] { display: none; }
-#asks .ask-card { display: flex; flex-wrap: nowrap; align-items: center; gap: 2px 8px; border: 2px solid var(--gold); background: #2a2000; padding: 2px 6px; font-size: 13px; }
-#asks .ask-card.open { flex-wrap: wrap; }
-#asks .ask-card.ran { border-color: var(--muted); background: var(--panel, #1c1c1c); }
-#asks .ask-head { flex: none; font: bold 11px var(--mono); color: var(--gold); letter-spacing: 0.06em; white-space: nowrap; }
-#asks .ask-detail { flex-basis: 100%; order: 3; color: var(--muted); font: 12px var(--mono); overflow-wrap: anywhere; }
-#asks .ask-card:not(.open) .ask-detail, #asks .ask-card:not(.open) .ask-says { display: none; }
-#asks button { flex: none; font: bold 12px var(--mono); padding: 0 10px; }
-#asks .ask-yes { color: var(--bg); background: var(--gold); border: 2px solid var(--gold); }
-#asks .ask-no { color: var(--fg); background: transparent; border: 2px solid var(--muted); }
+.asks { display: flex; flex-direction: column; gap: 3px; }
+.asks[hidden], #cards-said[hidden] { display: none; }
+.asks .ask-card { display: flex; flex-wrap: nowrap; align-items: center; gap: 2px 8px; border: 2px solid var(--gold); background: #2a2000; padding: 2px 6px; font-size: 13px; }
+.asks .ask-card.open { flex-wrap: wrap; }
+.asks .ask-card.ran { border-color: var(--muted); background: var(--panel, #1c1c1c); }
+.asks .ask-head { flex: none; font: bold 11px var(--mono); color: var(--gold); letter-spacing: 0.06em; white-space: nowrap; }
+.asks .ask-detail { flex-basis: 100%; order: 3; color: var(--muted); font: 12px var(--mono); overflow-wrap: anywhere; }
+.asks .ask-card:not(.open) .ask-detail, .asks .ask-card:not(.open) .ask-says { display: none; }
+.asks button { flex: none; font: bold 12px var(--mono); padding: 0 10px; }
+.asks .ask-yes { color: var(--bg); background: var(--gold); border: 2px solid var(--gold); }
+.asks .ask-no { color: var(--fg); background: transparent; border: 2px solid var(--muted); }
 /* A card's answer box, open: the person's words, sent alone or with YES or NO. */
-#asks .ask-words-send { order: 5; color: var(--bg); background: var(--gold); border: 2px solid var(--gold); font-size: 11px; }
-#asks .ask-card.wording { flex-wrap: wrap; }
-#asks .ask-words { flex: 1 1 60%; order: 4; min-width: 0; font: 13px var(--mono); background: var(--bg); color: var(--fg); border: 2px solid var(--gold); padding: 2px 6px; }
+.asks .ask-words-send { order: 5; color: var(--bg); background: var(--gold); border: 2px solid var(--gold); font-size: 11px; }
+.asks .ask-card.wording { flex-wrap: wrap; }
+.asks .ask-words { flex: 1 1 60%; order: 4; min-width: 0; font: 13px var(--mono); background: var(--bg); color: var(--fg); border: 2px solid var(--gold); padding: 2px 6px; }
 /* Comments on a quest-log row or a clip, and the talk they go into. */
 .comment-open { font: bold 11px var(--mono); padding: 0 6px; margin-left: 6px; }
 form.comment { display: flex; gap: 6px; flex-basis: 100%; margin-top: 4px; }
@@ -183,13 +183,13 @@ form.comment .comment-text { flex: 1; min-width: 0; font: 13px var(--mono); back
 .talk { flex-basis: 100%; display: flex; flex-direction: column; gap: 1px; margin-top: 2px; }
 .talk-line { font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
 .talk-you { color: var(--gold); }
-#asks .ask-row { font: bold 11px var(--mono); color: var(--accent); background: transparent; border: 2px solid var(--accent); padding: 0 6px; }
+.asks .ask-row { font: bold 11px var(--mono); color: var(--accent); background: transparent; border: 2px solid var(--accent); padding: 0 6px; }
 /* LOOK AT IT: a row's clip to judge on, set up on the screens. */
 button.judge { flex: none; font: bold 12px var(--mono); padding: 0 10px; margin-left: 6px; color: var(--bg); background: var(--gold); border: 2px solid var(--gold); cursor: pointer; white-space: nowrap; }
-#turn button.judge, #asks button.judge { margin-left: 0; }
-#asks .ask-question { flex: 1 1 auto; min-width: 0; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; }
-#asks .ask-card.open .ask-question { white-space: normal; flex-basis: 100%; order: 1; }
-#asks .ask-says { flex-basis: 100%; order: 2; color: var(--muted); font-size: 12px; }
+#turn button.judge, .asks button.judge { margin-left: 0; }
+.asks .ask-question { flex: 1 1 auto; min-width: 0; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; }
+.asks .ask-card.open .ask-question { white-space: normal; flex-basis: 100%; order: 1; }
+.asks .ask-says { flex-basis: 100%; order: 2; color: var(--muted); font-size: 12px; }
 /* NOW: what is being worked on, and the loop's switches. */
 #now { width: min(1200px, 100%); margin: 6px auto; align-self: center; box-sizing: border-box; display: flex; flex-direction: column; gap: 4px; }
 #now-work { display: flex; flex-direction: column; gap: 4px; }
@@ -214,9 +214,9 @@ button.judge { flex: none; font: bold 12px var(--mono); padding: 0 10px; margin-
 #steps li.srow-link { cursor: pointer; }
 #steps li.srow-link:hover { border-color: var(--muted); }
 #steps .srow { font: 12px var(--mono); color: var(--accent); }
-#asks .ask-ran-running { color: var(--accent); }
-#asks .ask-ran-landed, #asks .ask-ran-passed { color: var(--ok, #6c6); }
-#asks .ask-ran-failed { color: var(--rec); }
+.asks .ask-ran-running { color: var(--accent); }
+.asks .ask-ran-landed, .asks .ask-ran-passed { color: var(--ok, #6c6); }
+.asks .ask-ran-failed { color: var(--rec); }
 /* The screens stay at the top: YOUR TURN and the status line sit under
    them, in the page's flow, not pinned over it. */
 #your-turn { width: min(1200px, 100%); margin: 6px auto 0; box-sizing: border-box; }

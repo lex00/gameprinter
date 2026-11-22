@@ -64,8 +64,8 @@ fn connect_cmd(cmd: Command, work: &Path) -> Client {
     connect_caps(cmd, work, json!({}))
 }
 
-/// [`connect_cmd`] for a client with these capabilities.
-fn connect_caps(mut cmd: Command, work: &Path, capabilities: Value) -> Client {
+/// Starts `gp mcp` from `cmd`, with nothing sent yet.
+fn spawn_mcp(mut cmd: Command, work: &Path) -> Client {
     let mut child = cmd
         .arg("mcp")
         .arg("--repo")
@@ -78,7 +78,7 @@ fn connect_caps(mut cmd: Command, work: &Path, capabilities: Value) -> Client {
         .unwrap();
     let stdin = child.stdin.take();
     let stdout = BufReader::new(child.stdout.take().unwrap());
-    let mut c = Client {
+    Client {
         child,
         stdin,
         stdout,
@@ -87,7 +87,12 @@ fn connect_caps(mut cmd: Command, work: &Path, capabilities: Value) -> Client {
         progress: Vec::new(),
         forms: Vec::new(),
         answer: None,
-    };
+    }
+}
+
+/// [`connect_cmd`] for a client with these capabilities.
+fn connect_caps(cmd: Command, work: &Path, capabilities: Value) -> Client {
+    let mut c = spawn_mcp(cmd, work);
     let init = c.request(
         "initialize",
         json!({
@@ -544,6 +549,55 @@ fn mcp_takes_no_json_flag_and_no_work_dir_in_the_repo() {
     assert_eq!(out.status.code(), Some(2));
     assert!(String::from_utf8_lossy(&out.stderr).contains("inside the git work tree"));
     assert!(!inside.exists());
+}
+
+/// The names of the agents a home has recorded ($GP_HOME/agents.json).
+fn agents_of(home: &Path) -> Vec<String> {
+    let v: Value = fs::read_to_string(home.join("agents.json"))
+        .ok()
+        .and_then(|t| serde_json::from_str(&t).ok())
+        .unwrap_or(Value::Null);
+    let mut names: Vec<String> = v["clients"]
+        .as_object()
+        .map(|m| m.keys().cloned().collect())
+        .unwrap_or_default();
+    names.sort();
+    names
+}
+
+/// gp knows an agent connected, whether it starts with initialize or, on
+/// protocol 2026-07-28, sends its requests with no initialize (its
+/// clientInfo in each request's _meta): the loop's workers and a person's
+/// sessions used gp mcp all day while the page said none had connected.
+#[test]
+fn an_agent_is_recorded_with_or_without_initialize() {
+    let d = tempfile::tempdir().unwrap();
+    let (home, work) = (d.path().join("home"), d.path().join("work"));
+    let c = connect_bare(&home, &work);
+    assert_eq!(agents_of(&home), vec!["gp-cli test"]);
+    finish(c);
+
+    let home = d.path().join("home-2026");
+    let mut c = spawn_mcp(gp(&home), &work);
+    let listed = c.request(
+        "tools/list",
+        json!({"_meta": {
+            "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+            "io.modelcontextprotocol/clientCapabilities": {},
+            "io.modelcontextprotocol/clientInfo": {"name": "an agent of 2026", "version": "9"},
+        }}),
+    );
+    assert!(
+        listed["result"]["tools"]
+            .as_array()
+            .is_some_and(|t| !t.is_empty()),
+        "{listed}"
+    );
+    assert_eq!(agents_of(&home), vec!["an agent of 2026"]);
+    let a: Value =
+        serde_json::from_str(&fs::read_to_string(home.join("agents.json")).unwrap()).unwrap();
+    assert_eq!(a["clients"]["an agent of 2026"]["version"], "9", "{a}");
+    finish(c);
 }
 
 /// The tool `next` before any game (it asks for the game's file), then on

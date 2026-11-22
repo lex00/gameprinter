@@ -76,11 +76,18 @@ pub fn tool_result(reply: &Reply) -> CallToolResult {
     .expect("a tool result fits the SDK's type")
 }
 
+/// How often a session that stays connected records its client again, so
+/// one open for longer than a week still counts (crate::clients::WEEK_MS).
+pub const RECORD_EVERY_MS: u64 = 3600 * 1000;
+
 #[derive(Clone)]
 pub struct Server {
     config: Arc<Config>,
     /// The version it says it is: the gp serving it, not this crate.
     version: Arc<str>,
+    /// When this session last recorded its client (crate::clients), 0
+    /// before it has.
+    recorded_ms: Arc<std::sync::atomic::AtomicU64>,
 }
 
 impl Server {
@@ -88,7 +95,37 @@ impl Server {
         Self {
             config: Arc::new(config),
             version: version.into(),
+            recorded_ms: Arc::default(),
         }
+    }
+
+    /// Records the client in the home (crate::clients), so gp knows an
+    /// agent is connected: from its initialize (`start`, its params as
+    /// JSON) when `force`, else at most every [`RECORD_EVERY_MS`]. A client
+    /// on protocol 2026-07-28 sends no initialize: every request carries
+    /// its clientInfo instead, so each request comes here.
+    fn note_client(&self, start: &Value, force: bool) {
+        use std::sync::atomic::Ordering;
+        let now = crate::asks::now_ms();
+        let last = self.recorded_ms.load(Ordering::Relaxed);
+        if !force && last != 0 && now.saturating_sub(last) < RECORD_EVERY_MS {
+            return;
+        }
+        self.recorded_ms.store(now.max(1), Ordering::Relaxed);
+        if let Err(e) = crate::clients::record(&self.config.home, start, &self.version, now) {
+            eprintln!("gp mcp: couldn't record the client: {e}");
+        }
+    }
+
+    /// [`Server::note_client`] for any request but initialize: the
+    /// client's name and version from the request (or the session's
+    /// start).
+    fn note_request(&self, context: &RequestContext<RoleServer>) {
+        let info = context
+            .client_info()
+            .and_then(|i| serde_json::to_value(i).ok())
+            .unwrap_or(Value::Null);
+        self.note_client(&json!({ "clientInfo": info }), false);
     }
 }
 
@@ -101,11 +138,7 @@ impl ServerHandler for Server {
         context: RequestContext<RoleServer>,
     ) -> Result<InitializeResult, ErrorData> {
         if let Ok(start) = serde_json::to_value(&request) {
-            let now = crate::asks::now_ms();
-            let home = &self.config.home;
-            if let Err(e) = crate::clients::record(home, &start, &self.version, now) {
-                eprintln!("gp mcp: couldn't record the client: {e}");
-            }
+            self.note_client(&start, true);
         }
         context.peer.set_peer_info(request.clone());
         self.negotiate_initialize(&request)
@@ -126,16 +159,18 @@ impl ServerHandler for Server {
     async fn list_prompts(
         &self,
         _request: Option<PaginatedRequestParams>,
-        _context: RequestContext<RoleServer>,
+        context: RequestContext<RoleServer>,
     ) -> Result<ListPromptsResult, ErrorData> {
+        self.note_request(&context);
         Ok(serde_json::from_value(prompts::list()).expect("a prompt list"))
     }
 
     async fn get_prompt(
         &self,
         request: GetPromptRequestParams,
-        _context: RequestContext<RoleServer>,
+        context: RequestContext<RoleServer>,
     ) -> Result<GetPromptResponse, ErrorData> {
+        self.note_request(&context);
         let args = request.arguments.unwrap_or_default();
         let Some(p) = prompts::get(&request.name, &args) else {
             return Err(ErrorData::invalid_params(
@@ -154,16 +189,18 @@ impl ServerHandler for Server {
     async fn list_resources(
         &self,
         _request: Option<PaginatedRequestParams>,
-        _context: RequestContext<RoleServer>,
+        context: RequestContext<RoleServer>,
     ) -> Result<ListResourcesResult, ErrorData> {
+        self.note_request(&context);
         Ok(serde_json::from_value(prompts::resources()).expect("a resource list"))
     }
 
     async fn read_resource(
         &self,
         request: ReadResourceRequestParams,
-        _context: RequestContext<RoleServer>,
+        context: RequestContext<RoleServer>,
     ) -> Result<ReadResourceResponse, ErrorData> {
+        self.note_request(&context);
         let Some(r) = prompts::read(&request.uri) else {
             return Err(ErrorData::resource_not_found(
                 format!("there's no resource `{}`", request.uri),
@@ -178,8 +215,9 @@ impl ServerHandler for Server {
     async fn list_tools(
         &self,
         _request: Option<PaginatedRequestParams>,
-        _context: RequestContext<RoleServer>,
+        context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, ErrorData> {
+        self.note_request(&context);
         Ok(serde_json::from_value(json!({ "tools": tool_list() })).expect("a tool list"))
     }
 
@@ -188,6 +226,7 @@ impl ServerHandler for Server {
         request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, ErrorData> {
+        self.note_request(&context);
         let name = request.name.to_string();
         let args = Value::Object(request.arguments.unwrap_or_default());
         let config = self.config.clone();
