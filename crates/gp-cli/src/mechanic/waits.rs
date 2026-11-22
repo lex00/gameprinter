@@ -111,6 +111,13 @@ fn ended(home: &Path, cards: &Cards, on: &Wait, since: u64, name: &str) -> Optio
     {
         return Some(landing(l));
     }
+    // The row waited on has a card still open or unsettled: the wait is for
+    // that card, so it holds until the card is used, refused or gone, even
+    // when the row closed meanwhile (another fix lifted its line past its
+    // target, 2026-11-22).
+    if cards.busy.contains(on) {
+        return None;
+    }
     let q = read_queue(&queue_of(home, game));
     if let Some(r) = q.iter().find(|r| r["mechanic"] == json!(row)) {
         if r["status"] != json!("done") {
@@ -325,5 +332,50 @@ mod tests {
         let later = json!({"what": "w2", "done_ms": 150});
         cards.landed.insert(at("fix"), later);
         assert_eq!(wake(h, None, &cards), vec![at("a")]);
+    }
+
+    /// The owner's case (2026-11-22): a row waited on a row whose card was
+    /// up, and woke when that row closed by its target, which another fix
+    /// had met; the card never landed. While the row waited on has a card
+    /// open, the wait holds; once the card is refused or gone, a done row
+    /// ends it.
+    #[test]
+    fn a_wait_on_a_row_with_an_open_card_holds_until_the_card_ends() {
+        let h = home();
+        let h = h.path();
+        put(
+            h,
+            "rooftop",
+            "queue.json",
+            json!([
+                {"mechanic": "dup", "status": "in line", "waits_on": "rooftop/fix", "waits_since": 100},
+                {"mechanic": "fix", "status": "done", "note": "Met its target: x sprites at least 1."},
+            ]),
+        );
+        let at = |r: &str| ("rooftop".to_owned(), r.to_owned());
+        let mut cards = Cards::default();
+        cards.busy.insert(at("fix"));
+        assert!(wake(h, None, &cards).is_empty());
+        assert_eq!(row(h, "rooftop", "dup")["status"], "in line");
+        // The card was refused (settled): the wait is over.
+        cards.busy.clear();
+        assert_eq!(wake(h, None, &cards), vec![at("dup")]);
+        let dup = row(h, "rooftop", "dup");
+        let n = dup["note"].as_str().unwrap();
+        assert!(n.contains("fix is done"), "{n}");
+        // Its card landing ends a wait at once, busy or not.
+        put(
+            h,
+            "rooftop",
+            "queue.json",
+            json!([
+                {"mechanic": "dup", "status": "in line", "waits_on": "rooftop/fix", "waits_since": 100},
+                {"mechanic": "fix", "status": "in line"},
+            ]),
+        );
+        cards.busy.insert(at("fix"));
+        let l = json!({"what": "w", "commit": "abc1234", "done_ms": 200});
+        cards.landed.insert(at("fix"), l);
+        assert_eq!(wake(h, None, &cards), vec![at("dup")]);
     }
 }

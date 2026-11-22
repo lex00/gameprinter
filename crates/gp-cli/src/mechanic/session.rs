@@ -43,7 +43,8 @@ pub(crate) fn read_queue(f: &Path) -> Vec<Value> {
 
 /// Writes the quest log, stamping `changed_ms` on each row that is new or
 /// differs from the file's (a card that ended before it can't move it:
-/// the runner's `settle_card_rows`); a row as it was keeps its stamp.
+/// the runner's `settle_card_rows`); a row as it was keeps its stamp. A row
+/// that goes in line gets `parked_ms` too.
 pub(crate) fn write_queue(f: &Path, q: &[Value]) -> Result<()> {
     if let Some(d) = f.parent() {
         fs::create_dir_all(d)?;
@@ -72,6 +73,19 @@ pub(crate) fn write_queue(f: &Path, q: &[Value]) -> Result<()> {
                 && !stamp.is_null()
             {
                 o.insert("changed_ms".into(), stamp);
+            }
+            // A row that goes in line is parked from now (`parked_ms`), unless
+            // the change stamped its own: the person's words written before
+            // it don't wake it (crate::steps::row_steps).
+            let into_line = r["status"] == json!("in line")
+                && was.is_none_or(|o| o["status"] != json!("in line"));
+            let own =
+                r["parked_ms"].is_u64() && was.is_none_or(|o| o["parked_ms"] != r["parked_ms"]);
+            if into_line
+                && !own
+                && let Some(o) = r.as_object_mut()
+            {
+                o.insert("parked_ms".into(), json!(now));
             }
             r
         })

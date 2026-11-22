@@ -218,7 +218,12 @@ pub(crate) fn plan(
                 .as_u64()
                 .or_else(|| w["started_ms"].as_u64())
                 .unwrap_or(0);
-            is_live(w) || runs(w) >= MAX_RUNS || now_ms.saturating_sub(ended) < AGAIN_AFTER_MS
+            // A worker the person stopped parked its row in line: once
+            // they set it next again its step starts at once.
+            let by_person = w["stopped_by"] == json!("person");
+            is_live(w)
+                || runs(w) >= MAX_RUNS
+                || (!by_person && now_ms.saturating_sub(ended) < AGAIN_AFTER_MS)
         })
         .filter_map(|w| w["step"]["id"].as_str())
         .collect();
@@ -817,10 +822,37 @@ fn settle_row_by_card(
         ),
         _ => (status, note),
     };
+    // A NO that names the card it duplicates (DUPLICATE OF on the card,
+    // `duplicate_of` on POST /api/asks/ID) parks the row on that card's row
+    // instead of sending it back to make the same card again (2026-11-22:
+    // three cards for one row).
+    let dup = match kind {
+        "no" => duplicate_of(home, a, game, row),
+        _ => None,
+    };
+    let (status, note) = match &dup {
+        Some(d) => ("in line", d.note(what, words)),
+        None => (status, note),
+    };
     let Some(o) = r.as_object_mut() else {
         return Ok(true);
     };
-    if status == "in line" && o.contains_key("target") {
+    if let Some(d) = &dup {
+        // Parked from now: words the person wrote before don't wake it.
+        o.insert("parked_ms".into(), json!(gp_mcp::asks::now_ms()));
+        match &d.on {
+            Some(on) => {
+                o.insert("waits_on".into(), json!(on));
+                o.insert("waits_since".into(), json!(gp_mcp::asks::now_ms()));
+                o.remove("parked");
+            }
+            None => {
+                let why = format!("its card duplicated the card {}", d.other);
+                o.insert("parked".into(), json!(why));
+            }
+        }
+    }
+    if status == "in line" && o.contains_key("target") && dup.is_none() {
         o.insert("awaiting_measure".into(), json!(gp_mcp::asks::now_ms()));
     }
     if o.get("by") == Some(&json!("person")) && !o.contains_key("asked") {
@@ -835,6 +867,50 @@ fn settle_row_by_card(
     }
     crate::mechanic::session::write_queue(&f, &q)?;
     Ok(true)
+}
+
+/// A card the person refused as a duplicate of another: the other card's
+/// id and what it does, and the row it is for (`GAME/ROW`) when that is
+/// another row, which the refused card's row then waits on.
+struct Duplicate {
+    other: String,
+    other_what: String,
+    on: Option<String>,
+}
+
+impl Duplicate {
+    /// The refused card's row's note.
+    fn note(&self, what: &str, words: Option<&str>) -> String {
+        let mut n = match &self.on {
+            Some(on) => format!(
+                "You said NO to its card ({what}): it duplicates the card for {on} ({}). It waits on {on}, and the loop takes it up again once that card is used, refused or gone.",
+                self.other_what
+            ),
+            None => format!(
+                "You said NO to its card ({what}): it duplicates the card {} ({}). It waits in line; set it next to take it up again.",
+                self.other, self.other_what
+            ),
+        };
+        if let Some(w) = words {
+            n.push_str(&format!(" You wrote: \"{w}\"."));
+        }
+        n
+    }
+}
+
+/// The card ask `a` (of row `row` of `game`) was refused as a duplicate
+/// of, when its NO named one (`duplicate_of`) that is still on file.
+fn duplicate_of(home: &Path, a: &Value, game: &str, row: &str) -> Option<Duplicate> {
+    let other = a["duplicate_of"].as_str().filter(|d| !d.is_empty())?;
+    let b = gp_mcp::asks::read(home, other)?;
+    let on = ask_row(home, &b)
+        .filter(|(g, r)| !(g == game && r == row))
+        .map(|(g, r)| format!("{g}/{r}"));
+    Some(Duplicate {
+        other: other.to_owned(),
+        other_what: card_what(&b),
+        on,
+    })
 }
 
 /// How often the runner archives finished rows, and wakes the rows whose
@@ -1686,6 +1762,12 @@ fn watched(setup: Setup, mut rec: Value, resume: bool) -> std::thread::JoinHandl
         let freed = crate::builds::remove_loop_build(&setup.home, &id);
         if freed > 0 {
             rec["build_removed"] = json!(freed);
+        }
+        // A worker the person stopped leaves its row parked in line, so no
+        // worker takes it up again until they set it next (before its record
+        // ends, so no look finds the step open with no worker).
+        if rec["stopped_by"] == json!("person") {
+            park_stopped_row(&setup.home, &rec);
         }
         write(&setup.home, &rec);
         report_on_row(&setup, &rec);
@@ -2579,13 +2661,20 @@ fn work(setup: &Setup, live: &Live, rec: &mut Value, resume: bool) -> anyhow::Re
             if let Some(code) = ended {
                 set_out(live, false);
                 p.reap();
+                // Stopped from outside this server (gp loop, another
+                // server): its record says so, and a stop isn't a failed try
+                // to start again.
+                if code != Some(0) && stopped_on_file(&setup.home, &id) {
+                    stopped_by_person(rec);
+                    rec["last"] = json!(last_line(&log_path));
+                    return Ok(());
+                }
                 break code;
             }
-            if flag.load(Ordering::Relaxed) {
+            if flag.load(Ordering::Relaxed) || stopped_on_file(&setup.home, &id) {
                 set_out(live, false);
                 end(&p);
-                rec["state"] = json!("stopped");
-                rec["why"] = json!("you stopped it");
+                stopped_by_person(rec);
                 rec["last"] = json!(last_line(&log_path));
                 return Ok(());
             }
@@ -2637,9 +2726,8 @@ fn work(setup: &Setup, live: &Live, rec: &mut Value, resume: bool) -> anyhow::Re
         );
         let wait_until = Instant::now() + setup.again_after;
         while Instant::now() < wait_until {
-            if flag.load(Ordering::Relaxed) {
-                rec["state"] = json!("stopped");
-                rec["why"] = json!("you stopped it");
+            if flag.load(Ordering::Relaxed) || stopped_on_file(&setup.home, &id) {
+                stopped_by_person(rec);
                 return Ok(());
             }
             std::thread::sleep(Duration::from_millis(100));
@@ -2694,18 +2782,72 @@ pub(crate) fn stop_worker(home: &Path, id: &str) -> Result<Value, String> {
         .ok()
         .and_then(|b| serde_json::from_slice(&b).ok())
         .ok_or_else(|| format!("no worker on step {id}"))?;
-    if let Some(pid) = w["pid"].as_u64().filter(|p| gp_mcp::proc::alive(*p)) {
-        // Its process group: the launcher's, which outlives the launcher.
-        let group = w["group"].as_u64().unwrap_or(pid);
-        gp_mcp::proc::stop_group(group as u32, Duration::from_secs(2));
-    }
+    // Its process group: the launcher's, which outlives the launcher.
+    let group = w["pid"]
+        .as_u64()
+        .filter(|p| gp_mcp::proc::alive(*p))
+        .map(|pid| w["group"].as_u64().unwrap_or(pid));
+    // The stop goes on its record before its process ends, so whichever
+    // server watches it reads a stop, not a failed try to start again; and
+    // its row is parked first, so no look finds the step open with its
+    // worker ended.
     if loop_state::LIVE.contains(&w["state"].as_str().unwrap_or("")) {
-        w["state"] = json!("stopped");
-        w["why"] = json!("you stopped it");
+        stopped_by_person(&mut w);
         w["pid"] = Value::Null;
+        park_stopped_row(home, &w);
         write(home, &w);
     }
+    if let Some(group) = group {
+        gp_mcp::proc::stop_group(group as u32, Duration::from_secs(2));
+    }
     Ok(json!({"stopped": id}))
+}
+
+/// Marks a worker's record stopped by the person.
+fn stopped_by_person(rec: &mut Value) {
+    rec["state"] = json!("stopped");
+    rec["why"] = json!("you stopped it");
+    rec["stopped_by"] = json!("person");
+    rec["stopped_ms"] = json!(gp_mcp::asks::now_ms());
+}
+
+/// Whether worker `id`'s record on file says the person stopped it
+/// ([`stop_worker`] from outside the server watching it).
+fn stopped_on_file(home: &Path, id: &str) -> bool {
+    let w: Value = fs::read(file(home, id))
+        .ok()
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or_default();
+    w["state"] == json!("stopped") && w["stopped_by"] == json!("person")
+}
+
+/// The row of a worker the person stopped: parked in line, its note kept
+/// after why, so no worker takes it up (crate::steps gives a parked row no
+/// step for words written before the park) until it is set next again,
+/// which isn't a hand fix (crate::mechanic::is_parked), or the person
+/// writes on it. A done row stays done.
+fn park_stopped_row(home: &Path, rec: &Value) {
+    let Some((game, row)) = row_of(&rec["step"]) else {
+        return;
+    };
+    if !crate::mechanic::session::name_ok(&game) {
+        return;
+    }
+    let f = home.join("mechanics").join(&game).join("queue.json");
+    let mut q = crate::mechanic::session::read_queue(&f);
+    let Some(r) = q
+        .iter_mut()
+        .find(|r| r["mechanic"] == json!(row) && r["status"] != json!("done"))
+    else {
+        return;
+    };
+    let id = rec["step"]["id"].as_str().unwrap_or("");
+    let why = format!("you stopped its worker (loop-{id}); set it next to take it up again");
+    if r["parked"] == json!(why.as_str()) && r["status"] == json!("in line") {
+        return;
+    }
+    crate::mechanic::park_row(r, &why);
+    let _ = crate::mechanic::session::write_queue(&f, &q);
 }
 
 /// A worker's process as started by [`launch`]. On unix it runs on its
@@ -3249,6 +3391,101 @@ mod tests {
             ask_row(home, &gp_mcp::asks::read(home, "ask-2").unwrap()),
             Some(("g".into(), "b".into()))
         );
+    }
+
+    /// The owner's case (2026-11-22): refusing a duplicate card sent its row
+    /// to next, and a worker made the same card again, three times. A NO
+    /// naming the card it duplicates parks the row on that card's row with
+    /// both cards named; it wakes when that card ends; a NO naming another
+    /// card of its own row parks it with no wait; a plain NO is as before.
+    #[test]
+    fn a_no_as_a_duplicate_parks_the_row_on_the_other_cards_row() {
+        let t = tempfile::tempdir().unwrap();
+        let home = t.path();
+        let f = home.join("mechanics/g/queue.json");
+        fs::create_dir_all(f.parent().unwrap()).unwrap();
+        fs::write(
+            &f,
+            json!([
+                {"mechanic": "dup", "status": "in line", "note": "Its card waits for your YES"},
+                {"mechanic": "fix", "status": "in line", "note": "Its card waits for your YES"},
+                {"mechanic": "twice", "status": "in line", "note": "Its card waits for your YES"},
+                {"mechanic": "plain", "status": "in line", "note": "Its card waits for your YES"},
+            ])
+            .to_string(),
+        )
+        .unwrap();
+        let now = gp_mcp::asks::now_ms();
+        let asks = gp_mcp::asks::dir(home);
+        fs::create_dir_all(&asks).unwrap();
+        fs::create_dir_all(loop_state::workers_dir(home)).unwrap();
+        let card = |n: u64, row: &str, msg: &str, extra: Value| {
+            let step = format!("s{n:012x}");
+            fs::write(
+                file(home, &step),
+                json!({"step": {"id": step, "touches": [format!("row:g/{row}")]}}).to_string(),
+            )
+            .unwrap();
+            let mut a = json!({"id": format!("ask-{n}"), "made_ms": now - 1000 + n, "step": step, "game": "g",
+                "command": "model gate", "argv": ["g", "--message", msg]});
+            for (k, v) in extra.as_object().unwrap() {
+                a[k] = v.clone();
+            }
+            fs::write(asks.join(format!("ask-{n}.json")), a.to_string()).unwrap();
+        };
+        let fix = "g: the bubbles go a frame late. Expect: x";
+        card(1, "fix", fix, json!({"state": "open"}));
+        card(
+            2,
+            "dup",
+            "g: the bubbles a frame later. Expect: x",
+            json!({"state": "no", "answered_ms": now, "duplicate_of": "ask-1", "words": "same as the other"}),
+        );
+        card(3, "twice", "g: one.", json!({"state": "open"}));
+        card(
+            4,
+            "twice",
+            "g: one again. Expect: x",
+            json!({"state": "no", "answered_ms": now, "duplicate_of": "ask-3"}),
+        );
+        let no = json!({"state": "no", "answered_ms": now});
+        card(5, "plain", "g: foam.", no);
+        settle_card_rows(home);
+        let row = |m: &str| -> Value {
+            crate::mechanic::session::read_queue(&f)
+                .into_iter()
+                .find(|r| r["mechanic"] == json!(m))
+                .unwrap()
+        };
+        let d = row("dup");
+        assert_eq!(d["status"], "in line");
+        assert_eq!(d["waits_on"], "g/fix");
+        assert!(crate::mechanic::is_parked(&d));
+        assert_eq!(
+            d["note"],
+            "You said NO to its card (the bubbles a frame later): it duplicates the card for g/fix (the bubbles go a frame late). It waits on g/fix, and the loop takes it up again once that card is used, refused or gone. You wrote: \"same as the other\"."
+        );
+        let tw = row("twice");
+        assert_eq!(tw["status"], "in line");
+        assert!(tw.get("waits_on").is_none());
+        assert!(crate::mechanic::is_parked(&tw));
+        let twn = tw["note"].as_str().unwrap();
+        assert!(twn.contains("duplicates the card ask-3 (one)"), "{tw}");
+        assert_eq!(row("plain")["status"], "next");
+        // While fix's card is open, dup waits; once it lands, dup wakes.
+        assert!(wake_waiting(home, None, now).is_empty());
+        card(
+            1,
+            "fix",
+            fix,
+            json!({"state": "used", "row_settled": true,
+                "ran": {"state": "landed", "done_ms": now + 60_000, "lines": ["PASS: landed 0a1b2c3d on main"]}}),
+        );
+        assert_eq!(
+            wake_waiting(home, None, now + 60_000),
+            vec![("g".to_owned(), "dup".to_owned())]
+        );
+        assert_eq!(row("dup")["status"], "next");
     }
 
     /// The runner archives a row done for an hour with the commit its
@@ -3923,6 +4160,72 @@ mod tests {
         let r = record(&setup.home, id);
         assert_eq!(r["state"], "stopped");
         assert_eq!(r["why"], "you stopped it");
+        assert_eq!(r["stopped_by"], "person");
+    }
+
+    /// The owner's case (2026-11-22): a worker stopped from outside the
+    /// server watching it was started again at once as try 2, and once its
+    /// row's note changed, as a new step. A stop isn't a failed try: the
+    /// worker ends stopped after try 1, its row is parked in line with its
+    /// note kept, and its step waits for the row to go next again, then
+    /// starts at once.
+    #[test]
+    fn a_stopped_worker_parks_its_row_and_is_not_tried_again() {
+        let t = tempfile::tempdir().unwrap();
+        let setup = rig(t.path(), "echo working\nsleep 30\n");
+        let f = setup.home.join("mechanics/g/queue.json");
+        fs::create_dir_all(f.parent().unwrap()).unwrap();
+        fs::write(
+            &f,
+            json!([
+                {"mechanic": "r", "status": "agent working", "note": "the foam is too tall"},
+            ])
+            .to_string(),
+        )
+        .unwrap();
+        let id = "s0000000000a9";
+        let mut step = s(id, "agent", &["row:g/r"]);
+        step["repo"] = json!("tools");
+        let h = spawn(setup.clone(), step.clone());
+        let t0 = Instant::now();
+        while record(&setup.home, id)["last"] != json!("working")
+            && t0.elapsed() < Duration::from_secs(10)
+        {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        // As gp loop's stop does it from another process: the record marked
+        // and the process group ended, with this server unaware.
+        let mut w = record(&setup.home, id);
+        let group = w["group"].as_u64().or(w["pid"].as_u64()).unwrap();
+        stopped_by_person(&mut w);
+        write(&setup.home, &w);
+        gp_mcp::proc::stop_group(group as u32, Duration::from_secs(2));
+        h.join().unwrap();
+        let r = record(&setup.home, id);
+        assert_eq!(r["state"], "stopped");
+        assert_eq!(r["tries"], 1, "a stop isn't a failed try");
+        assert!(!files_dir(&setup.home, id).join("brief.2.txt").exists());
+        let row = crate::mechanic::session::read_queue(&f)[0].clone();
+        assert_eq!(row["status"], "in line");
+        assert!(crate::mechanic::is_parked(&row), "{row}");
+        let note = row["note"].as_str().unwrap();
+        assert!(
+            note.starts_with("Parked: you stopped its worker (loop-s0000000000a9)"),
+            "{note}"
+        );
+        assert!(note.ends_with("the foam is too tall"), "{note}");
+        assert!(row.get("worker").is_none());
+        // Set next again (its step the same), it starts at once, though its
+        // worker ended moments ago; a worker that ended on its own waits.
+        let now = gp_mcp::asks::now_ms();
+        let workers = vec![record(&setup.home, id)];
+        let none = BTreeSet::new();
+        let open = std::slice::from_ref(&step);
+        assert_eq!(plan(open, &workers, &none, 3, now).len(), 1);
+        let mut ended = workers[0].clone();
+        ended["stopped_by"] = Value::Null;
+        ended["last_ms"] = json!(now);
+        assert!(plan(open, &[ended], &none, 3, now).is_empty());
     }
 
     #[cfg(unix)]

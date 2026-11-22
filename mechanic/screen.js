@@ -1828,6 +1828,52 @@ async function refreshAsks() {
         });
         card.append(b);
       }
+      // DUPLICATE OF: a NO that names the other open card of the game this
+      // one makes again. Its row then waits on that card's row instead of
+      // going back to make the same card a third time (serve/runner.rs,
+      // duplicate_of).
+      const others = list.filter((x) => x.id !== a.id && !x.ran && (x.state === "open" || x.state === "yes") && (x.game ?? "") === (a.game ?? ""));
+      if (others.length) {
+        const d = el("select", "ask-duplicate");
+        d.title = "Say NO because another card already makes this change: this card's row waits for that one";
+        d.setAttribute("aria-label", "Refuse this card as a duplicate of another card");
+        d.append(new Option("DUPLICATE OF...", ""));
+        for (const x of others) {
+          const xm = (x.argv ?? []).indexOf("--message");
+          const xs = xm >= 0 ? String(x.argv[xm + 1] ?? "") : String(x.says ?? "");
+          const xw = xs.replace(new RegExp(`^${x.game ?? ""}\\s*:\\s*`, "i"), "").split(" Expect:")[0].trim();
+          const xr = askRow(x);
+          d.append(new Option(`${xr ? `${xr}: ` : ""}${xw.length > 70 ? `${xw.slice(0, 70)}...` : xw}`, x.id));
+        }
+        d.addEventListener("click", (ev) => ev.stopPropagation());
+        d.addEventListener("change", async () => {
+          const other = d.value;
+          if (!other) return;
+          for (const x of card.querySelectorAll("button, select")) x.disabled = true;
+          const words = t.value.trim() ? withSeen(t.value.trim()) : "";
+          const body = { answer: "no", duplicate_of: other };
+          if (words) body.words = words;
+          try {
+            const r = await fetch(`/api/asks/${encodeURIComponent(a.id)}`, {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify(body),
+            });
+            const out = await r.json().catch(() => ({}));
+            if (!r.ok) says.textContent = `${a.says} (Your answer didn't save: ${out.error ?? r.status}.)`;
+            else {
+              askWords.delete(a.id);
+              asksWording.delete(a.id);
+              note("NO, as a duplicate: its row waits for the other card.", 5000);
+            }
+          } catch (err) {
+            says.textContent = `${a.says} (Your answer didn't save. Is the page's server still running?)`;
+          }
+          asksDrawn = "";
+          void refreshAsks();
+        });
+        card.append(d);
+      }
       card.append(t, w);
     }
     (asking(a) ? box : said).append(card);

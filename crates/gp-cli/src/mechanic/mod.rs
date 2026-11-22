@@ -470,7 +470,7 @@ pub enum MechanicCmd {
         mechanic: Option<String>,
         /// List the archive of finished rows: their notes, facts, session
         /// and landed commit, newest closed first.
-        #[arg(long, conflicts_with_all = ["status", "known", "reads", "opens", "out_of_scope", "in_scope", "repo", "clip", "no_clip", "target", "no_target", "measure_needed", "waits_on", "no_wait", "plain"])]
+        #[arg(long, conflicts_with_all = ["status", "known", "reads", "opens", "out_of_scope", "in_scope", "repo", "clip", "no_clip", "target", "no_target", "measure_needed", "waits_on", "parked", "no_wait", "plain"])]
         archived: bool,
         #[arg(long, requires = "mechanic", value_parser = ["done", "asking you", "agent working", "in line", "next"])]
         status: Option<String>,
@@ -557,6 +557,13 @@ pub enum MechanicCmd {
             conflicts_with = "no_wait"
         )]
         waits_on: Option<String>,
+        /// Park the row on purpose, with why: given with --status "in
+        /// line", its note becomes "Parked: WHY." before the note it had
+        /// (or --note's). A park, with this or --waits-on, isn't a hand fix
+        /// of the loop's work, and setting a parked row next isn't either:
+        /// neither files a trouble row. Another status ends the park.
+        #[arg(long, value_name = "WHY", requires = "status")]
+        parked: Option<String>,
         /// End the row's wait without changing its status.
         #[arg(long, requires = "mechanic")]
         no_wait: bool,
@@ -1169,6 +1176,7 @@ pub(crate) fn run(cmd: &MechanicCmd, paths: &Paths) -> Result<Outcome> {
             no_target,
             measure_needed,
             waits_on,
+            parked,
             no_wait,
             archived,
         } => {
@@ -1192,8 +1200,18 @@ pub(crate) fn run(cmd: &MechanicCmd, paths: &Paths) -> Result<Outcome> {
             let games = crate::roms_cmd::games_dir(None);
             // A row's status set from outside the loop's steps while the
             // runner goes is a hand fix: the loop files it (crate::trouble).
+            // A deliberate park, and a parked row set next, aren't.
             if let (Some(m), Some(st)) = (mechanic.as_deref(), status.as_deref()) {
-                crate::trouble::status_by_hand(paths, game, m, st);
+                let parks = st == "in line" && (parked.is_some() || waits_on.is_some());
+                let unparks = st == "next"
+                    && queue_file(paths, game).is_ok_and(|f| {
+                        read_queue(&f)
+                            .iter()
+                            .any(|r| r["mechanic"] == json!(m) && is_parked(r))
+                    });
+                if !parks && !unparks {
+                    crate::trouble::status_by_hand(paths, game, m, st);
+                }
             }
             queue(
                 paths,
@@ -1219,6 +1237,7 @@ pub(crate) fn run(cmd: &MechanicCmd, paths: &Paths) -> Result<Outcome> {
                     no_target: *no_target,
                     measure_needed: measure_needed.as_deref(),
                     waits_on: waits_on.as_deref(),
+                    parked: parked.as_deref(),
                     no_wait: *no_wait,
                     games: games.as_deref(),
                     under_step: std::env::var("GP_STEP").is_ok_and(|s| !s.is_empty()),
@@ -1434,12 +1453,60 @@ struct RowChange<'a> {
     measure_needed: Option<&'a str>,
     /// The row it is parked on (ROW or GAME/ROW; crate::mechanic::waits).
     waits_on: Option<&'a str>,
+    /// Why the row is parked in line (`--parked`).
+    parked: Option<&'a str>,
     no_wait: bool,
     /// The games checkout, for the game's scoreboard.
     games: Option<&'a std::path::Path>,
     /// Run as a loop step's (GP_STEP): a row asks the person only about a
     /// look (worker_ask_refused).
     under_step: bool,
+}
+
+/// What a park puts in front of a row's note: "Parked: WHY. ".
+fn parked_words(why: &str) -> String {
+    format!("Parked: {}. ", why.trim().trim_end_matches('.'))
+}
+
+/// Row `r`'s note without its park's words in front.
+fn unparked_note(r: &Value) -> String {
+    let note = r["note"].as_str().unwrap_or("");
+    match r["parked"].as_str() {
+        Some(w) => note
+            .strip_prefix(&parked_words(w))
+            .map_or(note, str::trim_start)
+            .to_owned(),
+        None => note.to_owned(),
+    }
+}
+
+/// Parks row `r` in line on purpose, as `gp mechanic queue --status "in
+/// line" --parked WHY` does: "Parked: WHY." before its note (an earlier
+/// park's words taken off), `parked` and `parked_ms` set, its worker gone.
+pub(crate) fn park_row(r: &mut Value, why: &str) {
+    let bare = unparked_note(r);
+    let Some(o) = r.as_object_mut() else { return };
+    let lead = parked_words(why);
+    let n = if bare.is_empty() {
+        lead.trim_end().to_owned()
+    } else {
+        format!("{lead}{bare}")
+    };
+    o.insert("status".into(), json!("in line"));
+    o.insert("note".into(), json!(n));
+    o.insert("parked".into(), json!(why.trim()));
+    o.insert("parked_ms".into(), json!(gp_mcp::asks::now_ms()));
+    o.remove("worker");
+}
+
+/// Whether row `r` is parked in line on purpose: with `--parked`, a wait
+/// on another row, a note that starts "Parked:" (gp mechanic propose
+/// --parked), or by the person stopping its worker.
+pub(crate) fn is_parked(r: &Value) -> bool {
+    r["status"] == json!("in line")
+        && (r.get("parked").is_some()
+            || r.get("waits_on").is_some()
+            || r["note"].as_str().is_some_and(|n| n.starts_with("Parked:")))
 }
 
 /// Why a worker may not leave row `r` asking the person, or None: only a
@@ -1538,6 +1605,14 @@ fn queue(paths: &Paths, game: &str, mechanic: Option<&str>, c: &RowChange) -> Re
     if let Some(t) = c.target {
         crate::scoreboard::check_target(board.as_ref(), game, t).map_err(anyhow::Error::msg)?;
     }
+    if let Some(why) = c.parked {
+        if c.status != Some("in line") {
+            bail!("--parked parks the row: give it --status \"in line\"");
+        }
+        if why.trim().is_empty() {
+            bail!("a parked row says why it waits (--parked WHY)");
+        }
+    }
     // A wait names a row there is, not the row itself, and parks it.
     let wait = match (c.waits_on, mechanic) {
         (Some(w), Some(m)) => {
@@ -1598,7 +1673,33 @@ fn queue(paths: &Paths, game: &str, mechanic: Option<&str>, c: &RowChange) -> Re
                 o.insert("asked".into(), said);
             }
             r["status"] = json!(st);
-            r["note"] = json!(c.note.unwrap_or_default());
+            // Set in line, the row is parked from now: the person's words
+            // before this don't give it a worker, words after do
+            // (crate::steps::row_steps).
+            if st == "in line" {
+                r["parked_ms"] = json!(gp_mcp::asks::now_ms());
+            }
+            // The note stays unless a new one is given: a status alone
+            // doesn't wipe what the row knows.
+            if let Some(n) = c.note {
+                r["note"] = json!(n);
+            }
+            // A deliberate park says why in front of the note, and is kept
+            // as `parked` so a later park replaces its words; another status,
+            // or a new note, ends it (and takes its words off a kept note).
+            match c.parked.filter(|_| st == "in line") {
+                Some(why) => park_row(r, why),
+                None if st != "in line" || c.note.is_some() => {
+                    if c.note.is_none() {
+                        let bare = unparked_note(r);
+                        r["note"] = json!(bare);
+                    }
+                    if let Some(o) = r.as_object_mut() {
+                        o.remove("parked");
+                    }
+                }
+                None => {}
+            }
             if let Some(o) = r.as_object_mut() {
                 match c.worker.filter(|_| st == "agent working") {
                     Some(w) => o.insert("worker".into(), json!(w)),
@@ -1978,6 +2079,7 @@ mod tests {
             no_target: false,
             measure_needed: None,
             waits_on: None,
+            parked: None,
             no_wait: false,
             games: None,
             under_step: false,
@@ -2088,6 +2190,7 @@ mod tests {
             no_target: false,
             measure_needed: None,
             waits_on: None,
+            parked: None,
             no_wait: false,
             games: None,
             under_step: false,
@@ -2137,6 +2240,110 @@ mod tests {
         assert!(pic().get("waits_on").is_none());
     }
 
+    /// A status with no --note keeps the row's note (this row lost its own
+    /// that way); --parked puts why in front of it, a park again replaces
+    /// the why, and another status ends the park and takes the why off.
+    /// A park is a park, not a hand fix ([`is_parked`]).
+    #[test]
+    fn a_status_keeps_the_note_and_a_park_says_why() {
+        let d = tempfile::tempdir().unwrap();
+        let p = paths(d.path());
+        let none: &[String] = &[];
+        let plain = RowChange {
+            status: None,
+            note: None,
+            plain: None,
+            worker: None,
+            known: none,
+            reads: none,
+            opens: none,
+            out_of_scope: None,
+            in_scope: false,
+            repo: None,
+            clip: None,
+            no_clip: false,
+            target: None,
+            no_target: false,
+            measure_needed: None,
+            waits_on: None,
+            parked: None,
+            no_wait: false,
+            games: None,
+            under_step: false,
+        };
+        let set = |c: &RowChange| queue(&p, "test-hop", Some("pic"), c);
+        let f = queue_file(&p, "test-hop").unwrap();
+        let pic = || {
+            read_queue(&f)
+                .into_iter()
+                .find(|r| r["mechanic"] == "pic")
+                .unwrap()
+        };
+        set(&RowChange {
+            status: Some("next"),
+            note: Some("the duck is 2 frames late"),
+            ..plain
+        })
+        .unwrap();
+        set(&RowChange {
+            status: Some("agent working"),
+            ..plain
+        })
+        .unwrap();
+        assert_eq!(pic()["note"], "the duck is 2 frames late");
+        assert!(!is_parked(&pic()));
+        // --parked needs in line and words.
+        for (st, why) in [("next", "a duplicate"), ("in line", "  ")] {
+            let c = RowChange {
+                status: Some(st),
+                parked: Some(why),
+                ..plain
+            };
+            assert!(set(&c).is_err(), "{st} {why:?}");
+        }
+        let park = |why: &'static str| RowChange {
+            status: Some("in line"),
+            parked: Some(why),
+            ..plain
+        };
+        set(&park("a duplicate of the card for fix.")).unwrap();
+        let r = pic();
+        assert_eq!(
+            r["note"],
+            "Parked: a duplicate of the card for fix. the duck is 2 frames late"
+        );
+        assert_eq!(r["parked"], "a duplicate of the card for fix.");
+        assert!(is_parked(&r));
+        set(&park("game work stops")).unwrap();
+        assert_eq!(
+            pic()["note"],
+            "Parked: game work stops. the duck is 2 frames late"
+        );
+        // In line again with no words keeps the park.
+        set(&RowChange {
+            status: Some("in line"),
+            ..plain
+        })
+        .unwrap();
+        assert!(is_parked(&pic()));
+        set(&RowChange {
+            status: Some("next"),
+            ..plain
+        })
+        .unwrap();
+        let r = pic();
+        assert_eq!(r["note"], "the duck is 2 frames late");
+        assert!(r.get("parked").is_none());
+        assert!(!is_parked(&r));
+        // A row proposed parked, or waiting on a row, is parked too.
+        let proposed = json!({"status": "in line", "note": "Parked: later. x"});
+        assert!(is_parked(&proposed));
+        let waiting = json!({"status": "in line", "waits_on": "g/fix"});
+        assert!(is_parked(&waiting));
+        let next = json!({"status": "next", "parked": "x"});
+        assert!(!is_parked(&next));
+    }
+
     /// A row's target is a measure on a scoreboard line: a target the
     /// board can't measure is refused, done is refused while the measure
     /// is short, and the board's measure closes the row once it gets there;
@@ -2181,6 +2388,7 @@ mod tests {
             no_target: false,
             measure_needed: None,
             waits_on: None,
+            parked: None,
             no_wait: false,
             games: Some(games.path()),
             under_step: false,
@@ -2364,6 +2572,7 @@ mod tests {
             no_target: false,
             measure_needed: None,
             waits_on: None,
+            parked: None,
             no_wait: false,
             games: None,
             under_step: false,

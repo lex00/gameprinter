@@ -6,7 +6,7 @@
 //! | Endpoint | What |
 //! |---|---|
 //! | `GET /api/asks` | The asks still open, and the yeses not yet used, newest first |
-//! | `POST /api/asks/{id}` | `{answer: "yes" \| "no", words?}`: the person's answer to an open ask, with what they wrote beside it: kept on the ask, written to its row's talk as their turn, and put in the row's note when the runner settles the row by the card (a NO with words sends the row to next with them) |
+//! | `POST /api/asks/{id}` | `{answer: "yes" \| "no", words?, duplicate_of?}`: the person's answer to an open ask, with what they wrote beside it: kept on the ask, written to its row's talk as their turn, and put in the row's note when the runner settles the row by the card (a NO with words sends the row to next with them). A NO with `duplicate_of` (another open card of the game, the card's DUPLICATE OF) parks the row in line waiting on that card's row, instead of sending it back to make the same card again |
 
 use serde_json::{Value, json};
 
@@ -56,7 +56,13 @@ fn answer(ctx: &Ctx, req: &Request, params: &Params) -> Result<Response, Fail> {
         _ => return Err(Fail::bad_request("answer is yes or no")),
     };
     let words = v["words"].as_str().unwrap_or("").trim();
-    let done = asks::answer_with(&ctx.paths.home, id, a, words).map_err(Fail::conflict)?;
+    let home = &ctx.paths.home;
+    let dup = duplicate_of(home, id, a, &v)?;
+    let mut done = asks::answer_with(home, id, a, words).map_err(Fail::conflict)?;
+    if let Some(d) = &dup {
+        asks::mark(home, id, "duplicate_of", json!(d)).map_err(Fail::conflict)?;
+        done["duplicate_of"] = json!(d);
+    }
     // The words go to the card's row as the person's turn, so its worker
     // reads them with the row; the row's status is the runner's to set
     // when it settles the card (runner::settle_card_rows).
@@ -68,10 +74,16 @@ fn answer(ctx: &Ctx, req: &Request, params: &Params) -> Result<Response, Fail> {
             asks::Answer::Yes => "YES",
             asks::Answer::No => "NO",
         };
-        let text = format!(
-            "{said} to the card ({}): {w}",
-            super::runner::card_what(&done)
-        );
+        let text = match &dup {
+            Some(d) => format!(
+                "NO to the card ({}), a duplicate of card {d}: {w}",
+                super::runner::card_what(&done)
+            ),
+            None => format!(
+                "{said} to the card ({}): {w}",
+                super::runner::card_what(&done)
+            ),
+        };
         let turn = crate::mechanic::session::Session::open_or_make(&ctx.paths, &game, &row)
             .and_then(|s| s.turn_keeping_status(json!({"by": "player", "text": text, "card": id})));
         out["row"] = json!(format!("{game}/{row}"));
@@ -80,4 +92,47 @@ fn answer(ctx: &Ctx, req: &Request, params: &Params) -> Result<Response, Fail> {
         }
     }
     Ok(Response::json(&out))
+}
+
+/// The card a NO names as the one ask `id` duplicates (`duplicate_of`):
+/// another ask on file, of the same game, still open or holding a yes.
+/// Refused with a YES, or when it names no such card.
+fn duplicate_of(
+    home: &std::path::Path,
+    id: &str,
+    a: asks::Answer,
+    v: &Value,
+) -> Result<Option<String>, Fail> {
+    let Some(other) = v["duplicate_of"]
+        .as_str()
+        .map(str::trim)
+        .filter(|d| !d.is_empty())
+    else {
+        return Ok(None);
+    };
+    if a != asks::Answer::No {
+        return Err(Fail::bad_request("duplicate_of goes with a NO"));
+    }
+    if other == id {
+        return Err(Fail::bad_request("a card isn't a duplicate of itself"));
+    }
+    let Some(mine) = asks::read(home, id) else {
+        let why = format!("there's no ask {id}");
+        return Err(Fail::conflict(why));
+    };
+    let Some(b) = asks::read(home, other) else {
+        let why = format!("duplicate_of: there's no card {other}");
+        return Err(Fail::bad_request(why));
+    };
+    let now = asks::now_ms();
+    let state = b["state"].as_str().unwrap_or("?");
+    if !(asks::is_open(&b, now) || asks::is_yes(&b, now) || state == "running") {
+        let why = format!("duplicate_of: card {other} isn't open any more ({state})");
+        return Err(Fail::bad_request(why));
+    }
+    if b["game"] != mine["game"] {
+        let why = format!("duplicate_of: card {other} is for another game");
+        return Err(Fail::bad_request(why));
+    }
+    Ok(Some(other.to_owned()))
 }

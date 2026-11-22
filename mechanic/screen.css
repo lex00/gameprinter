@@ -172,6 +172,8 @@ canvas { display: block; background: #000; border: 2px solid var(--line); image-
 .asks button { flex: none; font: bold 12px var(--mono); padding: 0 10px; }
 .asks .ask-yes { color: var(--bg); background: var(--gold); border: 2px solid var(--gold); }
 .asks .ask-no { color: var(--fg); background: transparent; border: 2px solid var(--muted); }
+/* A NO naming the open card this one duplicates. */
+.asks .ask-duplicate { color: var(--fg); background: var(--bg); border: 2px solid var(--muted); font: 11px var(--mono); max-width: 14em; }
 /* A card's answer box, open: the person's words, sent alone or with YES or NO. */
 .asks .ask-words-send { order: 5; color: var(--bg); background: var(--gold); border: 2px solid var(--gold); font-size: 11px; }
 .asks .ask-card.wording { flex-wrap: wrap; }

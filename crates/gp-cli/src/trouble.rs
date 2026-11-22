@@ -365,7 +365,9 @@ fn runner_going(home: &Path) -> bool {
 /// `gp mechanic queue GAME ROW --status S` from outside the loop's steps
 /// (no GP_STEP, no GP_WORKER) while the runner goes: a hand fix, filed. A
 /// trouble row set by hand isn't filed again, nor a row of a game whose
-/// work the owner holds (gp loop set --hold): setting it is theirs.
+/// work the owner holds (gp loop set --hold): setting it is theirs. The
+/// queue command doesn't call this for a deliberate park (`--parked`,
+/// `--waits-on`) or a parked row set next (crate::mechanic::is_parked).
 pub(crate) fn status_by_hand(paths: &Paths, game: &str, row: &str, status: &str) {
     let set = |k: &str| std::env::var_os(k).is_some_and(|v| !v.is_empty());
     if row.starts_with("trouble-")

@@ -217,8 +217,18 @@ pub(crate) fn row_steps(paths: &gp_evidence::Paths, games: Option<&Path>) -> Vec
                 .rev()
                 .find(|l| !l.trim().is_empty())
                 .and_then(|l| serde_json::from_str(l).ok());
-            let answered =
-                last.as_ref().is_some_and(|t| t["by"] == json!("player")) && status != "done";
+            // A row in line was parked (on a card, a row, a stop, a duplicate
+            // NO): the person's words written before the park don't wake it,
+            // words after it do (their COMMENT, a card's answer box). Its
+            // park time is `parked_ms`, else when it last changed.
+            let parked_at = r["parked_ms"]
+                .as_u64()
+                .or_else(|| r["changed_ms"].as_u64())
+                .unwrap_or(0);
+            let after_park = |t: &Value| t["at_ms"].as_u64().is_some_and(|at| at > parked_at);
+            let woke = |t: &Value| status != "in line" || after_park(t);
+            let by_person = last.as_ref().filter(|t| t["by"] == json!("player"));
+            let answered = status != "done" && by_person.is_some_and(woke);
             if !answered && !matches!(status, "next" | "agent working") {
                 continue;
             }
@@ -344,6 +354,50 @@ pub(crate) fn open_of(answers: &[Answer], held: &[Value]) -> Vec<Value> {
 mod tests {
     use super::*;
     use crate::next::step;
+
+    /// The owner's rule (2026-11-22): the person's words on a parked row
+    /// reach a worker (their COMMENT, a card's answer box), unless the row
+    /// was parked after they wrote them. A comment on a parked row gives a
+    /// step; parking it after the comment gives none; a second comment
+    /// gives one again; a row that goes in line is parked from then.
+    #[test]
+    fn a_comment_on_a_parked_row_is_a_step_unless_the_park_came_after() {
+        use crate::mechanic::session::{queue_file, read_queue, write_queue};
+        let t = tempfile::tempdir().unwrap();
+        let p = crate::test_paths(&t.path().join("home"));
+        let games = t.path().join("games");
+        let g = games.join("g");
+        std::fs::create_dir_all(&g).unwrap();
+        std::fs::write(g.join(gp_model::MODEL_FILE), "# a model\n").unwrap();
+        let q = queue_file(&p, "g").unwrap();
+        let d = p.home.join("mechanics").join("g").join("parked");
+        std::fs::create_dir_all(&d).unwrap();
+        let talk = d.join("talk.ndjson");
+        let turn = |at: u64| format!("{{\"by\":\"player\",\"text\":\"the rim\",\"at_ms\":{at}}}\n");
+        let r = |at: u64| vec![json!({"mechanic": "parked", "status": "in line", "parked_ms": at})];
+        let named = || -> Vec<String> {
+            row_steps(&p, Some(&games))
+                .iter()
+                .filter_map(|s| s["touches"][0].as_str().map(str::to_owned))
+                .collect()
+        };
+        write_queue(&q, &r(1000)).unwrap();
+        std::fs::write(&talk, turn(2000)).unwrap();
+        assert_eq!(named(), ["row:g/parked"], "a comment after the park");
+        write_queue(&q, &r(3000)).unwrap();
+        assert!(named().is_empty(), "parked after the comment");
+        std::fs::write(&talk, format!("{}{}", turn(2000), turn(4000))).unwrap();
+        assert_eq!(named(), ["row:g/parked"], "a second comment");
+        // A row set in line with no park time of its own is parked now.
+        let next = json!({"mechanic": "parked", "status": "next", "note": "card up"});
+        write_queue(&q, std::slice::from_ref(&next)).unwrap();
+        let mut back = next;
+        back["status"] = json!("in line");
+        write_queue(&q, &[back]).unwrap();
+        let at = read_queue(&q)[0]["parked_ms"].as_u64().unwrap();
+        assert!(at > 4000, "{at}");
+        assert!(named().is_empty());
+    }
 
     /// A held game's game rows make no step while its tool rows do, and
     /// another game's rows go on; lifting the hold gives the rows back.
