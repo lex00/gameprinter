@@ -286,12 +286,101 @@ fn missing_tools(c: &Cx) -> Vec<&'static str> {
 /// run before the build too, since it takes a second and needs no build.
 /// `just check` still runs it, so this only refuses earlier.
 fn fmt(c: &Cx) -> std::result::Result<(), String> {
-    run_step(
-        cargo(c)
-            .args(["fmt", "--all", "--check"])
-            .current_dir(&c.tree),
-        "cargo fmt --all --check",
+    let what = "cargo fmt --all --check";
+    let o = cargo(c)
+        .args(["fmt", "--all", "--check"])
+        .current_dir(&c.tree)
+        .output()
+        .map_err(|e| format!("running {what}: {e}"))?;
+    if o.status.success() {
+        return Ok(());
+    }
+    let all = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&o.stdout),
+        String::from_utf8_lossy(&o.stderr)
+    );
+    Err(fmt_why(&c.tree, &all, &tail_text(what, &all)))
+}
+
+/// A fmt failure whose first line names the files rustfmt would change
+/// (the `Diff in FILE at line N:` lines of its whole output `all`, as paths
+/// in the tree), then its last lines `tail`, so one dry run says all a
+/// worker must format.
+fn fmt_why(tree: &Path, all: &str, tail: &str) -> String {
+    let real = fs::canonicalize(tree).unwrap_or_else(|_| tree.to_owned());
+    let mut files: Vec<String> = Vec::new();
+    for l in all.lines() {
+        let Some(rest) = l.trim().strip_prefix("Diff in ") else {
+            continue;
+        };
+        // `Diff in FILE at line N:`, or the older `Diff in FILE:N:`.
+        let f = match rest.find(" at line ") {
+            Some(i) => &rest[..i],
+            None => rest
+                .trim_end_matches(':')
+                .trim_end_matches(char::is_numeric),
+        };
+        let p = Path::new(f.trim_end_matches(':'));
+        let shown = match p.strip_prefix(tree).or_else(|_| p.strip_prefix(&real)) {
+            Ok(rel) => rel.display().to_string(),
+            Err(_) => p.display().to_string(),
+        };
+        if !files.contains(&shown) {
+            files.push(shown);
+        }
+    }
+    if files.is_empty() {
+        return tail.to_owned();
+    }
+    format!(
+        "cargo fmt would change {}: run cargo fmt --all in your worktree and make the patch again\n{tail}",
+        files.join(", ")
     )
+}
+
+/// Where the gate keeps the trees a dry run passed: `<gate home>/tool/passed`,
+/// one file per tree, named by its git tree hash.
+fn passed_dir(c: &Cx) -> PathBuf {
+    c.target.with_file_name("passed")
+}
+
+/// How long a dry run's pass stands for the same tree: past it the gate
+/// checks again (a new toolchain or node on the machine, say).
+const PASS_KEEPS: std::time::Duration = std::time::Duration::from_secs(24 * 3600);
+
+/// The dry run that passed `tree` within [`PASS_KEEPS`], as its record.
+fn passed_before(c: &Cx, tree: &str) -> Option<Value> {
+    let f = passed_dir(c).join(tree);
+    let age = fs::metadata(&f).ok()?.modified().ok()?.elapsed().ok()?;
+    if age > PASS_KEEPS {
+        return None;
+    }
+    serde_json::from_str(&fs::read_to_string(&f).ok()?).ok()
+}
+
+/// A hash's first 12 digits, as the gate's lines show it.
+fn short(hash: &str) -> &str {
+    &hash[..hash.len().min(12)]
+}
+
+/// Keeps a dry run's pass of `tree`, so the gate after the person's yes
+/// lands the same tree without checking it again.
+fn keep_pass(c: &Cx, tree: &str, tip: &str, commit: &str) {
+    let d = passed_dir(c);
+    if fs::create_dir_all(&d).is_err() {
+        return;
+    }
+    let rec = json!({
+        "at": crate::open::now_rfc3339(),
+        "patch": c.steps.run,
+        "tip": tip,
+        "commit": commit,
+    });
+    let tmp = d.join(format!("{tree}.{}.new", std::process::id()));
+    if fs::write(&tmp, rec.to_string()).is_ok() {
+        let _ = fs::rename(&tmp, d.join(tree));
+    }
 }
 
 /// Builds gp in the gate's tree, in the gate's profile.
@@ -787,13 +876,20 @@ fn apply_one(
 /// turn, then the batch is built and checked once. In a batch of more than
 /// one, a patch that doesn't apply (or the hook refuses) is left out into
 /// `dropped` and the rest go on; alone, it fails the try.
+///
+/// A gate that lands checks a tree a dry run passed ([`passed_before`]) no
+/// further: it builds it, for publishing, and lands it. The tree is the
+/// tip with the patches applied, so the same patch on a tip that moved is
+/// another tree, checked again. A dry run always checks, and keeps its pass
+/// ([`keep_pass`]).
 fn trial(
     c: &Cx,
     items: &[Item],
     tip: &str,
+    dry_run: bool,
     lines: &mut Vec<String>,
     dropped: &mut Vec<(usize, Failed)>,
-) -> Result<std::result::Result<(String, bool), Failed>> {
+) -> Result<std::result::Result<Tried, Failed>> {
     macro_rules! refuse {
         ($why:expr, $phase:expr) => {
             return Ok(Err(Failed {
@@ -821,6 +917,12 @@ fn trial(
         refuse!("no patch of the batch applies".into(), "patch");
     }
     let files = git(tree, &["diff", "--name-only", tip, "HEAD"])?;
+    let applied = git(tree, &["rev-parse", "HEAD^{tree}"])?;
+    let tried = |commit: String, words_only: bool| Tried {
+        commit,
+        words_only,
+        tree: applied.clone(),
+    };
     let gate_gp = std::env::current_exe()?;
     // Words alone (Markdown, the site's pages): the prose lint, then land.
     // Nothing is built, so nothing is tested twice and nothing is published.
@@ -837,9 +939,24 @@ fn trial(
         ) {
             refuse!(why, "prose");
         }
-        return Ok(Ok((git(tree, &["rev-parse", "HEAD"])?, true)));
+        return Ok(Ok(tried(git(tree, &["rev-parse", "HEAD"])?, true)));
     }
-    if let Err(why) = c.steps.time("fmt", || fmt(c), Result::is_ok) {
+    let before = if dry_run {
+        None
+    } else {
+        passed_before(c, &applied)
+    };
+    if let Some(rec) = &before {
+        let msg = format!(
+            "a dry run passed this same tree ({}) at {} (patch {}, on {}): built for publishing, not checked again",
+            short(&applied),
+            rec["at"].as_str().unwrap_or("?"),
+            rec["patch"].as_str().unwrap_or("?"),
+            short(rec["tip"].as_str().unwrap_or("?")),
+        );
+        c.steps.note(&msg);
+        lines.push(msg);
+    } else if let Err(why) = c.steps.time("fmt", || fmt(c), Result::is_ok) {
         refuse!(why, "fmt");
     }
     if let Err(why) = c.steps.time("build", || build(c), Result::is_ok) {
@@ -865,15 +982,25 @@ fn trial(
             Err(e) => refuse!(format!("{e:#}"), "build"),
         }
     }
-    let lanes: Vec<(&'static str, &'static str, LaneFn<'_>)> = vec![
-        ("check", "just check", Box::new(|stop| check_lane(c, stop))),
-        ("tests", "tests", Box::new(|stop| tests_lane(c, stop))),
-    ];
-    match run_lanes(c, lanes) {
-        Ok(l) => lines.extend(l),
-        Err(f) => return Ok(Err(f)),
+    if before.is_none() {
+        let lanes: Vec<(&'static str, &'static str, LaneFn<'_>)> = vec![
+            ("check", "just check", Box::new(|stop| check_lane(c, stop))),
+            ("tests", "tests", Box::new(|stop| tests_lane(c, stop))),
+        ];
+        match run_lanes(c, lanes) {
+            Ok(l) => lines.extend(l),
+            Err(f) => return Ok(Err(f)),
+        }
     }
-    Ok(Ok((git(tree, &["rev-parse", "HEAD"])?, false)))
+    Ok(Ok(tried(git(tree, &["rev-parse", "HEAD"])?, false)))
+}
+
+/// A try that passed: the commit to land, whether it was words alone, and
+/// the tree the patches made on the tip (before any CLI.md written again).
+struct Tried {
+    commit: String,
+    words_only: bool,
+    tree: String,
 }
 
 /// A patch of words alone: every file it changes is Markdown or a page of
@@ -1146,7 +1273,7 @@ fn tries_in(
         dropped.clear();
         let tried = c.steps.time(
             "try",
-            || trial(c, items, &tip, &mut lines, dropped),
+            || trial(c, items, &tip, dry_run, &mut lines, dropped),
             |r| matches!(r, Ok(Ok(_))),
         )?;
         match tried {
@@ -1155,8 +1282,20 @@ fn tries_in(
                 gate::clean(&c.tree);
                 break;
             }
-            Ok((commit, words_only)) => {
+            Ok(Tried {
+                commit,
+                words_only,
+                tree,
+            }) => {
                 if dry_run {
+                    if !words_only {
+                        keep_pass(c, &tree, &tip, &commit);
+                        lines.push(format!(
+                            "this pass is kept: the gate after the yes lands this same tree without checking it again, while {} stays at {}",
+                            c.onto,
+                            short(&tip)
+                        ));
+                    }
                     lines.push("--dry-run: PASS, nothing lands".into());
                     return Ok(Outcome::ok(
                         json!({"verdict": "PASS", "commit": commit, "tip": tip, "lines": lines}),
@@ -1473,6 +1612,7 @@ date +%s > '{times}/just.end'
                 "fix.patch",
                 "home",
                 "logs",
+                "passed",
                 "repo",
                 "steps.jsonl",
                 "target",
@@ -1583,6 +1723,14 @@ date +%s > '{times}/just.end'
         let patch = patch_of(&c, "tool.txt", "bad format\n");
         let o = dry_run(&c, &patch);
         assert_eq!(o.json["phase"], "fmt", "{}", o.text);
+        assert!(
+            o.json["why"]
+                .as_str()
+                .unwrap()
+                .starts_with("cargo fmt would change src/lib.rs: run cargo fmt --all"),
+            "the first line names the files: {}",
+            o.text
+        );
         assert!(o.text.contains("Diff in src/lib.rs"), "{}", o.text);
         assert!(!tests_target(&c).join("cargo-test-seen").exists());
         let steps = fs::read_to_string(dir.path().join("steps.jsonl")).unwrap();
@@ -1601,6 +1749,71 @@ date +%s > '{times}/just.end'
             "{}",
             o.text
         );
+    }
+
+    /// rustfmt's two ways of naming a file, absolute in the tree or not,
+    /// each named once, as a path in the tree.
+    #[test]
+    fn a_fmt_failure_names_each_file_once_in_the_tree() {
+        let all = "Diff in /t/tree/crates/a/src/lib.rs at line 3:\n-x\n+y\n\
+            Diff in /t/tree/crates/a/src/lib.rs at line 9:\n\
+            Diff in /t/tree/crates/b/src/main.rs:12:\n\
+            Diff in other.rs at line 1:\n";
+        let why = fmt_why(Path::new("/t/tree"), all, "the tail");
+        assert_eq!(
+            why,
+            "cargo fmt would change crates/a/src/lib.rs, crates/b/src/main.rs, other.rs: run cargo fmt --all in your worktree and make the patch again\nthe tail"
+        );
+        assert_eq!(
+            fmt_why(Path::new("/t"), "error: no rustfmt", "the tail"),
+            "the tail"
+        );
+    }
+
+    /// The gate after a yes lands a tree its dry run passed without running
+    /// just check and the tests again, and says so; the same patch on a tip
+    /// that moved is another tree, and is checked.
+    #[test]
+    fn a_yes_after_a_passing_dry_run_lands_without_checking_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let c = gate_rig(dir.path());
+        let lanes = || {
+            fs::read_to_string(dir.path().join("steps.jsonl"))
+                .unwrap()
+                .lines()
+                .filter(|l| l.contains(r#""step":"lane check""#))
+                .count()
+        };
+        let patch = patch_of(&c, "tool.txt", "the tool, said again\n");
+        let o = dry_run(&c, &patch);
+        assert_eq!(o.json["verdict"], "PASS", "{}", o.text);
+        assert!(o.text.contains("this pass is kept"), "{}", o.text);
+        assert_eq!(lanes(), 1);
+
+        let o = gate(&c, &patch, false);
+        assert_eq!(o.json["verdict"], "PASS", "{}", o.text);
+        assert!(o.text.contains("not checked again"), "{}", o.text);
+        assert_eq!(lanes(), 1, "just check and the tests ran once");
+        let commit = o.json["commit"].as_str().unwrap();
+        assert_eq!(git(&c.repo, &["rev-parse", "main"]).unwrap(), commit);
+        assert!(
+            c.home
+                .join("bin")
+                .join(format!("gp-{}", &commit[..12]))
+                .is_file(),
+            "the build is published"
+        );
+
+        let patch = patch_of(&c, "tool.txt", "the tool, said a third way\n");
+        let o = dry_run(&c, &patch);
+        assert_eq!(o.json["verdict"], "PASS", "{}", o.text);
+        assert_eq!(lanes(), 2);
+        fs::write(c.repo.join("README.md"), "the tool, moved on\n").unwrap();
+        git_in(&c.repo, &["commit", "-q", "-am", "the tip moves"]);
+        let o = gate(&c, &patch, false);
+        assert_eq!(o.json["verdict"], "PASS", "{}", o.text);
+        assert!(!o.text.contains("not checked again"), "{}", o.text);
+        assert_eq!(lanes(), 3, "the moved tip is checked again");
     }
 
     /// A caller's CARGO_INCREMENTAL doesn't reach the gate's builds.

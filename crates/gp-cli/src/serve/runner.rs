@@ -2164,7 +2164,7 @@ pub(crate) fn brief(setup: &Setup, step: &Value, wt: &Path, branch: &str, before
         b.push(String::new());
         b.extend([
             if step["repo"] == json!("tools") {
-                format!("The step is quest-log item {row} of {game}, and its work is in gameprinter itself: your worktree is of the gameprinter checkout. Land the change with gp tool gate --patch FILE -m MESSAGE.")
+                format!("The step is quest-log item {row} of {game}, and its work is in gameprinter itself: your worktree is of the gameprinter checkout. Land the change with gp tool gate --patch FILE -m MESSAGE. Check it once: build gp, run only the tests you added or changed (cargo test -p CRATE NAME), then git diff > a patch file and gp_run tool gate with patch FILE, message and dry_run. Don't run the whole test suite, just check or clippy yourself: the dry run runs them all, and its FAIL line names what failed (for fmt, the files to format). Its pass is kept, so the gate after the person's YES lands that same tree without checking it again while main hasn't moved.")
             } else {
                 format!("The step is quest-log item {row} of {game}. Your worktree is of the games checkout: make the change there. A row about {game}'s own look (no theme named) is the port's fidelity work, not a theme: the model draws the original's pictures from the person's own ROM as it plays (gp needs their ROM file to run it), and the games repo holds no ROM bytes and no art copied from it, so making the model's screen match the original frame for frame is what an emulator does. A theme is new art of its own under {game}/themes/NAME, and only a row that names one is theme work.")
             },
@@ -3768,6 +3768,11 @@ mod tests {
                 "touches": ["row:g/r"], "repo": repo,
             });
             let b = brief(&setup, &step, &wt, "loop/s0000000000b1", "");
+            assert_eq!(
+                b.contains("run only the tests you added or changed"),
+                repo == "tools",
+                "a tools row's worker checks once and leaves the rest to the dry run:\n{b}"
+            );
             assert_eq!(
                 crate::mcp_keeps_up::unknown_commands(&b),
                 Vec::<String>::new(),
