@@ -1280,6 +1280,32 @@ pub(crate) fn met_in(
     ))
 }
 
+/// The target a row for a gap found on `line` closes on (`gp picture
+/// --propose --line`): where the line reads now on `column` (sprites or
+/// background) plus the `frames` the gap covers there, capped at the
+/// line's total, and how many frames above now that is. A target one
+/// frame past now closed a row for a 200-frame gap as soon as another fix
+/// lifted the line by a frame (the owner, 2026-11-22). None when the line
+/// has no current number there, is full, or the gap covers no frame.
+pub(crate) fn past_gap(
+    board: &Value,
+    line: &str,
+    column: &str,
+    frames: u64,
+) -> Option<(String, u64)> {
+    let t = parse_target(&format!("{line} {column} at least 0")).ok()?;
+    let r = reading(board, &t).filter(|r| r.current)?;
+    let total = r.total?;
+    let now = r.value as u64;
+    let to = now.saturating_add(frames).min(total);
+    (to > now).then(|| {
+        (
+            format!("{line} {column} at least {to} of {total}"),
+            to - now,
+        )
+    })
+}
+
 /// Checks a target names a line of the game's board; Err says why not.
 pub(crate) fn check_target(board: Option<&Value>, game: &str, target: &str) -> Result<(), String> {
     let t = parse_target(target)?;
@@ -1500,6 +1526,39 @@ pub(crate) fn ask_looks(home: &Path, games: &Path, game: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A gap's target is where the line reads now plus the frames the gap
+    /// covers on its layer, capped at the line's total; never one frame past
+    /// now (the owner, 2026-11-22), and none for a full or stale line.
+    #[test]
+    fn a_gap_target_is_now_plus_its_frames() {
+        let board = |matched: u64, stale: bool| {
+            json!({"lines": [{"name": "Bonus round", "clip": "hop.bonus.001", "stale": stale,
+                              "error": null, "sprites": {"matched": matched, "total": 336}}]})
+        };
+        assert_eq!(
+            past_gap(&board(100, false), "bonus round", "sprites", 200),
+            Some(("bonus round sprites at least 300 of 336".into(), 200))
+        );
+        assert_eq!(
+            past_gap(&board(300, false), "bonus round", "sprites", 200),
+            Some(("bonus round sprites at least 336 of 336".into(), 36)),
+            "capped at the line's total"
+        );
+        assert_eq!(
+            past_gap(&board(336, false), "bonus round", "sprites", 5),
+            None
+        );
+        assert_eq!(
+            past_gap(&board(100, true), "bonus round", "sprites", 5),
+            None
+        );
+        assert_eq!(
+            past_gap(&board(100, false), "bonus round", "sprites", 0),
+            None
+        );
+        assert_eq!(past_gap(&board(100, false), "level 1", "sprites", 5), None);
+    }
 
     fn put(p: &Path, s: &str) {
         std::fs::create_dir_all(p.parent().unwrap()).unwrap();

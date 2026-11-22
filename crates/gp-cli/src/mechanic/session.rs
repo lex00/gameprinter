@@ -341,6 +341,17 @@ impl Session {
         }))
     }
 
+    /// Sets the session's words (its prompt, what `gp mechanic show` prints
+    /// first): a row reopened for a new gap takes its new note
+    /// (mechanic::propose).
+    pub fn set_prompt(&self, prompt: &str) -> Result<()> {
+        let _g = self.lock.lock().expect("lock");
+        let mut t = self.info()?;
+        t.insert("prompt".into(), prompt.into());
+        fs::write(self.dir.join("session.toml"), toml::to_string(&t)?)?;
+        Ok(())
+    }
+
     /// Notes what the agent is doing until its next turn.
     pub fn set_busy(&self, text: &str) -> Result<()> {
         let n = self.turns()?.len();

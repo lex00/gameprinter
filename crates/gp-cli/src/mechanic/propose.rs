@@ -19,7 +19,7 @@ use super::session::{name_ok, queue_file, read_queue, write_queue};
 pub(crate) const MARK: &str = "Proposed by the loop:";
 
 /// A row the loop proposes.
-#[derive(Default)]
+#[derive(Default, Clone, Copy)]
 pub(crate) struct Proposal<'a> {
     pub game: &'a str,
     pub row: &'a str,
@@ -33,9 +33,26 @@ pub(crate) struct Proposal<'a> {
     pub test: Option<Test<'a>>,
     /// The clips the gap is seen in (`gp picture --propose`). A row the
     /// quest log has already gets each clip it doesn't name yet added to its
-    /// note and its `seen_in`, and goes back to next if it was done: the
-    /// row is done only when every clip it names is fixed.
+    /// `seen_in`; an open row has it added to its note, and a done row is
+    /// reopened for it (see `line`, `shows` and `target`).
     pub clips: &'a [String],
+    /// The scoreboard line the gap was found on (`gp picture --line`). A
+    /// row whose target is on another line can't measure this gap: the gap
+    /// becomes a row of its own, ROW-LINE.
+    pub line: Option<&'a str>,
+    /// The clip and frames that show the gap, from its start: a new row
+    /// and a reopened one take them as the row's clip.
+    pub shows: Option<(&'a str, u64, u64)>,
+    /// The target that measures the gap: a new row and a reopened one take
+    /// it in place of any target the row had (one it met already would
+    /// close it again at once). None leaves a reopened row with what would
+    /// measure it.
+    pub target: Option<&'a str>,
+    /// How many frames above where the line reads now the target is, and
+    /// the frames the gap covers on that layer (more when the target was
+    /// capped at the line's total): the row's note says so
+    /// (crate::scoreboard::past_gap).
+    pub target_frames: Option<(u64, u64)>,
     /// Why the new row waits (`--parked`): it is added in line, not next,
     /// its note "Parked: WHY." before the proposal's words. Filing a row
     /// and parking it is then one call, not a propose and a `gp mechanic
@@ -58,9 +75,180 @@ fn names_clip(r: &Value, clip: &str) -> bool {
         || r["from"].as_str().is_some_and(|s| s.contains(clip))
 }
 
+/// The failures a from names: each `FILE:LINE FIELD` in it (`approved.toml:14
+/// look[0].apart`), as the file's name and the field.
+fn failures(from: &str) -> Vec<(String, String)> {
+    let trim = |s: &str| {
+        s.trim_matches(|c: char| matches!(c, '(' | ')' | ',' | ';' | '\'' | '"' | '`'))
+            .trim_end_matches(['.', ':'])
+            .to_owned()
+    };
+    let words: Vec<&str> = from.split_whitespace().collect();
+    let mut out = Vec::new();
+    for (i, w) in words.iter().enumerate() {
+        let w = trim(w);
+        let Some((file, line)) = w.rsplit_once(':') else {
+            continue;
+        };
+        let file = file.rsplit('/').next().unwrap_or(file);
+        let ext = |(a, b): (&str, &str)| !a.is_empty() && !b.is_empty();
+        let named = file.rsplit_once('.').is_some_and(ext);
+        let digits = !line.is_empty() && line.bytes().all(|b| b.is_ascii_digit());
+        if !named || !digits {
+            continue;
+        }
+        let Some(field) = words.get(i + 1).map(|f| trim(f)) else {
+            continue;
+        };
+        if field.chars().any(char::is_alphabetic) && field.contains(['.', '[']) {
+            out.push((file.to_owned(), field));
+        }
+    }
+    out
+}
+
+/// An open row (not done, not out of scope) other than `row` whose from or
+/// note names one of the failures: the file and the field.
+fn same_failure(q: &[Value], row: &str, fails: &[(String, String)]) -> Option<usize> {
+    if fails.is_empty() {
+        return None;
+    }
+    q.iter().position(|r| {
+        let closed = r["status"] == json!("done") || r["scope"] == json!("out");
+        if closed || r["mechanic"] == json!(row) {
+            return false;
+        }
+        let from = r["from"].as_str().unwrap_or("");
+        let said = format!("{from} {}", r["note"].as_str().unwrap_or(""));
+        let names = |s: &String| said.contains(s.as_str());
+        fails
+            .iter()
+            .any(|(file, field)| names(file) && names(field))
+    })
+}
+
+/// The scoreboard line of the row's target, lower case, or None.
+fn target_line(r: &Value) -> Option<String> {
+    r["target"]
+        .as_str()
+        .and_then(|t| crate::scoreboard::parse_target(t).ok())
+        .map(|t| t.line)
+}
+
+/// The row a gap on `line` is when `row` measures another line: ROW-LINE,
+/// at most 64 bytes. None for a row that is that already.
+fn line_row(row: &str, line: &str) -> Option<String> {
+    let tail = slug(line, 24);
+    if tail.is_empty() || row.ends_with(&format!("-{tail}")) {
+        return None;
+    }
+    let mut head = row.to_owned();
+    head.truncate(64 - 1 - tail.len());
+    Some(format!("{}-{tail}", head.trim_end_matches('-')))
+}
+
+/// What the note says of the proposal's target: what it is and how many
+/// frames above where the line reads now, so the row isn't closed by a fix
+/// that lifts the line by a frame. Empty with no target.
+fn target_words(p: &Proposal) -> String {
+    let Some(t) = p.target.map(str::trim) else {
+        return String::new();
+    };
+    match p.target_frames {
+        Some((n, gap)) if n < gap => format!(
+            "Its target, {t}, is {n} frames above where the line reads now: the {gap} frames the gap covers on that layer, capped at the line's total."
+        ),
+        Some((n, _)) => format!(
+            "Its target, {t}, is {n} frames above where the line reads now, the frames the gap covers on that layer."
+        ),
+        None => format!("Its target is {t}."),
+    }
+}
+
+/// A done row seen in new clips (`list`) takes the new gap: next again,
+/// the proposal's words as its note, the clip and frames that show it,
+/// and the new target (or what would measure it) in place of the one it
+/// met, which would close it again at once. Returns what it was, for its
+/// log.
+fn reopen(r: &mut Value, p: &Proposal, list: &str) -> String {
+    let said = |k: &str| {
+        r[k].as_str()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned)
+    };
+    let mut was = vec![format!(
+        "note: {}",
+        said("note").unwrap_or_else(|| "none".into())
+    )];
+    if let Some(t) = said("target") {
+        was.push(format!("target: {t}"));
+    }
+    if let Some(w) = said("measure_needed") {
+        was.push(format!("what would measure it: {w}"));
+    }
+    if let Some(c) = r.get("clip") {
+        was.push(format!("clip: {}", super::clip_words(c)));
+    }
+    let (what, from) = (p.what.trim(), p.from.trim());
+    let before = format!(
+        "Reopened by the loop for {list} (from {from}). It was done; before, its {}.",
+        was.join("; ")
+    );
+    let mut note = format!(
+        "{MARK} {what} (from {from}). It was done and is open again for {list}; what it was before is in its log."
+    );
+    let tw = target_words(p);
+    if !tw.is_empty() {
+        note = format!("{note} {tw}");
+    }
+    if let Some(o) = r.as_object_mut() {
+        for k in [
+            "target",
+            "awaiting_measure",
+            "measure_needed",
+            "clip",
+            "worker",
+            "waits_on",
+            "waits_since",
+        ] {
+            o.remove(k);
+        }
+        o.insert("status".into(), json!("next"));
+        o.insert("note".into(), json!(note));
+        match p.target {
+            Some(t) => o.insert("target".into(), json!(t.trim())),
+            None => o.insert(
+                "measure_needed".into(),
+                json!(format!("gp picture no longer finds it on {list}: {what}")),
+            ),
+        };
+        if let Some(c) = shows(p) {
+            o.insert("clip".into(), c);
+        }
+    }
+    before
+}
+
+/// The row's clip for the proposal's `shows`: a corpus clip and frames.
+fn shows(p: &Proposal) -> Option<Value> {
+    p.shows
+        .map(|(id, a, b)| json!({"id": id, "from": a, "to": b.max(a)}))
+}
+
+/// Keeps what a reopened row was in its log (`gp mechanic log`'s) and makes
+/// the new note its session's words, so its worker reads the new gap (a
+/// row with no session yet gets one, made from the new note).
+fn log_reopen(paths: &Paths, game: &str, row: &str, note: &str, before: &str) -> Result<()> {
+    let s = super::session::Session::open_or_make(paths, game, row)?;
+    s.set_prompt(note)?;
+    super::watch::log(&s.dir, before)?;
+    Ok(())
+}
+
 /// A triage.toml item's test and request (mechanic/triage.rs has the
 /// format).
-#[derive(Default)]
+#[derive(Default, Clone, Copy)]
 pub(crate) struct Test<'a> {
     pub goal: &'a str,
     pub near: Option<&'a str>,
@@ -92,9 +280,16 @@ pub(crate) fn slug(words: &str, max: usize) -> String {
 }
 
 /// Adds the row unless the quest log has it (any status: a row the person
-/// finished or put out of scope stays so), and its test to triage.toml in
-/// `game_dir` unless an item names the row. The test is checked first, so
-/// a test the triage can't read writes nothing. Says what it did.
+/// finished or put out of scope stays so, unless seen in a new clip), and
+/// its test to triage.toml in `game_dir` unless an item names the row. A
+/// failure an open row has already (a `FILE:LINE FIELD` in from whose file
+/// and field that row's from or note names) is that row's: the step is
+/// added to its note, and the test goes under its name. A done row seen in
+/// a new clip is reopened with the new gap as its note, clip and target,
+/// what it was kept in its log; a row whose target is on another
+/// scoreboard line than the gap's leaves the gap to a row of its own. The
+/// test is checked first, so a test the triage can't read writes nothing.
+/// Says what it did.
 pub(crate) fn propose(paths: &Paths, game_dir: Option<&Path>, p: &Proposal) -> Result<Value> {
     if !name_ok(p.row) {
         bail!(
@@ -109,40 +304,84 @@ pub(crate) fn propose(paths: &Paths, game_dir: Option<&Path>, p: &Proposal) -> R
     if parked.is_some_and(str::is_empty) {
         bail!("a parked row says why it waits (--parked WHY)");
     }
-    let mut had_test = false;
-    if let Some(t) = &p.test {
-        let dir = game_dir.context("a row's test goes in the game's triage.toml: no games checkout found (pass --games or set GP_GAMES_DIR)")?;
-        had_test = super::triage::check_test(dir, p.row, t.goal)?;
-    }
     let f = queue_file(paths, p.game)?;
     let mut q = read_queue(&f);
     let mut at = q.iter().position(|r| r["mechanic"] == json!(p.row));
+    let is_it = |r: &Value| r["mechanic"] == json!(p.row);
     // An archived row is still the row: proposed again it stays archived,
     // as a done row stays done, unless it was seen in a new clip, when it
     // comes back to the quest log to be reopened below.
-    let mut archived = false;
-    if at.is_none() {
-        let is_it = |r: &Value| r["mechanic"] == json!(p.row);
-        if let Some(r) = super::archive::read_archive(&paths.home, p.game)
+    let in_archive = match at {
+        None => super::archive::read_archive(&paths.home, p.game)
             .into_iter()
-            .find(is_it)
-        {
-            archived = true;
-            if p.clips.iter().any(|c| !names_clip(&r, c))
-                && let Some(r) = super::archive::bring_back(&paths.home, p.game, is_it)?
-            {
-                q.push(r);
-                at = Some(q.len() - 1);
-            }
-        }
+            .find(is_it),
+        Some(_) => None,
+    };
+    // A gap seen in a new clip on another scoreboard line than the row's
+    // target: that target can't measure it, so it is a row of its own.
+    if let Some(line) = p.line.map(str::trim).filter(|l| !l.is_empty())
+        && let Some(r) = at.map(|i| &q[i]).or(in_archive.as_ref())
+        && p.clips.iter().any(|c| !names_clip(r, c))
+        && target_line(r).is_some_and(|t| t != line.to_lowercase())
+        && let Some(name) = line_row(p.row, line)
+    {
+        let mut v = propose(paths, game_dir, &Proposal { row: &name, ..*p })?;
+        v["instead_of"] = json!(p.row);
+        return Ok(v);
+    }
+    // A failure an open row has already (the same file and field) is that
+    // row's: the step goes in its note instead of a second row and card.
+    let same = match (at, &in_archive) {
+        (None, None) => same_failure(&q, p.row, &failures(p.from)),
+        _ => None,
+    };
+    if same.is_some() {
+        at = same;
+    }
+    let row = at
+        .and_then(|i| q[i]["mechanic"].as_str())
+        .unwrap_or(p.row)
+        .to_owned();
+    let mut had_test = false;
+    if let Some(t) = &p.test {
+        let dir = game_dir.context("a row's test goes in the game's triage.toml: no games checkout found (pass --games or set GP_GAMES_DIR)")?;
+        had_test = super::triage::check_test(dir, &row, t.goal)?;
+    }
+    let archived = in_archive.is_some();
+    if let Some(r) = &in_archive
+        && p.clips.iter().any(|c| !names_clip(r, c))
+        && let Some(r) = super::archive::bring_back(&paths.home, p.game, is_it)?
+    {
+        q.push(r);
+        at = Some(q.len() - 1);
     }
     let had_row = at.is_some() || archived;
     let mut new_clips: Vec<&String> = Vec::new();
     let mut reopened = false;
+    let mut before = None;
+    if let Some(i) = same {
+        let r = &mut q[i];
+        let from = p.from.trim();
+        let note = r["note"].as_str().unwrap_or("").trim().to_owned();
+        if !note.contains(from) && r["from"].as_str().map(str::trim) != Some(from) {
+            let also = format!("Also found as {} (from {from}).", p.row);
+            r["note"] = json!(if note.is_empty() {
+                also
+            } else {
+                format!("{note} {also}")
+            });
+            write_queue(&f, &q)?;
+        }
+    }
     match at {
+        _ if same.is_some() => {}
         None if archived => {}
         None => {
-            let proposed = format!("{MARK} {} (from {})", p.what.trim(), p.from.trim());
+            let mut proposed = format!("{MARK} {} (from {})", p.what.trim(), p.from.trim());
+            let tw = target_words(p);
+            if !tw.is_empty() {
+                proposed = format!("{proposed}. {tw}");
+            }
             let (status, note) = match parked {
                 Some(why) => (
                     "in line",
@@ -166,6 +405,12 @@ pub(crate) fn propose(paths: &Paths, game_dir: Option<&Path>, p: &Proposal) -> R
             if !p.clips.is_empty() {
                 r["seen_in"] = json!(p.clips);
             }
+            if let Some(t) = p.target {
+                r["target"] = json!(t.trim());
+            }
+            if let Some(c) = shows(p) {
+                r["clip"] = c;
+            }
             q.push(r);
             write_queue(&f, &q)?;
         }
@@ -181,20 +426,25 @@ pub(crate) fn propose(paths: &Paths, game_dir: Option<&Path>, p: &Proposal) -> R
                     .map(|c| c.as_str())
                     .collect::<Vec<_>>()
                     .join(", ");
-                let note = r["note"].as_str().unwrap_or("").trim().to_owned();
-                let also = format!("Also seen in {list} (from {}).", p.from.trim());
-                r["note"] = json!(if note.is_empty() {
-                    also
-                } else {
-                    format!("{note} {also}")
-                });
                 if r["status"] == json!("done") && r["scope"] != json!("out") {
-                    r["status"] = json!("next");
+                    before = Some(reopen(r, p, &list));
                     reopened = true;
+                } else {
+                    let note = r["note"].as_str().unwrap_or("").trim().to_owned();
+                    let also = format!("Also seen in {list} (from {}).", p.from.trim());
+                    r["note"] = json!(if note.is_empty() {
+                        also
+                    } else {
+                        format!("{note} {also}")
+                    });
                 }
                 write_queue(&f, &q)?;
             }
         }
+    }
+    if let (Some(b), Some(i)) = (&before, at) {
+        let note = q[i]["note"].as_str().unwrap_or("").to_owned();
+        log_reopen(paths, p.game, &row, &note, b)?;
     }
     let mut wrote_test = None;
     if let (Some(t), false) = (&p.test, had_test) {
@@ -207,16 +457,22 @@ pub(crate) fn propose(paths: &Paths, game_dir: Option<&Path>, p: &Proposal) -> R
         if !text.is_empty() {
             text.push('\n');
         }
-        text.push_str(&item_toml(p.row, t));
+        text.push_str(&item_toml(&row, t));
         fs::write(&file, text).with_context(|| file.display().to_string())?;
         wrote_test = Some(file.display().to_string());
     }
+    let gave_target = reopened || !had_row;
     Ok(json!({
-        "row": p.row,
+        "row": row,
+        "proposed_as": p.row,
+        "same_failure": same.is_some(),
         "added": !had_row,
         "parked": !had_row && parked.is_some(),
         "clips_added": new_clips,
         "reopened": reopened,
+        "before": before,
+        "target": p.target.filter(|_| gave_target),
+        "target_frames": p.target_frames.filter(|_| gave_target && p.target.is_some()).map(|(n, _)| n),
         "test": wrote_test,
         "test_was_there": had_test,
     }))
@@ -247,23 +503,38 @@ pub(crate) fn words(v: &Value) -> String {
         .as_array()
         .map(|a| a.iter().filter_map(Value::as_str).collect())
         .unwrap_or_default();
-    let mut s = if v["parked"] == json!(true) {
+    let target = match (v["target"].as_str(), v["target_frames"].as_u64()) {
+        (Some(t), Some(n)) => format!(", its target {t} ({n} frames above now)"),
+        (Some(t), None) => format!(", its target {t}"),
+        _ => String::new(),
+    };
+    let mut s = if v["same_failure"] == json!(true) {
+        format!(
+            "{}: the quest log has the same failure open in {row}; the step is in its note, no new row.",
+            v["proposed_as"].as_str().unwrap_or(row)
+        )
+    } else if v["parked"] == json!(true) {
         format!("{row}: added to the quest log in line (parked), proposed by the loop.")
     } else if v["added"] == json!(true) {
-        format!("{row}: added to the quest log as next, proposed by the loop.")
-    } else if !added.is_empty() {
-        let back = if v["reopened"] == json!(true) {
-            "; it was done, so it is next again"
-        } else {
-            ""
-        };
+        format!("{row}: added to the quest log as next, proposed by the loop{target}.")
+    } else if v["reopened"] == json!(true) {
         format!(
-            "{row}: the quest log has it; {} added to its note{back}.",
+            "{row}: it was done; it is next again for {}, the new gap its note{target}; what it was before is in its log.",
+            added.join(", ")
+        )
+    } else if !added.is_empty() {
+        format!(
+            "{row}: the quest log has it; {} added to its note.",
             added.join(", ")
         )
     } else {
         format!("{row}: the quest log has it already; left as it is.")
     };
+    if let Some(was) = v["instead_of"].as_str() {
+        s = format!(
+            "{was}'s target is on another scoreboard line, so the gap is a row of its own. {s}"
+        );
+    }
     if let Some(f) = v["test"].as_str() {
         s.push_str(&format!(" Its test is in {f}."));
     } else if v["test_was_there"] == json!(true) {
@@ -345,9 +616,10 @@ mod tests {
         assert_eq!((q.len(), q[0]["status"].as_str()), (1, Some("done")));
     }
 
-    /// A gap proposed from another clip is added to the row's note and
-    /// `seen_in`, and a done row goes back to next; a clip the row names
-    /// (in `seen_in` or, for an older row, its from) changes nothing.
+    /// A gap proposed from another clip is added to the row's `seen_in`,
+    /// and a done row goes back to next with the new gap as its note; a
+    /// clip the row names (in `seen_in` or, for an older row, its from)
+    /// changes nothing.
     #[test]
     fn a_new_clip_is_added_to_its_row() {
         let d = tempfile::tempdir().unwrap();
@@ -383,7 +655,7 @@ mod tests {
         .unwrap();
         assert_eq!(v["clips_added"], json!(["rooftop.demo.001"]));
         assert!(
-            words(&v).contains("rooftop.demo.001 added"),
+            words(&v).contains("next again for rooftop.demo.001"),
             "{}",
             words(&v)
         );
@@ -394,9 +666,32 @@ mod tests {
             q[0]["seen_in"],
             json!(["rooftop.l1.001", "rooftop.demo.001"])
         );
-        assert_eq!(
-            q[0]["note"],
-            "Landed: level 1's start Also seen in rooftop.demo.001 (from gp picture --run r, rooftop.demo.001 frame 2)."
+        assert!(
+            q[0]["note"]
+                .as_str()
+                .unwrap()
+                .starts_with("Proposed by the loop: the picture differs (from gp picture --run r, rooftop.demo.001 frame 2)."),
+            "{}",
+            q[0]["note"]
+        );
+
+        // An open row seen in another clip has it added to its note.
+        let l3 = vec!["rooftop.l3.001".to_owned()];
+        propose(
+            &p,
+            None,
+            &Proposal {
+                clips: &l3,
+                ..first
+            },
+        )
+        .unwrap();
+        let note = read_queue(&f)[0]["note"].as_str().unwrap().to_owned();
+        assert!(
+            note.ends_with(
+                "Also seen in rooftop.l3.001 (from gp picture --run r, rooftop.l1.001 frame 0)."
+            ),
+            "{note}"
         );
 
         let again = propose(
@@ -444,9 +739,260 @@ mod tests {
             q[0]["note"]
                 .as_str()
                 .unwrap()
-                .starts_with("Landed: level 1's start")
+                .contains("open again for rooftop.l2.001")
         );
         assert!(read_queue(&a).is_empty());
+    }
+
+    /// The owner, 2026-11-22: a done row reopened for a new clip kept its
+    /// old target, clip and note, so its worker closed it against the old
+    /// target or fixed the old clip. Reopened, it takes the new gap's clip,
+    /// frames and target, and what it was goes in its log and its session's
+    /// words become the new note. The target is the gap's frames above
+    /// where the line reads now, never one frame past it (a row for a
+    /// 200-frame gap closed when another fix lifted the line by a frame),
+    /// and the note says how many frames that is.
+    #[test]
+    fn a_reopened_row_takes_the_new_gap() {
+        let d = tempfile::tempdir().unwrap();
+        let p = paths(&d.path().join("home"));
+        let f = queue_file(&p, "hilltop").unwrap();
+        write_queue(
+            &f,
+            &[json!({
+                "mechanic": "picture-bonus-round",
+                "status": "done",
+                "note": "Met its target: bonus round sprites at least 100 of 336",
+                "target": "bonus round sprites at least 100 of 336",
+                "clip": {"id": "hilltop.demo.001", "from": 1340, "to": 1340},
+                "seen_in": ["hilltop.demo.001"],
+            })],
+        )
+        .unwrap();
+        // The row has a session from its first time, with its old words.
+        super::super::session::Session::create(
+            &p,
+            "hilltop",
+            "picture-bonus-round",
+            Some("the old gap"),
+            "",
+        )
+        .unwrap();
+        let clips = vec!["hilltop.bonus.001".to_owned()];
+        let prop = Proposal {
+            game: "hilltop",
+            row: "picture-bonus-round",
+            from: "scoreboard line bonus round: gp picture --run r, hilltop.bonus.001 frame 10",
+            what: "the picture differs, placed elsewhere: mug (1 clips, 200 frames)",
+            clips: &clips,
+            line: Some("bonus round"),
+            shows: Some(("hilltop.bonus.001", 10, 236)),
+            // The line reads 131 now; the gap covers 200 frames.
+            target: Some("bonus round sprites at least 331 of 336"),
+            target_frames: Some((200, 200)),
+            ..Proposal::default()
+        };
+        let v = propose(&p, None, &prop).unwrap();
+        assert_eq!(v["reopened"], json!(true));
+        assert!(
+            words(&v).contains(
+                "its target bonus round sprites at least 331 of 336 (200 frames above now)"
+            ),
+            "{}",
+            words(&v)
+        );
+        let q = read_queue(&f);
+        let r = &q[0];
+        assert_eq!(r["status"], "next");
+        assert_eq!(r["target"], "bonus round sprites at least 331 of 336");
+        assert_eq!(
+            r["clip"],
+            json!({"id": "hilltop.bonus.001", "from": 10, "to": 236})
+        );
+        let note = r["note"].as_str().unwrap();
+        assert!(note.contains("placed elsewhere: mug"), "{note}");
+        assert!(
+            note.ends_with(
+                "Its target, bonus round sprites at least 331 of 336, is 200 frames above where the line reads now, the frames the gap covers on that layer."
+            ),
+            "{note}"
+        );
+        assert!(!note.contains("Met its target"), "{note}");
+
+        let s = super::super::session::Session::open(&p, "hilltop", "picture-bonus-round").unwrap();
+        assert_eq!(s.state().unwrap()["prompt"], json!(note));
+        let log = fs::read_to_string(s.dir.join("watch/log.ndjson")).unwrap();
+        for old in [
+            "Met its target: bonus round sprites at least 100 of 336",
+            "target: bonus round sprites at least 100 of 336",
+            "clip: corpus clip hilltop.demo.001, frame 1340",
+        ] {
+            assert!(log.contains(old), "{old} not in {log}");
+        }
+
+        // A target capped at the line's total says so.
+        let mut q = read_queue(&f);
+        q[0]["status"] = json!("done");
+        write_queue(&f, &q).unwrap();
+        let other = vec!["hilltop.bonus.002".to_owned()];
+        propose(
+            &p,
+            None,
+            &Proposal {
+                clips: &other,
+                target: Some("bonus round sprites at least 336 of 336"),
+                target_frames: Some((36, 200)),
+                ..prop
+            },
+        )
+        .unwrap();
+        let note = read_queue(&f)[0]["note"].as_str().unwrap().to_owned();
+        assert!(
+            note.ends_with(
+                "is 36 frames above where the line reads now: the 200 frames the gap covers on that layer, capped at the line's total."
+            ),
+            "{note}"
+        );
+
+        // With no target to give, it says what would measure it instead of
+        // keeping the one it met; and a row with no session gets one.
+        let mut q = read_queue(&f);
+        q.push(json!({"mechanic": "picture-hud", "status": "done", "note": "Landed",
+                      "target": "bonus round sprites at least 100 of 336", "seen_in": ["hilltop.demo.001"]}));
+        write_queue(&f, &q).unwrap();
+        let v = propose(
+            &p,
+            None,
+            &Proposal {
+                row: "picture-hud",
+                target: None,
+                target_frames: None,
+                shows: None,
+                ..prop
+            },
+        )
+        .unwrap();
+        assert_eq!(v["reopened"], json!(true));
+        let r = read_queue(&f)[1].clone();
+        assert!(r.get("target").is_none(), "{r}");
+        assert!(
+            r["measure_needed"]
+                .as_str()
+                .unwrap()
+                .contains("hilltop.bonus.001")
+        );
+        assert!(super::super::session::Session::exists(&p, "hilltop", "picture-hud").unwrap());
+    }
+
+    /// A gap on another scoreboard line than the row's target is a row of
+    /// its own, ROW-LINE, with the gap's target; the row is left as it is.
+    #[test]
+    fn a_gap_on_another_line_is_a_row_of_its_own() {
+        let d = tempfile::tempdir().unwrap();
+        let p = paths(&d.path().join("home"));
+        let f = queue_file(&p, "hilltop").unwrap();
+        let old = json!({
+            "mechanic": "picture-mug",
+            "status": "done",
+            "note": "Met its target",
+            "target": "level 1 sprites at least 300 of 336",
+            "seen_in": ["hilltop.l1.001"],
+        });
+        write_queue(&f, std::slice::from_ref(&old)).unwrap();
+        let clips = vec!["hilltop.demo.001".to_owned()];
+        let prop = Proposal {
+            game: "hilltop",
+            row: "picture-mug",
+            from: "scoreboard line the demo: gp picture --run r, hilltop.demo.001 frame 1340",
+            what: "the picture differs: mug (1 clips, 21 frames)",
+            clips: &clips,
+            line: Some("the demo"),
+            shows: Some(("hilltop.demo.001", 1340, 1360)),
+            target: Some("the demo sprites at least 921 of 1800"),
+            target_frames: Some((21, 21)),
+            ..Proposal::default()
+        };
+        let v = propose(&p, None, &prop).unwrap();
+        assert_eq!(v["row"], "picture-mug-the-demo");
+        assert_eq!(v["added"], json!(true));
+        assert!(
+            words(&v).starts_with("picture-mug's target is on another scoreboard line"),
+            "{}",
+            words(&v)
+        );
+        let q = read_queue(&f);
+        assert_eq!(q.len(), 2);
+        let mut kept = q[0].clone();
+        kept.as_object_mut().unwrap().remove("changed_ms");
+        assert_eq!(kept, old, "the row on the other line is left as it is");
+        assert_eq!(q[1]["mechanic"], "picture-mug-the-demo");
+        assert_eq!(q[1]["status"], "next");
+        assert_eq!(q[1]["target"], "the demo sprites at least 921 of 1800");
+        assert_eq!(q[1]["clip"]["id"], "hilltop.demo.001");
+        let note = q[1]["note"].as_str().unwrap();
+        assert!(
+            note.contains("is 21 frames above where the line reads now"),
+            "{note}"
+        );
+        // Proposed again, it is the new row's, and never ROW-LINE-LINE.
+        let again = propose(&p, None, &prop).unwrap();
+        assert_eq!(again["row"], "picture-mug-the-demo");
+        assert_eq!(read_queue(&f).len(), 2);
+        assert_eq!(line_row("picture-mug-the-demo", "the demo"), None);
+        assert!(line_row(&"x".repeat(64), "the demo").is_some_and(|n| name_ok(&n)));
+    }
+
+    /// A failure an open row has already (the same file and field in its
+    /// from or note) goes in that row's note under another name: one row,
+    /// once. A done row with the same failure doesn't take it.
+    #[test]
+    fn the_same_failure_goes_to_its_open_row() {
+        let hit = failures("step s1: hook FAIL approved.toml:14 look[0].apart");
+        let want = ("approved.toml".to_owned(), "look[0].apart".to_owned());
+        assert_eq!(hit, vec![want]);
+        assert!(failures("gp picture --run r, hilltop.l1.001 frame 0").is_empty());
+
+        let d = tempfile::tempdir().unwrap();
+        let p = paths(&d.path().join("home"));
+        let f = queue_file(&p, "hilltop").unwrap();
+        write_queue(
+            &f,
+            &[
+                json!({"mechanic": "old-hit", "status": "done",
+                       "from": "step a: FAIL (hook) at approved.toml:14 look[0].apart"}),
+                json!({"mechanic": "approved-file-passes-scan", "status": "in line", "repo": "tools",
+                       "from": "the scan reads approved.toml's apart lists as ROM bytes (look[0].apart lines 14-18)"}),
+            ],
+        )
+        .unwrap();
+        let prop = Proposal {
+            game: "hilltop",
+            row: "approved-lock-trips-package-scan",
+            from: "step s22475c59b953: gp model gate hilltop dry run, hook FAIL approved.toml:14 look[0].apart",
+            what: "the package scan refuses approved.toml",
+            repo: Some("tools"),
+            ..Proposal::default()
+        };
+        let v = propose(&p, None, &prop).unwrap();
+        assert_eq!(v["added"], json!(false));
+        assert_eq!(v["same_failure"], json!(true));
+        assert_eq!(v["row"], "approved-file-passes-scan");
+        assert!(words(&v).contains("same failure open in approved-file-passes-scan"));
+        let q = read_queue(&f);
+        assert_eq!(q.len(), 2);
+        assert_eq!(q[1]["status"], "in line");
+        let note = q[1]["note"].as_str().unwrap().to_owned();
+        let also = "Also found as approved-lock-trips-package-scan (from step s22475c59b953";
+        assert!(note.contains(also), "{note}");
+        propose(&p, None, &prop).unwrap();
+        let again = read_queue(&f);
+        assert_eq!(again[1]["note"], json!(note), "the step is added once");
+
+        // With the open row done, the failure is a new row.
+        let mut q = read_queue(&f);
+        q[1]["status"] = json!("done");
+        write_queue(&f, &q).unwrap();
+        assert_eq!(propose(&p, None, &prop).unwrap()["added"], json!(true));
     }
 
     /// A row proposed parked is added in line with why before the

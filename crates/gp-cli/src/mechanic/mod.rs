@@ -990,9 +990,9 @@ pub(crate) fn run(cmd: &MechanicCmd, paths: &Paths) -> Result<Outcome> {
                         todo: todo.as_deref(),
                         stop: stop.as_deref(),
                     }),
-                    clips: &[],
                     parked: parked.as_deref(),
                     plain: plain.as_deref(),
+                    ..propose::Proposal::default()
                 },
             )?;
             let text = propose::words(&v);

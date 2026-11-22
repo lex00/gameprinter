@@ -119,7 +119,7 @@ fn proposals(
     line: Option<&str>,
     details: &BTreeMap<(&'static str, String), Tally>,
     top: usize,
-) -> Vec<(String, String, String, Vec<String>)> {
+) -> Vec<Gap> {
     let on = line.map_or(String::new(), |l| format!("scoreboard line {l}: "));
     let mut by: BTreeMap<&'static str, Vec<(&String, &Tally)>> = BTreeMap::new();
     for ((g, d), t) in details {
@@ -153,10 +153,34 @@ fn proposals(
                 ),
                 None => format!("{on}gp picture --run {run}"),
             };
-            out.push((row, what, from, t.clips.iter().cloned().collect()));
+            out.push(Gap {
+                row,
+                what,
+                from,
+                clips: t.clips.iter().cloned().collect(),
+                frames: t.frames,
+                shows: t
+                    .example
+                    .as_ref()
+                    .map(|(c, f, l, _)| (c.clone(), *f, t.example_to.max(*f), *l)),
+            });
         }
     }
     out
+}
+
+/// A gap `--propose` makes a row of: its name, what and from, the clips
+/// it is seen in, the frames it covers (its tally's), and the example
+/// clip's frames with it and the layer (sprites or background, the
+/// scoreboard's column for it).
+#[derive(Debug, PartialEq)]
+struct Gap {
+    row: String,
+    what: String,
+    from: String,
+    clips: Vec<String>,
+    frames: u64,
+    shows: Option<(String, u64, u64, &'static str)>,
 }
 
 /// Each compared frame's pixels apart: the frame from the clip's start,
@@ -1135,6 +1159,9 @@ struct Tally {
     pixels: u64,
     /// The first clip by ID, its first frame and box.
     example: Option<(String, u64, &'static str, [i64; 4])>,
+    /// The example clip's last frame with it.
+    #[serde(skip)]
+    example_to: u64,
 }
 
 impl Tally {
@@ -1142,8 +1169,13 @@ impl Tally {
         self.clips.insert(clip.to_owned());
         self.frames += u64::from(new_frame);
         self.pixels += f.pixels;
-        if self.example.is_none() {
-            self.example = Some((clip.to_owned(), f.frame, f.layer, f.rect));
+        match &self.example {
+            None => {
+                self.example = Some((clip.to_owned(), f.frame, f.layer, f.rect));
+                self.example_to = f.frame;
+            }
+            Some(e) if e.0 == clip => self.example_to = self.example_to.max(f.frame),
+            Some(_) => {}
         }
     }
 
@@ -1515,13 +1547,30 @@ pub(crate) fn run(args: &PictureArgs, paths: &gp_evidence::Paths) -> Result<Outc
         if list.is_empty() {
             let _ = writeln!(text_out, "  nothing: no gap but flicker or one-frame gaps");
         }
-        for (row, what, from, clips) in &list {
+        // The board the line is on, for each gap's target: where the line
+        // reads now on the gap's layer plus the frames the gap covers.
+        let board = args
+            .line
+            .as_ref()
+            .and_then(|_| game.parent())
+            .and_then(|games| crate::scoreboard::board(&paths.home, games, &name));
+        for g in &list {
+            let target = match (&board, args.line.as_deref(), &g.shows) {
+                (Some(b), Some(line), Some((_, _, _, layer))) => {
+                    crate::scoreboard::past_gap(b, line, layer, g.frames)
+                }
+                _ => None,
+            };
             let p = crate::mechanic::propose::Proposal {
                 game: &name,
-                row,
-                from,
-                what,
-                clips,
+                row: &g.row,
+                from: &g.from,
+                what: &g.what,
+                clips: &g.clips,
+                line: args.line.as_deref(),
+                shows: g.shows.as_ref().map(|(c, a, b, _)| (c.as_str(), *a, *b)),
+                target: target.as_ref().map(|(t, _)| t.as_str()),
+                target_frames: target.as_ref().map(|(_, n)| (*n, g.frames)),
                 ..Default::default()
             };
             let v = crate::mechanic::propose::propose(paths, None, &p)?;
@@ -1800,18 +1849,23 @@ mod tests {
         let got = proposals("r1", None, &details, 4);
         assert_eq!(
             got,
-            vec![(
-                "picture-placed-elsewhere-hero-1-px-further-right".to_owned(),
-                "the picture differs, placed elsewhere: hero: 1 px further right (1 clips, 3 frames)"
+            vec![Gap {
+                row: "picture-placed-elsewhere-hero-1-px-further-right".to_owned(),
+                what: "the picture differs, placed elsewhere: hero: 1 px further right (1 clips, 3 frames)"
                     .to_owned(),
-                "gp picture --run r1, game.l1.001 frame 40, sprites at 8, 16 16x16".to_owned(),
-                vec!["game.l1.001".to_owned()]
-            )]
+                from: "gp picture --run r1, game.l1.001 frame 40, sprites at 8, 16 16x16"
+                    .to_owned(),
+                clips: vec!["game.l1.001".to_owned()],
+                // The frames it covers, for the row's target.
+                frames: 3,
+                // The clip and frames that show it, for the row's clip.
+                shows: Some(("game.l1.001".to_owned(), 40, 42, "sprites")),
+            }]
         );
         // Found for a scoreboard line, the row says which.
         let got = proposals("r1", Some("level 1"), &details, 4);
         assert_eq!(
-            got[0].2,
+            got[0].from,
             "scoreboard line level 1: gp picture --run r1, game.l1.001 frame 40, sprites at 8, 16 16x16"
         );
     }
