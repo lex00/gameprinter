@@ -179,17 +179,18 @@ pub(crate) fn publish(
     let bin = home.join("bin");
     fs::create_dir_all(&bin)?;
     let short = &commit[..12];
+    // The page's files first: a tree missing one publishes nothing, so no
+    // build is ever published without them, and a gp serve that moves onto
+    // the build finds them there.
+    if let Some(l) = publish_pages(&bin, short, tree)? {
+        lines.push(l);
+    }
     let dest = bin.join(format!("gp-{short}"));
     // A new file renamed into place: rewriting a Mach-O in place keeps its
     // inode, and macOS kills its next launch for a stale signature.
     let tmp = bin.join(format!("gp-{short}.tmp{}", std::process::id()));
     fs::copy(binary, &tmp).with_context(|| format!("copying {}", binary.display()))?;
     fs::rename(&tmp, &dest)?;
-    // The page's files before the link moves, so a gp serve that moves
-    // onto it finds them there.
-    if let Some(l) = publish_pages(&bin, short, tree)? {
-        lines.push(l);
-    }
 
     let link = bin.join("gp");
     let held = fs::read_link(&link).ok().and_then(|p| commit_of(&p));
@@ -221,23 +222,95 @@ pub(crate) fn publish(
 /// tool gate's, which holds every patch it tries, landed or not.
 pub(crate) const PAGES: [&str; 2] = ["mechanic", "editor/dist"];
 
-/// Copies [`PAGES`] from `tree` to bin/gp-<short>.pages/, whole or not at
-/// all (crate::repo::page_files reads them). None when `tree` has none.
-fn publish_pages(bin: &Path, short: &str, tree: &Path) -> Result<Option<String>> {
-    if !tree.join("mechanic").is_dir() {
+/// The file in a built editor/dist naming the editor sources it was built
+/// from: git's hash of editor/ (its sources and its lock; dist and
+/// node_modules are ignored, so they aren't in it). Inside dist, which
+/// git ignores, so the gate's `git clean -fd` keeps it with the build.
+const EDITOR_BUILT_FROM: &str = "editor/dist/.built-from";
+
+/// Makes sure `tree`'s editor/dist is the build of its editor/ as it is at
+/// `source` (git's hash of the folder): a dist whose [`EDITOR_BUILT_FROM`]
+/// names `source` is kept; else `build` runs on editor/ (the justfile's
+/// `editor` recipe's npm ci and vite build), which must leave
+/// editor/dist/index.html, and the new dist is marked with `source`.
+/// The line saying which, or None when `tree` has no editor
+/// (editor/package.json).
+pub(crate) fn ensure_editor(
+    tree: &Path,
+    source: &str,
+    build: impl FnOnce(&Path) -> std::result::Result<(), String>,
+) -> std::result::Result<Option<String>, String> {
+    let editor = tree.join("editor");
+    if !editor.join("package.json").is_file() {
         return Ok(None);
+    }
+    let mark = tree.join(EDITOR_BUILT_FROM);
+    let index = tree.join("editor/dist/index.html");
+    let short = &source[..source.len().min(12)];
+    if index.is_file() && fs::read_to_string(&mark).is_ok_and(|s| s.trim() == source) {
+        return Ok(Some(format!(
+            "the editor's build kept: editor/dist is built from these sources ({short})"
+        )));
+    }
+    // A build that stops half way leaves no mark, so the next one builds.
+    let _ = fs::remove_file(&mark);
+    build(&editor)?;
+    if !index.is_file() {
+        return Err(format!("the editor's build left no {}", index.display()));
+    }
+    fs::write(&mark, format!("{source}\n")).map_err(|e| format!("{}: {e}", mark.display()))?;
+    Ok(Some(format!(
+        "the editor built into editor/dist from its sources ({short})"
+    )))
+}
+
+/// The parts of [`PAGES`] `tree` must publish: mechanic/ when it has one,
+/// and editor/dist when it has the editor (editor/package.json) or a
+/// built one. The tool's own tree has both; a tree with neither has no page.
+fn page_parts(tree: &Path) -> Vec<&'static str> {
+    PAGES
+        .into_iter()
+        .filter(|rel| {
+            let there = tree.join(rel).is_dir();
+            there || (*rel == "editor/dist" && tree.join("editor/package.json").is_file())
+        })
+        .collect()
+}
+
+/// Copies the page's files ([`page_parts`]) from `tree` to
+/// bin/gp-<short>.pages/, whole or not at all (crate::repo::page_files
+/// reads them): one missing, such as an editor/dist never built, fails
+/// the publish naming it, and nothing is copied. None when `tree` has no
+/// page.
+fn publish_pages(bin: &Path, short: &str, tree: &Path) -> Result<Option<String>> {
+    let parts = page_parts(tree);
+    if parts.is_empty() {
+        return Ok(None);
+    }
+    let missing: Vec<&str> = parts
+        .iter()
+        .copied()
+        .filter(|rel| match *rel {
+            "editor/dist" => !tree.join("editor/dist/index.html").is_file(),
+            _ => !tree.join(rel).is_dir(),
+        })
+        .collect();
+    if !missing.is_empty() {
+        bail!(
+            "the page's files aren't all in {}: {} missing (`just editor` builds editor/dist), so nothing is published",
+            tree.display(),
+            missing.join(" and ")
+        );
     }
     let dest = bin.join(format!("gp-{short}.pages"));
     let tmp = bin.join(format!("gp-{short}.pages.tmp{}", std::process::id()));
     let _ = fs::remove_dir_all(&tmp);
     let mut copied = Vec::new();
-    for rel in PAGES {
+    for rel in parts {
         let from = tree.join(rel);
-        if from.is_dir() {
-            crate::serve::game::copy_tree(&from, &tmp.join(rel))
-                .with_context(|| format!("copying {}", from.display()))?;
-            copied.push(rel);
-        }
+        crate::serve::game::copy_tree(&from, &tmp.join(rel))
+            .with_context(|| format!("copying {}", from.display()))?;
+        copied.push(rel);
     }
     // A build of this commit published before: its files are the same
     // commit's, so the new copy replaces them.
@@ -419,6 +492,84 @@ mod tests {
         assert!(run_on.is_file(), "the port run's stays");
         assert!(bin.join(format!("gp-{:012}", 11)).is_file());
         assert!(!bin.join(format!("gp-{:012}", 1)).exists());
+    }
+
+    /// A tree with the editor's sources and no editor/dist (the tool
+    /// gate's new tree) has it built; the build is kept while editor/'s
+    /// sources stay, built again when they change, and a build that fails
+    /// or leaves no index.html says so and is built again next time.
+    #[test]
+    fn a_tree_with_no_dist_has_its_editor_built_and_kept_while_its_sources_stay() {
+        let dir = tempfile::tempdir().unwrap();
+        let tree = dir.path();
+        let builds = std::cell::Cell::new(0);
+        let vite = |editor: &Path| -> std::result::Result<(), String> {
+            builds.set(builds.get() + 1);
+            fs::create_dir_all(editor.join("dist")).unwrap();
+            fs::write(editor.join("dist/index.html"), "editor").unwrap();
+            Ok(())
+        };
+        // No editor at all: nothing to build.
+        assert_eq!(ensure_editor(tree, "a1", vite), Ok(None));
+        assert_eq!(builds.get(), 0);
+
+        fs::create_dir_all(tree.join("editor")).unwrap();
+        fs::write(tree.join("editor/package.json"), "{}").unwrap();
+        let said = ensure_editor(tree, "a1", vite).unwrap().unwrap();
+        assert!(said.contains("built"), "{said}");
+        assert_eq!(builds.get(), 1);
+        assert!(tree.join("editor/dist/index.html").is_file());
+        let said = ensure_editor(tree, "a1", vite).unwrap().unwrap();
+        assert!(said.contains("kept"), "{said}");
+        assert_eq!(builds.get(), 1, "the same sources build nothing");
+        ensure_editor(tree, "b2", vite).unwrap();
+        assert_eq!(builds.get(), 2, "changed sources build again");
+
+        let failed = ensure_editor(tree, "c3", |_| Err("npm ci failed".into()));
+        assert_eq!(failed, Err("npm ci failed".into()));
+        ensure_editor(tree, "c3", vite).unwrap();
+        assert_eq!(builds.get(), 3, "after a failed build the next one builds");
+        fs::remove_dir_all(tree.join("editor/dist")).unwrap();
+        let empty = ensure_editor(tree, "d4", |_| Ok(()));
+        assert!(empty.unwrap_err().contains("index.html"));
+    }
+
+    /// Publishing is all or nothing: a tree with mechanic/ and the editor's
+    /// sources but no built editor/dist publishes no build, no page and no
+    /// link, saying what is missing; once dist is built it publishes both.
+    #[test]
+    fn a_tree_with_no_dist_publishes_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let (home, tree) = (dir.path().join("home"), dir.path().join("tree"));
+        fs::create_dir_all(tree.join("mechanic")).unwrap();
+        fs::write(tree.join("mechanic/screen.js"), "page").unwrap();
+        fs::create_dir_all(tree.join("editor")).unwrap();
+        fs::write(tree.join("editor/package.json"), "{}").unwrap();
+        let exe = dir.path().join("exe");
+        fs::write(&exe, b"binary").unwrap();
+        let commit = "0123456789ab0123456789ab0123456789ab0123";
+        let bin = home.join("bin");
+        let err = publish(&home, &exe, commit, &tree, &tree, &mut Vec::new()).unwrap_err();
+        let err = format!("{err:#}");
+        assert!(err.contains("editor/dist missing"), "{err}");
+        assert!(
+            !bin.join("gp-0123456789ab").exists(),
+            "no build without its page"
+        );
+        assert!(!bin.join("gp-0123456789ab.pages").exists());
+        assert!(
+            fs::symlink_metadata(bin.join("gp")).is_err(),
+            "the link didn't move"
+        );
+
+        fs::create_dir_all(tree.join("editor/dist")).unwrap();
+        fs::write(tree.join("editor/dist/index.html"), "editor").unwrap();
+        let mut lines = Vec::new();
+        publish(&home, &exe, commit, &tree, &tree, &mut lines).unwrap();
+        assert!(lines[0].contains("mechanic, editor/dist"), "{lines:?}");
+        let pages = crate::repo::pages_beside(&bin.join("gp-0123456789ab")).unwrap();
+        assert!(pages.join("editor/dist/index.html").is_file());
+        assert!(pages.join("mechanic/screen.js").is_file());
     }
 
     /// The page's files are published beside the build, are not a build

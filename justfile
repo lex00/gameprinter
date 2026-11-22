@@ -26,7 +26,9 @@ setup:
 
 # Publishes this checkout's gp, optimized, at $GP_HOME/bin/gp: the first
 # published build, before any gate has run. The gate publishes after that.
-publish:
+# The editor is built first: a gp is published only with its page's files
+# (mechanic/ and editor/dist) beside it.
+publish: editor
     cargo build -q --profile fastdev -p gp-cli
     {{quote(target / "fastdev" / "gp")}} self publish
 

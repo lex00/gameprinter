@@ -192,12 +192,16 @@ pub(crate) fn start(ctx: Arc<Ctx>) {
     let home = ctx.paths.home.clone();
     let exe = std::env::current_exe().ok();
     let started_ms = gp_mcp::asks::now_ms();
+    // The editor it serves, null when it isn't built (its start line says
+    // so), which gp loop health calls a problem.
+    let editor = ctx.editor.clone();
     write(
         &home,
         &json!({
             "pid": std::process::id(),
             "started_ms": started_ms,
             "build": exe,
+            "editor": editor,
             "moving": null,
         }),
     );
@@ -232,6 +236,7 @@ pub(crate) fn start(ctx: Arc<Ctx>) {
                     "pid": std::process::id(),
                     "started_ms": started_ms,
                     "build": exe,
+                    "editor": editor,
                     "moving": {"to": bin, "says": words},
                 }),
             );
@@ -257,7 +262,7 @@ pub(crate) fn start(ctx: Arc<Ctx>) {
                 *WAITING.lock().unwrap_or_else(|e| e.into_inner()) = None;
                 write(
                     &home,
-                    &json!({"pid": std::process::id(), "started_ms": started_ms, "build": exe, "moving": null}),
+                    &json!({"pid": std::process::id(), "started_ms": started_ms, "build": exe, "editor": editor, "moving": null}),
                 );
                 continue;
             }
@@ -293,7 +298,7 @@ pub(crate) fn start(ctx: Arc<Ctx>) {
             *WAITING.lock().unwrap_or_else(|e| e.into_inner()) = None;
             write(
                 &home,
-                &json!({"pid": std::process::id(), "started_ms": started_ms, "build": exe, "moving": null}),
+                &json!({"pid": std::process::id(), "started_ms": started_ms, "build": exe, "editor": editor, "moving": null}),
             );
         }
     });

@@ -992,7 +992,44 @@ fn trial(
             Err(f) => return Ok(Err(f)),
         }
     }
+    // The editor the landing publishes beside the build (crate::publish):
+    // `just check` doesn't build it, and this tree's own is kept between
+    // gates, so it is built here when editor/ changed since.
+    match c.steps.time("editor", || editor(c), Result::is_ok) {
+        Ok(Some(l)) => lines.push(l),
+        Ok(None) => {}
+        Err(why) => refuse!(why, "editor"),
+    }
     Ok(Ok(tried(git(tree, &["rev-parse", "HEAD"])?, false)))
+}
+
+/// The gate's tree's editor/dist built from its editor/ at HEAD
+/// ([`publish::ensure_editor`]): npm ci and the vite build, as the
+/// justfile's `editor` recipe, only when editor/'s sources or lock differ
+/// from the ones the kept dist was built from.
+fn editor(c: &Cx) -> std::result::Result<Option<String>, String> {
+    if !c.tree.join("editor/package.json").is_file() {
+        return Ok(None);
+    }
+    let source = git(&c.tree, &["rev-parse", "HEAD:editor"]).map_err(|e| format!("{e:#}"))?;
+    let path = path_with_locked(c).map_err(|e| format!("{e:#}"))?;
+    publish::ensure_editor(&c.tree, &source, |dir| {
+        progress("building the editor");
+        let npm = |args: &[&str]| {
+            let mut cmd = Command::new("npm");
+            cmd.args(args).current_dir(dir).env("PATH", &path);
+            gate_env(&mut cmd);
+            cmd
+        };
+        run_step(
+            &mut npm(&["ci", "--silent", "--no-audit", "--no-fund"]),
+            "npm ci in editor/",
+        )?;
+        run_step(
+            &mut npm(&["run", "--silent", "build"]),
+            "npm run build in editor/",
+        )
+    })
 }
 
 /// A try that passed: the commit to land, whether it was words alone, and

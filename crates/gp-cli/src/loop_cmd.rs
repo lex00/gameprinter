@@ -629,6 +629,34 @@ pub(crate) fn health_in(paths: &gp_evidence::Paths, games_dir: Option<&std::path
     v
 }
 
+/// What the published gp (`link`, $GP_HOME/bin/gp) lacks of the page's
+/// files that go beside it (crate::publish::PAGES, in bin/gp-COMMIT.pages),
+/// as a problem's words; None when it has them all, or no gp is published
+/// as a link.
+fn published_pages_problem(link: &std::path::Path) -> Option<String> {
+    let real = std::fs::canonicalize(link).ok()?;
+    let name = real.file_name()?.to_str()?.to_owned();
+    if !name.starts_with("gp-") {
+        return None;
+    }
+    let dir = real.with_file_name(format!("{name}.pages"));
+    let missing: Vec<&str> = crate::publish::PAGES
+        .into_iter()
+        .filter(|rel| match *rel {
+            "editor/dist" => !dir.join("editor/dist/index.html").is_file(),
+            _ => !dir.join(rel).is_dir(),
+        })
+        .collect();
+    if missing.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "The published gp {name} has no {} in {}, so gp serve on it has no page of its own (no editor at /). The tool gate's next landing publishes them; to publish them now, run `just publish` in a clean checkout of main.",
+        missing.join(" and "),
+        dir.display()
+    ))
+}
+
 fn checks(paths: &gp_evidence::Paths, games_dir: Option<&std::path::Path>) -> Value {
     use std::fs;
     use std::time::UNIX_EPOCH;
@@ -714,6 +742,22 @@ fn checks(paths: &gp_evidence::Paths, games_dir: Option<&std::path::Path>) -> Va
                 ),
             );
         }
+        // Its start line said "the editor isn't built" (a server from
+        // before this has no `editor` in its file at all).
+        if own.get("editor").is_some_and(Value::is_null) {
+            bad(
+                &mut lines,
+                &mut problems,
+                format!(
+                    "gp serve {pid} serves no editor: it found no editor/dist, in the published gp's page files or the checkout. Restart it once the published gp has its page's files."
+                ),
+            );
+        }
+    }
+    // The page's files published beside the gp (crate::publish), which gp
+    // serve serves the page from.
+    if let Some(p) = published_pages_problem(&home.join("bin").join("gp")) {
+        bad(&mut lines, &mut problems, p);
     }
     if live == 0 {
         bad(&mut lines, &mut problems, "No gp serve runs for this home: start one (gp serve --port 7796 --games DIR --clip-agent claude).".into());
