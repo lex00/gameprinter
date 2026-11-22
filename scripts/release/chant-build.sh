@@ -103,7 +103,7 @@ check() {
     "gp $version"*) ;;
     *) echo "chant-build: the built gp says '$said', not gp $version" >&2; return 1 ;;
   esac
-  "$gp" self check || return 1
+  "$gp" self check --as-installed || return 1
   "$gp" game kit -o "$tmp/kit" || return 1
 }
 status=0

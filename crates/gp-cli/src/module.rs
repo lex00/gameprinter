@@ -227,7 +227,8 @@ pub(crate) fn kit_with(out: &Path, carried: Carried<'_>) -> Result<Outcome> {
     })
 }
 
-fn kit_from_source(src: &Path, out: &Path) -> Result<Outcome> {
+/// The module kit in `out`, made from the tool's source in `src`.
+pub(crate) fn kit_from_source(src: &Path, out: &Path) -> Result<Outcome> {
     let crates = src.join("crates");
     let mut seen = BTreeSet::new();
     let mut todo = vec![TOP.to_owned()];

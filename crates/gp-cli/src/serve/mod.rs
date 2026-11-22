@@ -320,7 +320,7 @@ pub(crate) fn repo_root() -> PathBuf {
 /// page. Returns the port, the answer's status and its body; a page with
 /// no editor to serve is an error naming where it looked.
 pub(crate) fn first_page(paths: &Paths, repo: &Path, games: &Path) -> Result<(u16, u16, String)> {
-    let dist = repo.join("editor/dist");
+    let dist = crate::repo::page_files(repo, "editor/dist");
     if !dist.join("index.html").is_file() {
         bail!("no editor at {}", dist.join("index.html").display());
     }
