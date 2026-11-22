@@ -1302,18 +1302,16 @@ pub(crate) fn run(args: &PictureArgs, paths: &gp_evidence::Paths) -> Result<Outc
             &model,
             &text,
             &list,
-            |art, _| {
-                art.map(|a| {
-                    let mut w = Watch::new(a, looks.clone());
-                    w.shots = shots.clone();
-                    if args.sprites.is_some() {
-                        w.sprites = Some(Vec::new());
-                    }
-                    if args.apart {
-                        w.apart = Some(Vec::new());
-                    }
-                    w
-                })
+            |a, _| {
+                let mut w = Watch::new(a, looks.clone());
+                w.shots = shots.clone();
+                if args.sprites.is_some() {
+                    w.sprites = Some(Vec::new());
+                }
+                if args.apart {
+                    w.apart = Some(Vec::new());
+                }
+                Some(w)
             },
             |w| (w.found, w.sprites, w.apart),
         )?;
@@ -1327,7 +1325,10 @@ pub(crate) fn run(args: &PictureArgs, paths: &gp_evidence::Paths) -> Result<Outc
     let mut details: BTreeMap<(&'static str, String), Tally> = BTreeMap::new();
     let mut clips_json = BTreeMap::new();
     let (mut permille_sum, mut sprites, mut background) = (0u64, (0u64, 0u64), (0u64, 0u64));
+    // The clips with no screen measure, and why: the command fails on any.
+    let mut unmeasured: BTreeMap<String, String> = BTreeMap::new();
     for (id, e) in &unmade {
+        unmeasured.insert(id.clone(), format!("it couldn't be made: {e}"));
         clips_json.insert(
             id.clone(),
             json!({"behaviour": behaviour(&Err(anyhow::anyhow!("unmade"))), "error": e, "screen": null, "groups": {}}),
@@ -1394,11 +1395,19 @@ pub(crate) fn run(args: &PictureArgs, paths: &gp_evidence::Paths) -> Result<Outc
                 details.entry(k).or_default().alone += 1;
             }
         }
+        let error = match &outcome {
+            Err(e) => Some(format!("{e:#}")),
+            Ok(o) if o.screen.is_none() => Some(NO_SCREEN.to_owned()),
+            Ok(_) => None,
+        };
+        if let Some(e) = &error {
+            unmeasured.insert(s.id.clone(), e.clone());
+        }
         clips_json.insert(
             s.id.clone(),
             json!({
                 "behaviour": behaviour(&outcome),
-                "error": outcome.as_ref().err().map(|e| format!("{e:#}")),
+                "error": error,
                 "screen": outcome.as_ref().ok().and_then(|o| o.screen.as_ref()).map(|x| json!({
                     "sprites": [x.sprites.same, x.sprites.total],
                     "background": [x.background.same, x.background.total],
@@ -1541,8 +1550,28 @@ pub(crate) fn run(args: &PictureArgs, paths: &gp_evidence::Paths) -> Result<Outc
             j
         }).collect::<Vec<_>>(),
         "clips": clips_json,
+        "unmeasured": unmeasured,
     });
-    Ok(Outcome::ok(v, text_out.trim_end().to_owned()))
+    Ok(with_unmeasured(v, text_out, &unmeasured))
+}
+
+/// Why a clip that ran has no screen measure.
+const NO_SCREEN: &str =
+    "its run took no screen measure (no frame of the two pictures was compared)";
+
+/// The outcome: exit 1, the reasons first, when any clip has no screen
+/// measure, so a run that measured nothing never reads as a measure of 0.
+fn with_unmeasured(v: Value, text: String, unmeasured: &BTreeMap<String, String>) -> Outcome {
+    let mut o = Outcome::ok(v, text.trim_end().to_owned());
+    if !unmeasured.is_empty() {
+        let mut head = format!("No screen measure for {} of the clips:\n", unmeasured.len());
+        for (id, why) in unmeasured {
+            let _ = writeln!(head, "  {id}: {why}");
+        }
+        o.text = format!("{head}\n{}", o.text);
+        o.exit = 1;
+    }
+    o
 }
 
 #[cfg(test)]
@@ -1631,6 +1660,20 @@ mod tests {
         .into_iter()
         .map(|f| (f.group.to_owned(), f.detail))
         .collect()
+    }
+
+    #[test]
+    fn a_clip_with_no_screen_measure_fails_saying_why() {
+        let mut why = BTreeMap::new();
+        let o = with_unmeasured(json!({}), "Fidelity 0.0%\n".into(), &why);
+        assert_eq!((o.exit, o.text.as_str()), (0, "Fidelity 0.0%"));
+        why.insert("c.001".to_owned(), "why".to_owned());
+        let o = with_unmeasured(json!({}), "F".into(), &why);
+        assert_eq!(o.exit, 1);
+        assert_eq!(
+            o.text,
+            "No screen measure for 1 of the clips:\n  c.001: why\n\nF"
+        );
     }
 
     #[test]

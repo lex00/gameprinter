@@ -1362,6 +1362,14 @@ pub(crate) fn asset_map(game: &Path, rom: &[u8]) -> Result<(PathBuf, String)> {
 }
 
 /// Lifts the game's assets for `rom` into `out`, unless already there.
+///
+/// The folder is shared: every run of the game on this machine reads it
+/// (`$GP_HOME/work/assets/SOURCE`), and a worktree whose asset map differs
+/// from main's lifts again into it while another run reads it. So one
+/// lift at a time writes it (a lock beside it), each file is written whole
+/// and renamed into place, and the map goes last: a reader never decodes a
+/// picture half written, and a folder whose map is this one's has every
+/// file of it.
 pub(crate) fn lift_into(game: &Path, rom: &[u8], out: &Path) -> Result<()> {
     let have = out.join(gp_assets::MAP_FILE);
     let (path, text) = match asset_map(game, rom) {
@@ -1371,17 +1379,58 @@ pub(crate) fn lift_into(game: &Path, rom: &[u8], out: &Path) -> Result<()> {
     };
     // Lifted already from this map: kept. A map that changed (a table
     // added) lifts again, so a lift never lags its map.
-    if fs::read_to_string(&have).is_ok_and(|t| t == text) {
+    let lifted = || fs::read_to_string(&have).is_ok_and(|t| t == text);
+    if lifted() {
+        return Ok(());
+    }
+    let parent = out.parent().unwrap_or(out);
+    fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
+    let name = out
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let lock_file = parent.join(format!(".{name}.lift-lock"));
+    let lock = fs::File::create(&lock_file)
+        .with_context(|| format!("creating {}", lock_file.display()))?;
+    lock.lock()
+        .with_context(|| format!("locking {}", lock_file.display()))?;
+    // Another run may have lifted it while this one waited.
+    if lifted() {
         return Ok(());
     }
     let (files, _) =
         crate::assets::lift_files(rom, &text).with_context(|| path.display().to_string())?;
-    for f in &files {
+    write_lifted(out, &files)
+}
+
+/// Writes a lift's files into `out` as [`lift_into`] says: each whole,
+/// written beside its place and renamed over it, one that is already the
+/// same left alone, and the map (`assets.toml`) last.
+pub(crate) fn write_lifted(out: &Path, files: &[gp_assets::File]) -> Result<()> {
+    let map_last = files
+        .iter()
+        .filter(|f| f.name != gp_assets::MAP_FILE)
+        .chain(files.iter().filter(|f| f.name == gp_assets::MAP_FILE));
+    for f in map_last {
         let p = out.join(&f.name);
-        if let Some(d) = p.parent() {
-            fs::create_dir_all(d)?;
+        if fs::read(&p).is_ok_and(|b| b == f.bytes) {
+            continue;
         }
-        fs::write(&p, &f.bytes)?;
+        let d = p.parent().unwrap_or(out);
+        fs::create_dir_all(d).with_context(|| format!("creating {}", d.display()))?;
+        let mut b = tempfile::Builder::new();
+        b.prefix(".lift-");
+        // Readable as a plain write left it, not a temporary file's 0600.
+        #[cfg(unix)]
+        b.permissions(std::os::unix::fs::PermissionsExt::from_mode(0o644));
+        let mut tmp = b
+            .tempfile_in(d)
+            .with_context(|| format!("writing beside {}", p.display()))?;
+        std::io::Write::write_all(&mut tmp, &f.bytes)
+            .with_context(|| format!("writing beside {}", p.display()))?;
+        tmp.persist(&p)
+            .map_err(|e| e.error)
+            .with_context(|| format!("writing {}", p.display()))?;
     }
     Ok(())
 }
@@ -1887,4 +1936,96 @@ fn score(
         out.exit = 1;
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn files(fill: u8) -> Vec<gp_assets::File> {
+        vec![
+            gp_assets::File {
+                name: gp_assets::MAP_FILE.into(),
+                bytes: vec![fill; 16],
+            },
+            gp_assets::File {
+                name: "sprites.png".into(),
+                bytes: vec![fill; 1 << 20],
+            },
+            gp_assets::File {
+                name: "objects/list.toml".into(),
+                bytes: vec![fill; 4096],
+            },
+        ]
+    }
+
+    /// Two lifts of different maps into one folder, one after another,
+    /// while a reader reads it: the reader sees each file whole, one lift's
+    /// or the other's, never cut short (a picture read half written left
+    /// gp picture's clip with no screen measure).
+    #[test]
+    fn a_lift_never_shows_a_reader_a_file_half_written() {
+        let d = tempfile::tempdir().expect("a folder");
+        let out = d.path().join("game");
+        write_lifted(&out, &files(b'a')).expect("lifted");
+        let done = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let reader = {
+            let (out, done) = (out.clone(), done.clone());
+            std::thread::spawn(move || {
+                let mut reads = 0u64;
+                while !done.load(std::sync::atomic::Ordering::Relaxed) {
+                    for (name, len) in [("sprites.png", 1 << 20), ("objects/list.toml", 4096)] {
+                        let b = fs::read(out.join(name)).expect("there all along");
+                        assert_eq!(b.len(), len, "{name} read cut short");
+                        assert!(b.iter().all(|x| *x == b[0]), "{name} mixed two lifts");
+                        reads += 1;
+                    }
+                }
+                reads
+            })
+        };
+        for i in 0..40 {
+            write_lifted(&out, &files(if i % 2 == 0 { b'b' } else { b'a' })).expect("lifted");
+        }
+        done.store(true, std::sync::atomic::Ordering::Relaxed);
+        assert!(reader.join().expect("the reader ran") > 0);
+        // The last lift's, the map too; no file left beside them.
+        assert_eq!(
+            fs::read(out.join(gp_assets::MAP_FILE)).expect("map"),
+            vec![b'a'; 16]
+        );
+        let left: Vec<String> = fs::read_dir(&out)
+            .expect("the folder")
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.starts_with(".lift-"))
+            .collect();
+        assert!(left.is_empty(), "{left:?}");
+    }
+
+    /// The map goes last, so a folder whose map is the new one has every
+    /// new file; a file already the same isn't written again.
+    #[test]
+    fn a_lift_writes_its_map_last_and_keeps_what_is_the_same() {
+        let d = tempfile::tempdir().expect("a folder");
+        let out = d.path().join("game");
+        write_lifted(&out, &files(b'a')).expect("lifted");
+        let at = |n: &str| {
+            fs::metadata(out.join(n))
+                .expect("there")
+                .modified()
+                .expect("a time")
+        };
+        let (map, png) = (at(gp_assets::MAP_FILE), at("sprites.png"));
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        let mut next = files(b'a');
+        next[0].bytes = b"map 2".to_vec();
+        next[1].bytes = vec![b'c'; 10];
+        write_lifted(&out, &next).expect("lifted");
+        assert!(at(gp_assets::MAP_FILE) > map && at("sprites.png") > png);
+        assert!(at(gp_assets::MAP_FILE) >= at("sprites.png"));
+        let list = at("objects/list.toml");
+        write_lifted(&out, &next).expect("lifted");
+        assert_eq!(at("objects/list.toml"), list);
+    }
 }

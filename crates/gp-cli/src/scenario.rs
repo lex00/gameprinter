@@ -463,10 +463,39 @@ struct Shared {
     tolerance: Vec<Fx>,
     base: String,
     /// The model's pictures for the screen measure, decoded by the first
-    /// scenario not cached while the others wait.
-    art: std::sync::OnceLock<Option<Arc<crate::screen::Art>>>,
+    /// scenario not cached while the others wait; why not, when they
+    /// can't be read.
+    art: std::sync::OnceLock<Result<Arc<crate::screen::Art>, String>>,
     /// The spec's names, for each clip's reads.
     names: SpecNames,
+}
+
+impl Shared {
+    /// The model's pictures (`art`), decoded once.
+    fn pictures(
+        &self,
+        model: &Model,
+        spec: &gp_sim::Spec,
+        b: &Bench,
+    ) -> Result<Arc<crate::screen::Art>, String> {
+        self.art
+            .get_or_init(|| {
+                crate::screen::art(model, spec, &b.assets, b.mapping.board_units).map_err(|e| {
+                    format!(
+                        "the model's pictures in {} can't be read: {e:#}",
+                        b.assets.display()
+                    )
+                })
+            })
+            .clone()
+    }
+
+    /// Whether the pictures were tried and couldn't be read: a run then
+    /// has no screen measure, and isn't kept in the cache as if it had
+    /// none to take.
+    fn pictures_failed(&self) -> bool {
+        self.art.get().is_some_and(|a| a.is_err())
+    }
 }
 
 /// What a thread keeps between its scenarios: the original at each start
@@ -575,9 +604,12 @@ fn score_one(
             own_log,
         ])
     ));
+    // A result kept with no screen measure while the pictures read now
+    // (one scored while its pictures were being lifted) is scored again.
     if cache
         && let Some(r) = read_cache::<Ran>(&file)
         && (!b.reads || r.reads.is_some())
+        && (r.screen.is_some() || shared.pictures(model, &b.hosted.spec, b).is_err())
     {
         return Ok(r);
     }
@@ -599,7 +631,7 @@ fn score_one(
         });
     }
     // A run stopped at its split covers part of the clip: not the score.
-    if cache && !r.stopped {
+    if cache && !r.stopped && !shared.pictures_failed() {
         write_cache(&file, &r);
     }
     Ok(r)
@@ -759,14 +791,7 @@ fn taped_one(
         // The pictures are the whole model's, decoded by whichever clip
         // comes first: not that clip's reads (the scorer compares them
         // whole).
-        let art = gp_sim::reads::paused(|| {
-            shared
-                .art
-                .get_or_init(|| {
-                    crate::screen::art(model, &spec, &b.assets, b.mapping.board_units).ok()
-                })
-                .clone()
-        });
+        let art = gp_sim::reads::paused(|| shared.pictures(model, &spec, b).ok());
         let opts = crate::screen::options_for(crate::roms::Platform::of_file(&b.rom));
         let mut probe = art.map(|a| crate::screen::Probe::new(a, opts));
         let (mut r, _) = scenario::run_stopping(
@@ -880,14 +905,15 @@ pub(crate) type Watched<T> = Result<(Ran, Option<T>)>;
 /// [`score_each`] runs them but never cached and never from a tape, on the
 /// helper threads; the original is the emulator itself, so the screens can
 /// read its sprite table (`crate::picture`). `make` is given the model's
-/// pictures (none without them) and the scenario. Results in the list's
+/// pictures and the scenario; a scenario whose pictures can't be read
+/// fails, saying why. Results in the list's
 /// order, each with what `keep` takes of its screens once the run is done.
 pub(crate) fn watch_each<W, T>(
     b: &Bench,
     model: &Model,
     text: &str,
     list: &[Scenario],
-    make: impl Fn(Option<Arc<crate::screen::Art>>, &Scenario) -> Option<W> + Sync,
+    make: impl Fn(Arc<crate::screen::Art>, &Scenario) -> Option<W> + Sync,
     keep: impl Fn(W) -> T + Sync,
 ) -> Result<Vec<Watched<T>>>
 where
@@ -955,7 +981,7 @@ fn lockstep_one<W>(
     shared: &Shared,
     mine: &mut Mine,
     s: &Scenario,
-    make: impl FnOnce(Option<Arc<crate::screen::Art>>) -> Option<W>,
+    make: impl FnOnce(Arc<crate::screen::Art>) -> Option<W>,
 ) -> Result<(Ran, Option<W>)>
 where
     W: gp_interp::lockstep::Screens<OriginalRuntime, crate::hosted::Model>,
@@ -979,12 +1005,11 @@ where
         interp = interp.with_draws(d)?;
     }
     let spec = interp.spec().clone();
-    // The model's pictures, for the screen measure; without them it is
-    // left out.
+    // The model's pictures, for the screen measure: a run that watches
+    // the screens has no measure without them, so it fails saying why.
     let art = shared
-        .art
-        .get_or_init(|| crate::screen::art(model, &spec, &b.assets, b.mapping.board_units).ok())
-        .clone();
+        .pictures(model, &spec, b)
+        .map_err(|e| anyhow::anyhow!("the screen measure can't be taken: {e}"))?;
     let mut probe = make(art);
     let (r, _) = scenario::run_with(
         o,
