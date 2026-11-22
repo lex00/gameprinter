@@ -36,6 +36,13 @@ pub(crate) struct Proposal<'a> {
     /// note and its `seen_in`, and goes back to next if it was done: the
     /// row is done only when every clip it names is fixed.
     pub clips: &'a [String],
+    /// Why the new row waits (`--parked`): it is added in line, not next,
+    /// its note "Parked: WHY." before the proposal's words. Filing a row
+    /// and parking it is then one call, not a propose and a `gp mechanic
+    /// queue --status "in line"` the loop takes for a hand fix
+    /// (crate::trouble::status_by_hand). A row the quest log has is left
+    /// as it is.
+    pub parked: Option<&'a str>,
 }
 
 /// Whether the row names the clip: in `seen_in`, or (rows from before
@@ -95,6 +102,10 @@ pub(crate) fn propose(paths: &Paths, game_dir: Option<&Path>, p: &Proposal) -> R
     if p.from.trim().is_empty() || p.what.trim().is_empty() {
         bail!("a proposed row says what it is (--what) and where it came from (--from)");
     }
+    let parked = p.parked.map(str::trim);
+    if parked.is_some_and(str::is_empty) {
+        bail!("a parked row says why it waits (--parked WHY)");
+    }
     let mut had_test = false;
     if let Some(t) = &p.test {
         let dir = game_dir.context("a row's test goes in the game's triage.toml: no games checkout found (pass --games or set GP_GAMES_DIR)")?;
@@ -128,10 +139,18 @@ pub(crate) fn propose(paths: &Paths, game_dir: Option<&Path>, p: &Proposal) -> R
     match at {
         None if archived => {}
         None => {
+            let proposed = format!("{MARK} {} (from {})", p.what.trim(), p.from.trim());
+            let (status, note) = match parked {
+                Some(why) => (
+                    "in line",
+                    format!("Parked: {}. {proposed}", why.trim_end_matches('.')),
+                ),
+                None => ("next", proposed),
+            };
             let mut r = json!({
                 "mechanic": p.row,
-                "status": "next",
-                "note": format!("{MARK} {} (from {})", p.what.trim(), p.from.trim()),
+                "status": status,
+                "note": note,
                 "by": "loop",
                 "from": p.from.trim(),
             });
@@ -189,6 +208,7 @@ pub(crate) fn propose(paths: &Paths, game_dir: Option<&Path>, p: &Proposal) -> R
     Ok(json!({
         "row": p.row,
         "added": !had_row,
+        "parked": !had_row && parked.is_some(),
         "clips_added": new_clips,
         "reopened": reopened,
         "test": wrote_test,
@@ -221,7 +241,9 @@ pub(crate) fn words(v: &Value) -> String {
         .as_array()
         .map(|a| a.iter().filter_map(Value::as_str).collect())
         .unwrap_or_default();
-    let mut s = if v["added"] == json!(true) {
+    let mut s = if v["parked"] == json!(true) {
+        format!("{row}: added to the quest log in line (parked), proposed by the loop.")
+    } else if v["added"] == json!(true) {
         format!("{row}: added to the quest log as next, proposed by the loop.")
     } else if !added.is_empty() {
         let back = if v["reopened"] == json!(true) {
@@ -419,6 +441,60 @@ mod tests {
                 .starts_with("Landed: level 1's start")
         );
         assert!(read_queue(&a).is_empty());
+    }
+
+    /// A row proposed parked is added in line with why before the
+    /// proposal's words, in the one call; a row the quest log has stays as
+    /// it is, and a park with no reason is refused.
+    #[test]
+    fn a_row_proposed_parked_is_in_line_in_one_call() {
+        let d = tempfile::tempdir().unwrap();
+        let p = paths(&d.path().join("home"));
+        let f = queue_file(&p, "rooftop").unwrap();
+        let prop = Proposal {
+            game: "rooftop",
+            row: "onboarding-later",
+            from: "a smoke test",
+            what: "the hint names the wrong genre",
+            repo: Some("tools"),
+            parked: Some("not a blocker for the first model step."),
+            ..Proposal::default()
+        };
+        let v = propose(&p, None, &prop).unwrap();
+        assert_eq!(
+            (v["added"].clone(), v["parked"].clone()),
+            (json!(true), json!(true))
+        );
+        assert!(words(&v).contains("in line (parked)"), "{}", words(&v));
+        let q = read_queue(&f);
+        assert_eq!(q[0]["status"], "in line");
+        assert_eq!(
+            q[0]["note"],
+            "Parked: not a blocker for the first model step. Proposed by the loop: the hint names the wrong genre (from a smoke test)"
+        );
+        assert_eq!(q[0]["repo"], "tools");
+
+        let mut q = read_queue(&f);
+        q[0]["status"] = json!("next");
+        write_queue(&f, &q).unwrap();
+        let again = propose(&p, None, &prop).unwrap();
+        assert_eq!(
+            (again["added"].clone(), again["parked"].clone()),
+            (json!(false), json!(false))
+        );
+        assert_eq!(
+            read_queue(&f)[0]["status"],
+            "next",
+            "a row it has is left as it is"
+        );
+
+        let blank = Proposal {
+            row: "other-row",
+            parked: Some("  "),
+            ..prop
+        };
+        assert!(propose(&p, None, &blank).is_err());
+        assert_eq!(read_queue(&f).len(), 1);
     }
 
     /// A test the triage can't read writes nothing: no row, no item.

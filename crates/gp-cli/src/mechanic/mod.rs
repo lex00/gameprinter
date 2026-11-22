@@ -228,6 +228,12 @@ pub enum MechanicCmd {
         /// The person's request: when to stop.
         #[arg(long, requires = "goal")]
         stop: Option<String>,
+        /// File the new row parked: in line, not next, its note "Parked:
+        /// WHY." before the proposal's words. One call, where a propose and
+        /// then `gp mechanic queue --status "in line"` by hand is taken for a
+        /// hand fix of the loop's work
+        #[arg(long, value_name = "WHY")]
+        parked: Option<String>,
         /// The games checkout (default $GP_GAMES_DIR).
         #[arg(long)]
         games: Option<PathBuf>,
@@ -950,6 +956,7 @@ pub(crate) fn run(cmd: &MechanicCmd, paths: &Paths) -> Result<Outcome> {
             place,
             todo,
             stop,
+            parked,
             games,
         } => {
             let dir = crate::roms_cmd::games_dir(games.as_deref())
@@ -972,6 +979,7 @@ pub(crate) fn run(cmd: &MechanicCmd, paths: &Paths) -> Result<Outcome> {
                         stop: stop.as_deref(),
                     }),
                     clips: &[],
+                    parked: parked.as_deref(),
                 },
             )?;
             let text = propose::words(&v);
