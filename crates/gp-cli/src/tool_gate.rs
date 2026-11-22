@@ -70,8 +70,12 @@ const TOOLS: &[&str] = &[
     "just", "node", "npm", "npx", "python3", "git", "ca65", "ld65",
 ];
 
+/// A line on stderr, never a panic: a dry run whose caller ended has a
+/// closed stderr, where `eprintln!` panics (a lane that panicked there
+/// left the gate holding tool.lock with no step logged, 2026-11-22).
 fn progress(s: impl AsRef<str>) {
-    eprintln!("tool gate: {}", s.as_ref());
+    use std::io::Write as _;
+    let _ = writeln!(std::io::stderr(), "tool gate: {}", s.as_ref());
 }
 
 /// How long each of the gate's steps took: a `step NAME: S s` line on
@@ -529,10 +533,16 @@ fn run_lanes(
         for (name, phase, f) in lanes {
             let (tx, stop) = (tx.clone(), &stop);
             s.spawn(move || {
-                let r = f(stop);
+                // A lane that panics fails as itself: its result still
+                // comes, so the loop below never waits for it.
+                let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(stop)))
+                    .unwrap_or_else(|p| Err(format!("lane {name} panicked: {}", panic_text(&*p))));
                 let _ = tx.send((name, phase, r));
             });
         }
+        // Only the lanes hold a sender now: if one ends without sending,
+        // recv ends instead of waiting for ever.
+        drop(tx);
         for _ in 0..n {
             let Ok((name, phase, r)) = rx.recv() else {
                 break;
@@ -561,6 +571,14 @@ fn run_lanes(
         Some(f) => Err(f),
         None => Ok(lines),
     }
+}
+
+/// What a panic said, from its payload.
+fn panic_text(p: &(dyn std::any::Any + Send)) -> String {
+    p.downcast_ref::<&str>()
+        .map(|s| (*s).to_owned())
+        .or_else(|| p.downcast_ref::<String>().cloned())
+        .unwrap_or_else(|| "no message".into())
 }
 
 /// Where a lane's output is kept: `<steps folder>/logs/NAME`.
@@ -674,7 +692,10 @@ fn tests_lane(c: &Cx, stop: &AtomicBool) -> std::result::Result<Vec<String>, Str
             })
             .collect();
         runs.into_iter()
-            .filter_map(|h| h.join().expect("a test run's thread").err())
+            .filter_map(|h| match h.join() {
+                Ok(r) => r.err(),
+                Err(p) => Some(format!("a test run panicked: {}", panic_text(&*p))),
+            })
             .collect()
     });
     note_changes(c, "the tests", since);
@@ -1516,6 +1537,29 @@ mod tests {
             .output()
             .unwrap();
         assert!(o.status.success(), "git {args:?}: {o:?}");
+    }
+
+    /// A lane that panics (as `eprintln!` does on an orphaned dry run's
+    /// closed stderr) fails the gate in its own name; before, run_lanes
+    /// waited for its result for ever, holding tool.lock.
+    #[test]
+    fn a_lane_that_panics_fails_the_gate() {
+        let dir = tempfile::tempdir().unwrap();
+        let c = cx(dir.path());
+        type R = std::result::Result<Vec<String>, String>;
+        let panics: LaneFn<'_> =
+            Box::new(|_: &AtomicBool| -> R { panic!("failed printing to stderr") });
+        let passes: LaneFn<'_> =
+            Box::new(|_: &AtomicBool| -> R { Ok(vec!["the tests passed".into()]) });
+        let lanes = vec![("check", "check", panics), ("tests", "tests", passes)];
+        let f = run_lanes(&c, lanes).unwrap_err();
+        assert_eq!(f.phase, "check");
+        assert!(
+            f.why
+                .contains("lane check panicked: failed printing to stderr"),
+            "{}",
+            f.why
+        );
     }
 
     fn script(path: &Path, body: &str) {

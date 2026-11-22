@@ -126,10 +126,10 @@ pub(crate) fn holder_file(home: &Path, lane: Lane) -> PathBuf {
 pub(crate) fn wait_for_an_older_tool_gate(home: &Path) -> Option<fs::File> {
     let h = older_tool_gate(home)?;
     let lock = open_lock(home, Lane::Model).ok()?;
-    eprintln!(
+    say(&format!(
         "tool gate: an older gp's tool gate (pid {}) holds gate.lock: waiting for it",
         h["pid"]
-    );
+    ));
     lock.lock().ok()?;
     Some(lock)
 }
@@ -259,24 +259,38 @@ fn watch(h: &Value, what: &str, lock: &str, file: &Path, done: &AtomicBool) {
             continue;
         };
         let says = format!("{what} {} gives up {lock}: {why}", std::process::id());
-        eprintln!("gate: {says}");
+        // The flag and the exit timer come before any writing: an orphaned
+        // dry run's stderr is closed (eprintln! panics there) or full (a
+        // write blocks), and either kept this watch from stopping the gate.
         *WHY.lock().unwrap_or_else(|e| e.into_inner()) = says.clone();
         STOP.store(true, Ordering::SeqCst);
-        if let Some(s) = h["steps"].as_str() {
-            use std::io::Write as _;
-            if let Ok(mut f) = fs::OpenOptions::new().append(true).open(s) {
-                let line = json!({"at": crate::open::now_rfc3339(), "note": says});
-                let _ = f.write_all(format!("{line}\n").as_bytes());
-            }
-        }
-        std::thread::sleep(GRACE);
-        eprintln!(
-            "gate: {what} didn't end within {} s: exiting",
-            GRACE.as_secs()
-        );
-        let _ = fs::remove_file(file);
-        std::process::exit(2);
+        let gone = file.to_owned();
+        std::thread::spawn(move || {
+            std::thread::sleep(GRACE);
+            let _ = fs::remove_file(&gone);
+            std::process::exit(2);
+        });
+        note(h, &says);
+        say(&format!("gate: {says}"));
+        return;
     }
+}
+
+/// A note in the holder's steps file, when it has one.
+fn note(h: &Value, says: &str) {
+    use std::io::Write as _;
+    if let Some(s) = h["steps"].as_str()
+        && let Ok(mut f) = fs::OpenOptions::new().append(true).open(s)
+    {
+        let line = json!({"at": crate::open::now_rfc3339(), "note": says});
+        let _ = f.write_all(format!("{line}\n").as_bytes());
+    }
+}
+
+/// A line on stderr that can't panic.
+fn say(line: &str) {
+    use std::io::Write as _;
+    let _ = writeln!(std::io::stderr(), "{line}");
 }
 
 /// The live holder of `home`'s lock of `lane`, from its holder file.
