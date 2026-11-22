@@ -85,6 +85,10 @@ Tool gates batch the same way, with each other only (their tickets' run is `tool
 
 The loop's runner starts every yes'd `model gate` and `tool gate` card at once (any other yes still runs one at a time), so cards the person said yes to together land in one gate run.
 
+### A dry run's pass, used by the YES
+
+A model gate `--dry-run` that passes keeps its pass in the gate's home, `passed/KEY.json`, with the tip's score and its own beside it. KEY is the BLAKE3 of the patch's bytes, its message and author, its `--removes` and `--replaces`, the game and the branch; the file names the tip, the gp the gate ran (its file, size and time), the game kit's hash and the commit the dry run made on the tip. The gate after the person's YES, when its patch has such a pass on the very same tip with the same gp and kit, and its batch is that patch alone, lands that commit with no scoring again and says so (`dry_run_reused` in its JSON, and a line naming when the dry run passed); the status file is written from the kept scores. Anything else (the tip moved, a new gp published, the kit changed, the commit gone) scores the patch again as before, with a line saying why. A pass is used once, or dropped when it can't be. A working copy with no git of its own is always scored, since its landing writes curves back to the copy.
+
 ### The locks
 
 A home has two locks. `gate.lock` is the model gate's (it works in the home's `tree/`, `kit/`, `modules/` and `scores/` and lands in the games checkout), and `tool.lock` is the tool gate's (it works in `tool/` and lands in gameprinter). A tool gate's publish moves `$GP_HOME/bin/gp` while a model gate may be running; the model gate finds the file of the gp it started on once, its links followed, and starts every gp of its run from that file, so it finishes on the gp it started on. A tool gate of a gp from before the two locks held `gate.lock` and worked in `tool/`: a tool gate that finds such a gate holding `gate.lock` (its holder file says `tool gate`) waits for it, and `gp loop clean --gate` leaves the tool gate's build folders while either runs.

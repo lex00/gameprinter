@@ -343,14 +343,240 @@ fn score(
     fs::create_dir_all(&dir)?;
     let f = dir.join(format!("{name}-{}.json", c.run));
     fs::write(&f, serde_json::to_vec(&o.json)?)?;
-    let clips = o.json["record"]["predicate"]["clips"]
-        .as_array()
-        .context("gp corpus score's record has no clips")?;
-    let rows = clips
-        .iter()
-        .map(|v| (v["id"].as_str().unwrap_or("").to_owned(), Row::of(v)))
-        .collect();
+    let rows = rows_of(&o.json).context("gp corpus score's record has no clips")?;
     Ok((rows, f))
+}
+
+/// The rows of a `gp corpus score` JSON, None when it has no clips.
+fn rows_of(v: &Value) -> Option<Rows> {
+    let clips = v["record"]["predicate"]["clips"].as_array()?;
+    Some(
+        clips
+            .iter()
+            .map(|v| (v["id"].as_str().unwrap_or("").to_owned(), Row::of(v)))
+            .collect(),
+    )
+}
+
+/// A dry run's pass, kept so the gate after the person's YES lands it
+/// without scoring again (row workers-start-from-a-warm-build, the model
+/// gate's counterpart of the tool gate's checks-run-once): the same patch
+/// (its bytes, message and author, its --removes and --replaces), for the
+/// same game and branch, passed on the same tip with the same gp and game
+/// kit. Its commit stays in the repo's objects, on top of the tip, so
+/// landing it gives what the gate would land. One file per patch in
+/// `<gate home>/passed/`, used once.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub(crate) struct DryPass {
+    pub tip: String,
+    pub gp: String,
+    pub kit_hash: String,
+    /// The commit the dry run made on the tip, which a landing moves to.
+    pub commit: String,
+    pub at: String,
+    /// Whether its commit holds curves measured again.
+    pub remeasured: bool,
+    /// The regressions the dry run let pass, with their reasons.
+    #[serde(default)]
+    pub tolerated: Vec<String>,
+}
+
+/// What a patch's pass is kept by: the BLAKE3 of all that makes its
+/// commit and verdict, but the tip, the gp and the kit (in [`DryPass`]).
+fn pass_key(item: &Item, rel: &str, onto: &str) -> Option<String> {
+    let diff = fs::read(&item.patch.diff).ok()?;
+    let mut h = blake3::Hasher::new();
+    let words = [
+        rel.to_owned(),
+        onto.to_owned(),
+        item.message.clone().unwrap_or_default(),
+        item.patch.message.clone().unwrap_or_default(),
+        item.patch.author.clone().unwrap_or_default(),
+        item.patch.date.clone().unwrap_or_default(),
+        item.removes.join("\n"),
+        item.replaces.join("\n"),
+    ];
+    for w in &words {
+        h.update(&(w.len() as u64).to_le_bytes());
+        h.update(w.as_bytes());
+    }
+    h.update(&diff);
+    Some(h.finalize().to_hex()[..32].to_owned())
+}
+
+fn pass_file(home: &Path, key: &str) -> PathBuf {
+    home.join("passed").join(format!("{key}.json"))
+}
+
+/// The gp this gate runs as a pass names it: its path with its size and
+/// time, so a gp built again in place isn't taken for the one that passed.
+fn gp_mark(gp: &Path) -> String {
+    let m = fs::metadata(gp).ok();
+    format!(
+        "{} {} {}",
+        gp.display(),
+        m.as_ref().map_or(0, |m| m.len()),
+        m.and_then(|m| m.modified().ok())
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map_or(0, |d| d.as_millis())
+    )
+}
+
+/// Why `kept` can't be landed as it is on `tip` with `gp` and `kit_hash`,
+/// None when it can: the same tip, gp and kit, and its commit is in the
+/// repo on top of the tip.
+fn pass_differs(
+    repo: &Path,
+    kept: &DryPass,
+    tip: &str,
+    gp: &str,
+    kit_hash: &str,
+) -> Option<String> {
+    if kept.tip != tip {
+        return Some(format!(
+            "the tip moved since ({} then, {} now)",
+            short(&kept.tip),
+            short(tip)
+        ));
+    }
+    if kept.gp != gp {
+        return Some("another gp runs the gate now".into());
+    }
+    if kept.kit_hash != kit_hash {
+        return Some("the game kit changed since".into());
+    }
+    let commit = format!("{}^{{commit}}", kept.commit);
+    if git(repo, &["cat-file", "-e", &commit]).is_err() {
+        return Some("its commit is gone".into());
+    }
+    // The patch's commit, and one of curves measured again on it when the
+    // dry run made one: either way on top of the tip.
+    match git(repo, &["merge-base", "--is-ancestor", tip, &kept.commit]) {
+        Ok(_) if kept.commit != tip => None,
+        _ => Some("its commit isn't on the tip".into()),
+    }
+}
+
+fn short(s: &str) -> &str {
+    &s[..s.len().min(12)]
+}
+
+/// The scores a kept pass was made with: `KEY.tip.json` and `KEY.new.json`
+/// beside its file.
+fn pass_scores(f: &Path) -> (PathBuf, PathBuf) {
+    (f.with_extension("tip.json"), f.with_extension("new.json"))
+}
+
+/// Keeps a dry run's pass of `item` on `tip` ([`DryPass`]), with the tip's
+/// score and its own for the status a landing writes.
+fn keep_pass(
+    c: &Ctx,
+    item: &Item,
+    tip: &str,
+    end: &State,
+    tip_json: Option<&Path>,
+    tolerated: Vec<String>,
+) {
+    let Some(key) = pass_key(item, &c.rel.to_string_lossy(), &c.onto) else {
+        return;
+    };
+    let Ok(gp) = this_gp() else {
+        return;
+    };
+    let kept = DryPass {
+        tip: tip.to_owned(),
+        gp: gp_mark(&gp),
+        kit_hash: c.kit_hash.clone(),
+        commit: end.commit.clone(),
+        at: crate::open::now_rfc3339(),
+        remeasured: end.remeasured,
+        tolerated,
+    };
+    let f = pass_file(&c.home, &key);
+    let (tip_file, new_file) = pass_scores(&f);
+    if fs::create_dir_all(f.parent().unwrap_or(&c.home)).is_err() {
+        return;
+    }
+    for (from, to) in [(tip_json, &tip_file), (Some(end.json.as_path()), &new_file)] {
+        match from.filter(|p| p.is_file()) {
+            Some(p) => {
+                let _ = fs::copy(p, to);
+            }
+            None => {
+                let _ = fs::remove_file(to);
+            }
+        }
+    }
+    if let Ok(b) = serde_json::to_vec(&kept) {
+        let _ = fs::write(&f, b);
+    }
+}
+
+/// The gate after the person's YES, for a patch whose dry run passed on
+/// this very tip with this gp and kit ([`DryPass`]): the dry run's commit
+/// lands, with no scoring again. None, with why in `lines` when a pass was
+/// kept, when it can't: the gate then runs whole. A pass is used once.
+fn reuse_pass(c: &Ctx, item: &Item, tip: &str, lines: &mut Vec<String>) -> Option<Outcome> {
+    let key = pass_key(item, &c.rel.to_string_lossy(), &c.onto)?;
+    let f = pass_file(&c.home, &key);
+    let kept: DryPass = serde_json::from_slice(&fs::read(&f).ok()?).ok()?;
+    let (tip_file, new_file) = pass_scores(&f);
+    let forget = || {
+        for p in [&f, &tip_file, &new_file] {
+            let _ = fs::remove_file(p);
+        }
+    };
+    let gp = gp_mark(&this_gp().ok()?);
+    if let Some(why) = pass_differs(&c.repo, &kept, tip, &gp, &c.kit_hash) {
+        lines.push(format!(
+            "its dry run passed at {}, but {why}: scored again",
+            kept.at
+        ));
+        forget();
+        return None;
+    }
+    if let Err((why, _)) = land(&c.repo, &c.onto, tip, &kept.commit) {
+        lines.push(format!(
+            "its dry run's commit {} didn't land ({why}): scored again",
+            short(&kept.commit)
+        ));
+        forget();
+        return None;
+    }
+    lines.push(format!(
+        "its dry run passed on this tip at {} with this gp and kit: its commit {} landed with no scoring again",
+        kept.at,
+        short(&kept.commit)
+    ));
+    let read = |p: &Path| {
+        fs::read(p)
+            .ok()
+            .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
+            .and_then(|v| rows_of(&v))
+            .unwrap_or_default()
+    };
+    let (tip_rows, new_rows) = (read(&tip_file), read(&new_file));
+    if !tip_rows.is_empty() && !new_rows.is_empty() {
+        lines.push(status_line(c, &kept.commit, &tip_rows, &new_rows));
+    }
+    forget();
+    let line = format!("PASS: landed {} on {}", kept.commit, c.onto);
+    let mut all = lines.clone();
+    all.push(line);
+    Some(Outcome {
+        json: json!({
+            "verdict": "PASS",
+            "commit": kept.commit,
+            "landed": kept.commit,
+            "tip": tip,
+            "batch": 1,
+            "dry_run_reused": kept.at,
+            "tolerated": kept.tolerated,
+            "lines": all,
+        }),
+        text: all.join("\n"),
+        exit: 0,
+    })
 }
 
 /// The files of the package scan's needs-rewrite items, by count.
@@ -1343,6 +1569,16 @@ fn gate_batch(c: &Ctx, a: &GateArgs, items: &[Item], rom: &[u8]) -> Result<Vec<O
                     .join(", ")
             )
         }];
+        // A YES to a patch whose dry run passed on this tip lands its commit
+        // with no scoring again (DryPass).
+        if attempt == 1
+            && n == 1
+            && !a.dry_run
+            && c.copy.is_none()
+            && let Some(o) = reuse_pass(c, &items[0], &tip, &mut lines)
+        {
+            return Ok(vec![o]);
+        }
         let mut verdicts: Vec<Option<std::result::Result<(), Failed>>> = vec![None; n];
         // Before any scoring: a patch that doesn't apply on the tip, or
         // that the hook refuses, stops here in seconds.
@@ -1484,6 +1720,15 @@ fn gate_batch(c: &Ctx, a: &GateArgs, items: &[Item], rom: &[u8]) -> Result<Vec<O
             lines.push(status_line(c, &end.commit, &tip_rows, &end.rows));
         }
         said.extend(lines);
+        // A dry run's pass is kept for the gate after the YES (DryPass).
+        if a.dry_run && n == 1 && c.copy.is_none() && end.commits.iter().any(|(k, _)| *k == 0) {
+            let tolerated = said
+                .iter()
+                .filter_map(|l| l.strip_prefix(TOLERATED))
+                .map(str::to_owned)
+                .collect();
+            keep_pass(c, &items[0], &tip, &end, tip_json.as_deref(), tolerated);
+        }
         let outcomes = items
             .iter()
             .enumerate()
@@ -2660,6 +2905,162 @@ mod theme_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A YES's gate lands the commit its dry run passed with on the same
+    /// tip, gp and kit, once, with no scoring; another patch, or the same
+    /// on a tip that moved, is scored again.
+    #[test]
+    fn a_yes_lands_its_passing_dry_runs_commit_without_scoring_again() {
+        let d = tempfile::tempdir().unwrap();
+        let repo = d.path().join("repo");
+        fs::create_dir_all(repo.join("g")).unwrap();
+        let g = |args: &[&str]| {
+            let mut v = vec!["-c", "user.name=t", "-c", "user.email=t@t"];
+            v.extend_from_slice(args);
+            git(&repo, &v).unwrap()
+        };
+        g(&["init", "-q", "-b", "main"]);
+        fs::write(repo.join("g/model.toml"), "a = 1\n").unwrap();
+        g(&["add", "-A"]);
+        g(&["commit", "-qm", "a"]);
+        let tip = g(&["rev-parse", "main"]);
+        // The dry run's commit on the tip, main left where it was.
+        g(&["checkout", "-qb", "side"]);
+        fs::write(repo.join("g/model.toml"), "a = 2\n").unwrap();
+        g(&["commit", "-qam", "fix"]);
+        let made = g(&["rev-parse", "side"]);
+        g(&["checkout", "-q", "main"]);
+        let home = d.path().join("gate");
+        let c = Ctx {
+            repo: repo.clone(),
+            rel: PathBuf::from("g"),
+            copy: None,
+            tree: repo.clone(),
+            paths: Paths {
+                home: home.clone(),
+                store: home.join("store"),
+                roms: d.path().join("roms"),
+            },
+            home: home.clone(),
+            onto: "main".into(),
+            run: "gate".into(),
+            kit: d.path().join("kit"),
+            kit_hash: "kit1".into(),
+        };
+        let diff = d.path().join("fix.diff");
+        fs::write(&diff, "diff --git a/g/model.toml b/g/model.toml\n").unwrap();
+        let item = |message: &str| Item {
+            patch: Patch {
+                diff: diff.clone(),
+                message: None,
+                author: None,
+                date: None,
+            },
+            shown: "fix.diff".into(),
+            message: Some(message.into()),
+            removes: Vec::new(),
+            replaces: Vec::new(),
+            files: vec!["g/model.toml".into()],
+        };
+        let end = State {
+            commit: made.clone(),
+            rows: Rows::new(),
+            json: PathBuf::new(),
+            commits: vec![(0, made.clone())],
+            remeasured: false,
+        };
+        keep_pass(&c, &item("fix"), &tip, &end, None, vec!["x: y".into()]);
+        let mut lines = Vec::new();
+        assert!(
+            reuse_pass(&c, &item("another message"), &tip, &mut lines).is_none(),
+            "another patch has no pass kept"
+        );
+        assert!(lines.is_empty());
+        let o = reuse_pass(&c, &item("fix"), &tip, &mut lines).expect("its pass is used");
+        assert_eq!(o.json["verdict"], json!("PASS"), "{}", o.text);
+        assert_eq!(o.json["landed"], json!(made));
+        assert_eq!(o.json["tolerated"], json!(["x: y"]));
+        assert!(o.text.contains("no scoring again"), "{}", o.text);
+        assert_eq!(g(&["rev-parse", "main"]), made, "its commit landed");
+        assert!(
+            reuse_pass(&c, &item("fix"), &made, &mut Vec::new()).is_none(),
+            "a pass is used once"
+        );
+        // Kept on the old tip, asked on the new one: scored again, saying why.
+        keep_pass(&c, &item("fix"), &tip, &end, None, Vec::new());
+        let mut lines = Vec::new();
+        assert!(reuse_pass(&c, &item("fix"), &made, &mut lines).is_none());
+        assert!(lines[0].contains("the tip moved"), "{lines:?}");
+        // A commit that isn't on the tip is never landed.
+        let kept = DryPass {
+            tip: made.clone(),
+            gp: "gp".into(),
+            kit_hash: "k".into(),
+            commit: tip.clone(),
+            at: String::new(),
+            remeasured: false,
+            tolerated: Vec::new(),
+        };
+        assert_eq!(
+            pass_differs(&repo, &kept, &made, "gp", "k").as_deref(),
+            Some("its commit isn't on the tip")
+        );
+        let gone = DryPass {
+            commit: "0".repeat(40),
+            ..kept.clone()
+        };
+        assert_eq!(
+            pass_differs(&repo, &gone, &made, "gp", "k").as_deref(),
+            Some("its commit is gone")
+        );
+        assert!(pass_differs(&repo, &kept, &made, "another gp", "k").is_some());
+        assert!(pass_differs(&repo, &kept, &made, "gp", "another kit").is_some());
+        assert!(
+            fs::read_dir(home.join("passed")).unwrap().next().is_none(),
+            "a pass not used is dropped"
+        );
+    }
+
+    #[test]
+    fn a_pass_is_kept_by_all_that_makes_its_commit() {
+        let d = tempfile::tempdir().unwrap();
+        let diff = d.path().join("p.diff");
+        fs::write(&diff, "x").unwrap();
+        let item = Item {
+            patch: Patch {
+                diff: diff.clone(),
+                message: None,
+                author: None,
+                date: None,
+            },
+            shown: String::new(),
+            message: Some("m".into()),
+            removes: Vec::new(),
+            replaces: Vec::new(),
+            files: Vec::new(),
+        };
+        let k = pass_key(&item, "g", "main").unwrap();
+        assert_eq!(pass_key(&item, "g", "main").unwrap(), k);
+        assert_ne!(pass_key(&item, "g", "other").unwrap(), k);
+        assert_ne!(pass_key(&item, "h", "main").unwrap(), k);
+        let removes = Item {
+            removes: vec!["g.a.001".into()],
+            patch: Patch {
+                diff: diff.clone(),
+                message: None,
+                author: None,
+                date: None,
+            },
+            ..item
+        };
+        assert_ne!(pass_key(&removes, "g", "main").unwrap(), k);
+        fs::write(&diff, "y").unwrap();
+        let changed = Item {
+            removes: Vec::new(),
+            ..removes
+        };
+        assert_ne!(pass_key(&changed, "g", "main").unwrap(), k, "other bytes");
+    }
 
     fn row(frames: u64, together: u64) -> Row {
         Row {

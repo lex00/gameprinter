@@ -221,6 +221,7 @@ mod validate;
 mod validate_fit;
 mod validate_target;
 mod video;
+mod warm;
 mod watch;
 mod watch_serve;
 mod watch_z80;

@@ -29,12 +29,17 @@ A worker changing Rust passes `--rust`. Run it again at the start of each new sh
 | What | Where it comes from |
 |---|---|
 | `GP_WORKER`, `GP_WORKER_OUT` | The name, and your private folder `$GP_HOME/work/workers/NAME`. Write outputs there, never in a shared folder |
-| `CARGO_TARGET_DIR` | This worktree's own target folder, `$GP_HOME/work/target/BRANCH/HASH`. Never another worktree's: cargo mixes checkouts that share a folder. Sharing happens through the compile cache below instead |
+| `CARGO_TARGET_DIR` | This worktree's own target folder, `$GP_HOME/work/target/BRANCH/HASH`. Never another worktree's: cargo mixes checkouts that share a folder. Sharing happens through the compile cache below instead, and for a loop worker through a warm start (below) |
 | `GP`, `GP_BIN`, `PATH` | The published gp, first on `PATH`, unless `--rust`: `$GP` runs the games repo's `just check`. A worker not changing Rust builds nothing and runs this build |
 | `GP_PROFILE` | `fastdev`, the optimized profile the gate also publishes. Workers changing Rust build with it: `cargo build --profile fastdev -p gp-cli`, then run `$CARGO_TARGET_DIR/fastdev/gp`. A debug build runs the game gate three times slower |
-| `CARGO_BUILD_JOBS`, nice level | From the machine's load |
+| `CARGO_BUILD_JOBS` | The cores divided by the loop's workers in a `gameprinter` worktree now (this one among them), at least 2. The load average used to set it, and on a machine busy scoring that left -j 2 |
+| nice level | From the machine's load: 10 under half load, 15 under full, 19 past it |
 
 `$GP_HOME/bin/locked` comes first on `PATH`, so every `cargo` goes through the locked cargo: one compile at a time on the machine, jobs from free memory, and compiled dependencies shared across worktrees through `sccache` when it is installed. Tests run outside the lock.
+
+### A warm start
+
+gp serve's runner makes a tools worker's target folder when it makes its worktree, as a copy-on-write clone of the tool gate's own target (`<gate home>/tool/target`, built from main's tip): `cp -c` (clonefile) on macOS, `cp --reflink=always` on Linux, so it takes no disk until a build writes. Each file of the worktree that is byte for byte the gate tree's takes the gate tree's file's modified time, so cargo finds fresh what the gate built from those bytes and compiles only what the worker changes; a file that differs keeps its own time and is built again. Where the disk can't clone, or a tool gate is building in its target at that moment, the folder starts empty as before, and the worker's record (`warm`) says why. `gp worker env` says when the folder started warm. A game's module build needs none of this: it already builds in one folder per game, `$GP_HOME/work/module-build/GAME`, kept between builds.
 
 ## Tests
 

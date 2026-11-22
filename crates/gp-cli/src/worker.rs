@@ -30,8 +30,10 @@ pub enum WorkerCmd {
     /// of the worktree it runs in ($GP_HOME/work/target/BRANCH/HASH, HASH from
     /// the worktree's path; $GP_TARGET_DIR replaces $GP_HOME/work/target), the
     /// build profile (fastdev) and the gate's published gp ($GP_HOME/bin/gp), a
-    /// nice level and a job limit from the machine's load and core count, and
-    /// the rules every brief repeats. With `--shell`, the same as lines for
+    /// nice level from the machine's load, a job limit of its cores divided by
+    /// the loop's workers in a tool worktree now, and the rules every brief
+    /// repeats. It says when gp serve's runner started the target folder as
+    /// a clone of the tool gate's build. With `--shell`, the same as lines for
     /// `eval "$(gp worker env NAME --shell)"`: exports of GP_WORKER,
     /// GP_WORKER_OUT, CARGO_TARGET_DIR, GP_PROFILE, GP_BIN, GP (the gp the
     /// games repo's `just check` runs), CARGO_BUILD_JOBS and GP_JOBS,
@@ -68,26 +70,33 @@ pub(crate) const RULES: &[&str] = &[
     "Do one task, then stop with a report: what changed, the numbers checked, and the open items.",
 ];
 
-/// The machine's load: the 1-minute load average and the cores.
+/// The machine's load: the 1-minute load average, the cores, and the
+/// workers that may build Rust now.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Load {
     pub load: f64,
     pub cores: usize,
+    /// The loop's live workers in a worktree of the tool (each may build
+    /// gp), this one among them: at least 1.
+    pub builders: usize,
 }
 
 impl Load {
-    pub fn now() -> Load {
+    pub fn now(home: &Path) -> Load {
         Load {
             load: load_average().unwrap_or(0.0),
             cores: std::thread::available_parallelism().map_or(1, |n| n.get()),
+            builders: builders_now(home),
         }
     }
 
-    /// Build jobs: the cores the load leaves free, at least 2 and at most
-    /// half the machine, so no one worker takes it all.
+    /// Build jobs: the cores divided by the workers building now, at least
+    /// 2. The load average left most workers at -j 2 on a machine busy
+    /// scoring (a first build took 560 s, 2026-11-22), though a build runs
+    /// at nice 15 or 19 and gives way to that work by itself; the locked
+    /// cargo still caps the jobs by free memory.
     pub fn jobs(self) -> usize {
-        let free = (self.cores as f64 - self.load).floor().max(0.0) as usize;
-        free.clamp(2, (self.cores / 2).max(2))
+        (self.cores / self.builders.max(1)).max(2)
     }
 
     /// The nice level: 10 on a machine under half load, 15 under full
@@ -102,6 +111,22 @@ impl Load {
             19
         }
     }
+}
+
+/// The loop's workers holding a step now whose worktree is the tool's (a
+/// gameprinter checkout, so they may build gp), at least 1: the worker
+/// asking is one.
+fn builders_now(home: &Path) -> usize {
+    gp_mcp::steps::workers(home)
+        .iter()
+        .filter(|w| gp_mcp::steps::holds(w))
+        .filter(|w| {
+            w["worktree"]
+                .as_str()
+                .is_some_and(|t| Path::new(t).join("crates").join("gp-cli").is_dir())
+        })
+        .count()
+        .max(1)
 }
 
 /// The 1-minute load average, from /proc/loadavg on Linux or
@@ -159,6 +184,14 @@ pub(crate) fn branch_folder(branch: &str) -> String {
 fn worktree_folder(worktree: &Path) -> String {
     let h = blake3::hash(worktree.as_os_str().as_encoded_bytes());
     h.to_hex()[..16].to_owned()
+}
+
+/// The cargo target folder of `worktree` on `branch` under `root`:
+/// `ROOT/BRANCH/HASH`. `worktree` is its path with links resolved, as
+/// [`current_worktree`] gives it.
+pub(crate) fn target_of(root: &Path, branch: Option<&str>, worktree: &Path) -> PathBuf {
+    root.join(branch_folder(branch.unwrap_or("detached")))
+        .join(worktree_folder(worktree))
 }
 
 /// The worktree the command runs in: git's top level, else the working
@@ -223,10 +256,11 @@ impl Env {
         Ok(Env {
             name: name.to_owned(),
             out: home.join("work").join("workers").join(name),
-            target: target
-                .unwrap_or_else(|| home.join("work").join("target"))
-                .join(branch_folder(branch.unwrap_or("detached")))
-                .join(worktree_folder(worktree)),
+            target: target_of(
+                &target.unwrap_or_else(|| home.join("work").join("target")),
+                branch,
+                worktree,
+            ),
             worktree: worktree.to_owned(),
             bin: home.join("bin").join("gp"),
             rust,
@@ -266,8 +300,9 @@ impl Env {
             format!("  output folder   {}", self.out.display()),
             format!("  worktree        {}", self.worktree.display()),
             format!(
-                "  cargo target    {} (this worktree's own)",
-                self.target.display()
+                "  cargo target    {} (this worktree's own{})",
+                self.target.display(),
+                warm_words(&self.target)
             ),
             if self.rust {
                 format!(
@@ -308,6 +343,26 @@ impl Env {
     }
 }
 
+/// `, started from the tool gate's build of TIP` when gp serve's runner
+/// started `target` warm (crate::warm), else nothing.
+fn warm_words(target: &Path) -> String {
+    let Some(v) = fs::read(target.join(crate::warm::MARKER))
+        .ok()
+        .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
+    else {
+        return String::new();
+    };
+    let tip = v["tree_tip"].as_str().unwrap_or("");
+    format!(
+        ", started from the tool gate's build{}: only what you change compiles",
+        if tip.len() >= 12 {
+            format!(" of {}", &tip[..12])
+        } else {
+            String::new()
+        }
+    )
+}
+
 fn shell_quote(s: &str) -> String {
     if s.chars()
         .all(|c| c.is_ascii_alphanumeric() || "/-_.:+@%".contains(c))
@@ -336,7 +391,7 @@ pub(crate) fn run(cmd: &WorkerCmd, paths: &Paths) -> Result<Outcome> {
                 branch.as_deref(),
                 &worktree,
                 *rust,
-                Load::now(),
+                Load::now(&paths.home),
             )?;
             fs::create_dir_all(&env.out)
                 .with_context(|| format!("making {}", env.out.display()))?;
@@ -354,6 +409,8 @@ pub(crate) fn run(cmd: &WorkerCmd, paths: &Paths) -> Result<Outcome> {
                     "jobs": env.load.jobs(),
                     "load": env.load.load,
                     "cores": env.load.cores,
+                    "builders": env.load.builders,
+                    "warm": warm_words(&env.target).trim_start_matches(", "),
                     "rules": RULES,
                 }),
                 text: if *shell { env.shell() } else { env.words() },
@@ -369,10 +426,21 @@ mod tests {
 
     #[test]
     fn jobs_and_nice_follow_the_load() {
-        let l = |load, cores| Load { load, cores };
-        assert_eq!(l(0.0, 18).jobs(), 9, "at most half the machine");
-        assert_eq!(l(12.5, 18).jobs(), 5);
-        assert_eq!(l(98.0, 18).jobs(), 2, "never fewer than 2");
+        let l = |load, cores| Load {
+            load,
+            cores,
+            builders: 1,
+        };
+        let b = |cores, builders| Load {
+            load: 12.5,
+            cores,
+            builders,
+        };
+        assert_eq!(l(12.5, 18).jobs(), 18, "one worker building: every core");
+        assert_eq!(b(18, 2).jobs(), 9, "the cores shared by those building");
+        assert_eq!(b(18, 3).jobs(), 6);
+        assert_eq!(b(18, 0).jobs(), 18, "the asking worker is one");
+        assert_eq!(b(18, 20).jobs(), 2, "never fewer than 2");
         assert_eq!(l(0.0, 1).jobs(), 2);
         assert_eq!(l(4.0, 18).nice(), 10);
         assert_eq!(l(12.0, 18).nice(), 15);
@@ -397,6 +465,7 @@ mod tests {
             Load {
                 load: 12.0,
                 cores: 18,
+                builders: 3,
             },
         )
         .unwrap();
@@ -469,6 +538,7 @@ mod tests {
         let load = Load {
             load: 0.0,
             cores: 8,
+            builders: 1,
         };
         let env = |wt: &str| {
             Env::new(

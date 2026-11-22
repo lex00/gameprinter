@@ -1907,6 +1907,17 @@ fn worktree(setup: &Setup, id: &str, games: bool) -> anyhow::Result<(PathBuf, St
     Ok((path, branch, !has_branch))
 }
 
+/// Starts the build folder `gp worker env` gives the worker in `wt` (on
+/// `branch`) as a clone of the tool gate's (crate::warm::start).
+fn warm_start(setup: &Setup, wt: &Path, branch: &str) -> Value {
+    let Ok(gate) = crate::gate::gate_home(None) else {
+        return json!({"warm": false, "why": "no gate home"});
+    };
+    let wt = fs::canonicalize(wt).unwrap_or_else(|_| wt.to_owned());
+    let dst = crate::worker::target_of(&crate::builds::target_root(&setup.home), Some(branch), &wt);
+    crate::warm::start(&gate, &dst, &wt)
+}
+
 /// One of a game's pending patches as a worker's tree took it: its card's
 /// id, row, what it changes, and why it was left out when it didn't apply.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -2407,6 +2418,13 @@ fn work(setup: &Setup, live: &Live, rec: &mut Value, resume: bool) -> anyhow::Re
     rec["branch"] = json!(branch);
     let dir = files_dir(&setup.home, &id);
     fs::create_dir_all(&dir)?;
+    // A tools worker's build folder starts as a clone of the tool gate's
+    // warm build, so its first cargo build compiles only what it changes
+    // (crate::warm); where it can't, it starts empty and says why.
+    if fresh && !in_games && wt.join("crates").join("gp-cli").is_dir() {
+        rec["warm"] = warm_start(setup, &wt, &branch);
+        write(&setup.home, rec);
+    }
     // A game row's worker starts from main plus the game's pending
     // patches, so it builds on the fixes waiting on a card or in the
     // gate's queue instead of making them again; a row whose target they
