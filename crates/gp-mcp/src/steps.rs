@@ -30,6 +30,19 @@ pub struct Settings {
     /// The games whose quest-log items the loop works on; none means every
     /// game's.
     pub games: Vec<String>,
+    /// The games whose game work is held (the owner's "game work stops
+    /// while the tooling is fixed"; `all` holds every game's): the runner
+    /// starts no worker on their game rows, the finder makes no rows of
+    /// their gaps and no trouble is filed for their rows, while their tool
+    /// rows go on. `gp loop set --hold` sets it, `--go-on` lifts it.
+    pub hold: Vec<String>,
+}
+
+impl Settings {
+    /// Whether `game`'s game work is held ([`Settings::hold`]).
+    pub fn held(&self, game: &str) -> bool {
+        self.hold.iter().any(|g| g == "all" || g == game)
+    }
 }
 
 /// gp serve's runner (crates/gp-cli/src/serve/runner.rs).
@@ -526,9 +539,16 @@ mod tests {
                 effort: "medium".into(),
             },
             games: vec!["rooftop".into()],
+            hold: vec!["hilltop".into()],
         };
         save(&home, &s).unwrap();
         assert_eq!(settings(&home), s);
+        assert!(s.held("hilltop") && !s.held("rooftop"));
+        let all = Settings {
+            hold: vec!["all".into()],
+            ..Settings::default()
+        };
+        assert!(all.held("rooftop") && !Settings::default().held("rooftop"));
     }
 
     #[test]

@@ -364,12 +364,14 @@ fn runner_going(home: &Path) -> bool {
 
 /// `gp mechanic queue GAME ROW --status S` from outside the loop's steps
 /// (no GP_STEP, no GP_WORKER) while the runner goes: a hand fix, filed. A
-/// trouble row set by hand isn't filed again.
+/// trouble row set by hand isn't filed again, nor a row of a game whose
+/// work the owner holds (gp loop set --hold): setting it is theirs.
 pub(crate) fn status_by_hand(paths: &Paths, game: &str, row: &str, status: &str) {
     let set = |k: &str| std::env::var_os(k).is_some_and(|v| !v.is_empty());
     if row.starts_with("trouble-")
         || set(gp_mcp::steps::STEP_ENV)
         || set("GP_WORKER")
+        || gp_mcp::steps::settings(&paths.home).held(game)
         || !live_home(&paths.home)
         || !runner_going(&paths.home)
     {

@@ -87,6 +87,18 @@ pub enum LoopCmd {
         /// comma-separated ("rooftop"); "all" for every game's.
         #[arg(long)]
         games: Option<String>,
+        /// Hold the game work of these games, comma-separated ("rooftop"),
+        /// or "all": the owner's "game work stops while the tooling is
+        /// fixed". The runner starts no worker on their game rows (a worker
+        /// at work goes on to its end), the finder makes no rows of their
+        /// gaps, and no trouble is filed for their rows; their tool rows go
+        /// on. Lift it with --go-on.
+        #[arg(long, value_name = "GAMES")]
+        hold: Option<String>,
+        /// Lift the hold on these games, comma-separated, or "all": their
+        /// game rows are the runner's again.
+        #[arg(long, value_name = "GAMES")]
+        go_on: Option<String>,
         /// End game GAME's port run ("all" for every game's): its workers
         /// stay on the gp the run started on, past the tool landings since,
         /// until its rows are done; after this its next worker starts on the
@@ -136,16 +148,82 @@ fn or_own(v: &str) -> &str {
     if v.is_empty() { "the person's own" } else { v }
 }
 
+/// The games a `--hold` or `--go-on` names: comma-separated, "all" alone.
+fn game_list(v: &str) -> Vec<String> {
+    let names: Vec<String> = v
+        .split(',')
+        .map(|x| x.trim().to_owned())
+        .filter(|x| !x.is_empty())
+        .collect();
+    if names.iter().any(|n| n == "all") {
+        vec!["all".into()]
+    } else {
+        names
+    }
+}
+
+/// The hold after `--hold` adds `hold` and `--go-on` lifts `go_on`; Err
+/// when a game is lifted while every game's work is held.
+fn new_hold(
+    was: &[String],
+    hold: Option<&str>,
+    go_on: Option<&str>,
+) -> std::result::Result<Vec<String>, String> {
+    let mut h: Vec<String> = was.to_vec();
+    if let Some(v) = go_on {
+        let lift = game_list(v);
+        if lift.iter().any(|g| g == "all") {
+            h.clear();
+        } else if h.iter().any(|g| g == "all") {
+            return Err(format!(
+                "every game's work is held: lift it with --go-on all (then --hold the games to keep held), not --go-on {}",
+                lift.join(",")
+            ));
+        } else {
+            h.retain(|g| !lift.contains(g));
+        }
+    }
+    if let Some(v) = hold {
+        let add = game_list(v);
+        if add.iter().any(|g| g == "all") {
+            h = add;
+        } else if !h.iter().any(|g| g == "all") {
+            for g in add {
+                if !h.contains(&g) {
+                    h.push(g);
+                }
+            }
+        }
+    }
+    Ok(h)
+}
+
+/// The hold in words, for gp loop set and gp loop health.
+fn hold_text(s: &gp_mcp::steps::Settings) -> Option<String> {
+    if s.hold.is_empty() {
+        return None;
+    }
+    let which = if s.hold.iter().any(|g| g == "all") {
+        "every game".to_owned()
+    } else {
+        s.hold.join(", ")
+    };
+    Some(format!(
+        "game work held for {which}: the runner starts no worker on their game rows and the finder makes none; their tool rows go on (gp loop set --go-on to lift it)"
+    ))
+}
+
 fn settings_text(s: &gp_mcp::steps::Settings) -> String {
     let w = |b: bool| if b { "on" } else { "off" };
     format!(
-        "steps required by gp_run: {}\nquest-log items of: {}\nrunner: {}, at most {} workers, model {}, effort {}{}",
+        "steps required by gp_run: {}\nquest-log items of: {}{}\nrunner: {}, at most {} workers, model {}, effort {}{}",
         w(s.steps_required),
         if s.games.is_empty() {
             "every game".to_owned()
         } else {
             s.games.join(", ")
         },
+        hold_text(s).map(|t| format!("\n{t}")).unwrap_or_default(),
         w(s.runner.on),
         s.runner.max_workers,
         or_own(&s.runner.model),
@@ -320,9 +398,14 @@ pub(crate) fn run(cmd: &LoopCmd, paths: &gp_evidence::Paths) -> Result<Outcome> 
             model,
             effort,
             games,
+            hold,
+            go_on,
             move_on,
         } => {
             let home = &paths.home;
+            let was = gp_mcp::steps::settings(home);
+            let held = new_hold(&was.hold, hold.as_deref(), go_on.as_deref())
+                .map_err(anyhow::Error::msg)?;
             let mut moved = Vec::new();
             if let Some(g) = move_on {
                 let g = g.trim();
@@ -340,7 +423,8 @@ pub(crate) fn run(cmd: &LoopCmd, paths: &gp_evidence::Paths) -> Result<Outcome> 
                     }
                 }
             }
-            let mut s = gp_mcp::steps::settings(home);
+            let mut s = was;
+            s.hold = held;
             if let Some(v) = steps_required {
                 s.steps_required = v == "on";
             }
@@ -370,6 +454,8 @@ pub(crate) fn run(cmd: &LoopCmd, paths: &gp_evidence::Paths) -> Result<Outcome> 
                 };
             }
             let changed = games.is_some()
+                || hold.is_some()
+                || go_on.is_some()
                 || steps_required.is_some()
                 || runner.is_some()
                 || max_workers.is_some()
@@ -653,6 +739,9 @@ fn checks(paths: &gp_evidence::Paths, games_dir: Option<&std::path::Path>) -> Va
             "The runner is off: gp loop set --runner on.".into(),
         );
     }
+    if let Some(t) = hold_text(&s) {
+        lines.push(format!("HELD     {t}"));
+    }
     if s.runner.max_workers == 0 {
         bad(
             &mut lines,
@@ -715,7 +804,12 @@ fn checks(paths: &gp_evidence::Paths, games_dir: Option<&std::path::Path>) -> Va
         };
         for r in crate::mechanic::session::read_queue(&f) {
             let row = r["mechanic"].as_str().unwrap_or("");
-            if r["status"] == json!("agent working") && !held.contains(&format!("row:{g}/{row}")) {
+            // A held game's game row waits for the owner, not a worker.
+            let waits = s.held(&g) && r["repo"] != json!("tools");
+            if r["status"] == json!("agent working")
+                && !waits
+                && !held.contains(&format!("row:{g}/{row}"))
+            {
                 bad(
                     &mut lines,
                     &mut problems,
@@ -800,6 +894,35 @@ fn checks(paths: &gp_evidence::Paths, games_dir: Option<&std::path::Path>) -> Va
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// --hold adds games (all holds every one), --go-on lifts them, and a
+    /// game can't be lifted alone out of every game's hold.
+    #[test]
+    fn hold_adds_games_and_go_on_lifts_them() {
+        let h = |was: &str, hold, go| {
+            let was: Vec<String> = game_list(was);
+            new_hold(&was, hold, go).map(|x| x.join(","))
+        };
+        let ok = |s: &str| Ok(s.to_owned());
+        assert_eq!(h("", Some("hilltop, rooftop"), None), ok("hilltop,rooftop"));
+        assert_eq!(h("hilltop", Some("hilltop"), None), ok("hilltop"));
+        assert_eq!(h("hilltop", None, Some("hilltop")), ok(""));
+        assert_eq!(h("hilltop", Some("all"), None), ok("all"));
+        assert_eq!(h("all", Some("hilltop"), None), ok("all"));
+        assert_eq!(h("all", None, Some("all")), ok(""));
+        assert_eq!(h("a,b", None, Some("all")), ok(""));
+        assert!(h("all", None, Some("hilltop")).is_err());
+        // Lifting all and holding one at once leaves the one.
+        assert_eq!(h("all", Some("rooftop"), Some("all")), ok("rooftop"));
+        let s = gp_mcp::steps::Settings {
+            hold: game_list("hilltop"),
+            ..Default::default()
+        };
+        let t = settings_text(&s);
+        assert!(t.contains("game work held for hilltop"), "{t}");
+        assert!(t.contains("--go-on"), "{t}");
+        assert!(!settings_text(&Default::default()).contains("held"));
+    }
 
     #[test]
     fn a_failed_card_its_row_took_is_no_problem() {

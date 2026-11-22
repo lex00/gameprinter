@@ -958,9 +958,14 @@ pub(crate) fn find_work(
     mut look: impl FnMut(&str, &Line),
 ) -> Vec<String> {
     let mut looked = Vec::new();
+    let s = gp_mcp::steps::settings(home);
     for (g, line, key) in short_lines(home, games, gp) {
         if !idle() {
             break;
+        }
+        // A game whose work is held (gp loop set --hold) gets no new rows.
+        if s.held(&g) {
+            continue;
         }
         let id = format!("{g}/{}/{key}", line.slot());
         if !FOUND.lock().map(|mut f| f.insert(id)).unwrap_or(false) {
@@ -1691,6 +1696,16 @@ level = "field"
             find_work(h, d.path(), &gp, || false, |_, _| panic!("busy")).is_empty(),
             "nothing while the runner is busy"
         );
+        // The owner holds hop's game work: no rows of its gaps until lifted.
+        let mut s = gp_mcp::steps::settings(h);
+        s.hold = vec!["hop".into()];
+        gp_mcp::steps::save(h, &s).unwrap();
+        assert!(
+            find_work(h, d.path(), &gp, || true, |_, _| panic!("held")).is_empty(),
+            "nothing for a held game"
+        );
+        s.hold.clear();
+        gp_mcp::steps::save(h, &s).unwrap();
         let mut seen = Vec::new();
         let got = find_work(
             h,

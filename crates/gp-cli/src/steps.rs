@@ -178,7 +178,8 @@ pub(crate) fn row_steps(paths: &gp_evidence::Paths, games: Option<&Path>) -> Vec
         .as_deref()
         .map(crate::next::games_in)
         .unwrap_or_default();
-    let only = gp_mcp::steps::settings(&paths.home).games;
+    let s = gp_mcp::steps::settings(&paths.home);
+    let only = &s.games;
     let mut out = Vec::new();
     for g in all.iter().filter(|g| only.is_empty() || only.contains(g)) {
         let Ok(f) = crate::mechanic::session::queue_file(paths, g) else {
@@ -188,6 +189,12 @@ pub(crate) fn row_steps(paths: &gp_evidence::Paths, games: Option<&Path>) -> Vec
             let Some(row) = r["mechanic"].as_str() else {
                 continue;
             };
+            // The game's work is held (gp loop set --hold): its game rows
+            // wait, answered or not, until the owner lifts it; its tool rows
+            // go on.
+            if s.held(g) && r["repo"] != json!("tools") {
+                continue;
+            }
             let status = r["status"].as_str().unwrap_or("");
             // The owner's yes to a look waits for gp serve's runner to lock
             // it (serve/runner.rs, run_confirms): no worker's.
@@ -337,6 +344,55 @@ pub(crate) fn open_of(answers: &[Answer], held: &[Value]) -> Vec<Value> {
 mod tests {
     use super::*;
     use crate::next::step;
+
+    /// A held game's game rows make no step while its tool rows do, and
+    /// another game's rows go on; lifting the hold gives the rows back.
+    #[test]
+    fn a_held_games_game_rows_wait_and_its_tool_rows_go_on() {
+        let t = tempfile::tempdir().unwrap();
+        let p = crate::test_paths(&t.path().join("home"));
+        let games = t.path().join("games");
+        for g in ["hilltop", "rooftop"] {
+            std::fs::create_dir_all(games.join(g)).unwrap();
+            std::fs::write(games.join(g).join("package.toml"), "").unwrap();
+            let q = json!([
+                {"mechanic": "fix-art", "status": "next", "note": "a game row"},
+                {"mechanic": "fix-tool", "status": "next", "note": "a tool row", "repo": "tools"},
+            ]);
+            let f = crate::mechanic::session::queue_file(&p, g).unwrap();
+            crate::mechanic::session::write_queue(&f, q.as_array().unwrap()).unwrap();
+        }
+        let rows = |p: &gp_evidence::Paths| -> Vec<String> {
+            row_steps(p, Some(&games))
+                .iter()
+                .filter_map(|s| s["touches"][0].as_str().map(str::to_owned))
+                .collect()
+        };
+        let every = [
+            "row:hilltop/fix-art",
+            "row:hilltop/fix-tool",
+            "row:rooftop/fix-art",
+            "row:rooftop/fix-tool",
+        ];
+        assert_eq!(rows(&p), every);
+        let mut s = gp_mcp::steps::settings(&p.home);
+        s.hold = vec!["hilltop".into()];
+        gp_mcp::steps::save(&p.home, &s).unwrap();
+        assert_eq!(
+            rows(&p),
+            [
+                "row:hilltop/fix-tool",
+                "row:rooftop/fix-art",
+                "row:rooftop/fix-tool"
+            ]
+        );
+        s.hold = vec!["all".into()];
+        gp_mcp::steps::save(&p.home, &s).unwrap();
+        assert_eq!(rows(&p), ["row:hilltop/fix-tool", "row:rooftop/fix-tool"]);
+        s.hold.clear();
+        gp_mcp::steps::save(&p.home, &s).unwrap();
+        assert_eq!(rows(&p), every);
+    }
 
     #[test]
     fn a_command_line_names_the_commands_it_runs() {
