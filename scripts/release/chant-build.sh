@@ -4,8 +4,9 @@
 # dist/gp-TARGET.tar.gz (dist/gp-TARGET.zip for Windows), the file the job
 # hands to the cut. It sets up the tools, builds the editor, stamps the
 # version into the files release.version names (chant release stamp), runs
-# scripts/release/build.sh, then unpacks the archive as a person would and
-# runs gp --version and gp self check in an empty home:
+# scripts/release/build.sh, then unpacks the archive as a person would and,
+# with the checkout moved out of reach, runs gp --version, gp self check
+# and gp game kit in an empty home (docs/release.md):
 #   CHANT_RELEASE_LABEL=0.1.2 scripts/release/chant-build.sh TARGET
 #
 # chant sets CHANT_RELEASE_LABEL in the job. It publishes nothing. On a
@@ -84,11 +85,38 @@ else
 fi
 cd "$tmp"
 export HOME="$tmp/empty-home" GP_HOME="$tmp/empty-home/.gameprinter"
-said="$("$gp" --version)"
-echo "$said"
-case "$said" in
-  "gp $version"*) ;;
-  *) echo "chant-build: the built gp says '$said', not gp $version" >&2; exit 1 ;;
-esac
-"$gp" self check || exit 1
+
+# What a person's machine has: the archive, and not the checkout gp was
+# built from. gp self check hides that checkout itself (issue 46: 0.1.2's
+# gp game kit read crates/ under the runner's checkout, so its check here
+# passed while gp model gate failed everywhere else); here it is moved
+# away as well, and put back before the job uploads dist/. self check
+# opens the page's files and the templates, makes the module kit and
+# builds a module from it, and asks the page's server for its first page,
+# each from the bundle alone; gp game kit is then the command gp model
+# gate runs first.
+check() {
+  local said
+  said="$("$gp" --version)" || return 1
+  echo "$said"
+  case "$said" in
+    "gp $version"*) ;;
+    *) echo "chant-build: the built gp says '$said', not gp $version" >&2; return 1 ;;
+  esac
+  "$gp" self check || return 1
+  "$gp" game kit -o "$tmp/kit" || return 1
+}
+status=0
+if [ -n "$windows" ]; then
+  GP_HIDE_BUILT_SOURCE=1 check || status=1
+else
+  away="$repo.away-$$"
+  mv "$repo" "$away"
+  check || status=1
+  mv "$away" "$repo"
+fi
+if [ "$status" != 0 ]; then
+  echo "chant-build: the built gp failed its check away from its source" >&2
+  exit 1
+fi
 echo "chant-build: dist/gp-$target.$ext"

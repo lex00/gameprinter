@@ -305,10 +305,41 @@ impl Ctx {
 }
 
 /// The gameprinter checkout: the working folder or one above it that holds
-/// `editor/` and `scripts/web/`, else the checkout gp was built from.
+/// `editor/` and `scripts/web/`, else the checkout gp was built from, else
+/// the files a released gp carries. With none of them, the working folder.
 pub(crate) fn repo_root() -> PathBuf {
     crate::repo::find_repo(|d| d.join("scripts/web/page/preview.js").is_file())
-        .unwrap_or_else(crate::repo::built)
+        .or_else(crate::repo::built)
+        .unwrap_or_default()
+}
+
+/// `gp self check`'s look at the page's server: this gp's server with the
+/// page's files from `repo` and the games in `games`, on a free port, and
+/// none of what `gp serve` starts beside it (no runner, dispatcher or
+/// scoreboard, and nothing written to the home), asked for its first
+/// page. Returns the port, the answer's status and its body; a page with
+/// no editor to serve is an error naming where it looked.
+pub(crate) fn first_page(paths: &Paths, repo: &Path, games: &Path) -> Result<(u16, u16, String)> {
+    let dist = repo.join("editor/dist");
+    if !dist.join("index.html").is_file() {
+        bail!("no editor at {}", dist.join("index.html").display());
+    }
+    let any = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
+    let listener = TcpListener::bind(any).context("listening on 127.0.0.1")?;
+    let port = listener.local_addr()?.port();
+    let ctx = Arc::new(Ctx {
+        paths: paths.clone(),
+        repo: repo.to_owned(),
+        editor: Some(dist),
+        games: games.to_owned(),
+        modules: HashMap::new(),
+        routes: MODULES.iter().flat_map(|m| m()).collect(),
+        port,
+    });
+    std::thread::spawn(move || serve(listener, ctx));
+    let (status, body) =
+        call(port, "GET", "/", "").with_context(|| format!("asking http://127.0.0.1:{port}/"))?;
+    Ok((port, status, body))
 }
 
 /// A request handler: the context, the request and the path's `{name}`

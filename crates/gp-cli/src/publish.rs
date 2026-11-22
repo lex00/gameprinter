@@ -67,13 +67,18 @@ pub enum SelfCmd {
     },
     /// Say what works on this machine and what doesn't, in plain words:
     /// gp's home, an agent (whether one connected to gp mcp this week,
-    /// which agents this machine has, and the line that connects one), the
-    /// page's files (carried in a released gp, or read from
-    /// a checkout), your ROMs, a games folder, curl, git, Rust, the build
-    /// sandbox, Node, a headless browser and MAME, each with what needs it
-    /// and how to get it, then whether this machine is ready to make a
-    /// theme, make a game, or port one. Changes nothing. Exits 1 only when
-    /// gp can't write its home folder. Example: gp self check
+    /// which agents this machine has, and the line that connects one), your
+    /// ROMs, a games folder, curl, git, Rust, the build sandbox, Node, a
+    /// headless browser and MAME, each with what needs it and how to get
+    /// it; then it uses what a released gp carries, from its bundle alone
+    /// with the checkout gp was built from hidden: the page's files, the
+    /// templates, the module kit, a module built from it (when Rust and the
+    /// sandbox are here) and the page's server answering on a free port,
+    /// each ready, failed with the path it tried, or skipped and why; then
+    /// whether this machine is ready to make a theme, make a game, or port
+    /// one. Writes only under $GP_HOME. Exits 1 when gp can't write its
+    /// home folder or a use of what it carries failed. Example: gp self
+    /// check
     Check,
 }
 

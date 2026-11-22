@@ -18,8 +18,8 @@ pub(crate) use crate::mechanic::detect::{arcade_boxes, sprite_boxes};
 /// The repo this gp was built from (its bench files and docs), or the
 /// current folder when gp runs from elsewhere.
 pub(crate) fn repo_root() -> Result<PathBuf> {
-    let built = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    if built.join("Cargo.toml").is_file() {
+    let has = |b: &PathBuf| b.join("Cargo.toml").is_file();
+    if let Some(built) = crate::repo::built().filter(has) {
         return Ok(built.canonicalize()?);
     }
     Ok(std::env::current_dir()?)

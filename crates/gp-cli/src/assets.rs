@@ -59,9 +59,10 @@ pub(crate) fn maps_dirs() -> Vec<PathBuf> {
         return vec![PathBuf::from(dir)];
     }
     let mut dirs = Vec::new();
-    let tool = crate::repo::find_repo(|d| d.join("assets/mosshop.toml").is_file())
-        .unwrap_or_else(crate::repo::built);
-    dirs.push(tool.join("assets"));
+    let has = |d: &Path| d.join("assets/mosshop.toml").is_file();
+    if let Some(tool) = crate::repo::find_repo(has).or_else(crate::repo::built) {
+        dirs.push(tool.join("assets"));
+    }
     if let Some(games) = crate::roms_cmd::games_dir(None)
         && let Ok(rd) = fs::read_dir(&games)
     {

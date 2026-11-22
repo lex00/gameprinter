@@ -1588,13 +1588,9 @@ fn find_rom(sha: &str, hint: Option<&str>, paths: &Paths) -> Result<PathBuf> {
     let rom_dir = std::env::var_os("GP_ROM_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|| paths.home.join("roms"));
-    let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let roots = [
-        PathBuf::from("."),
-        repo.clone(),
-        rom_dir.clone(),
-        paths.home.clone(),
-    ];
+    let mut roots = vec![PathBuf::from(".")];
+    roots.extend(crate::repo::built());
+    roots.extend([rom_dir.clone(), paths.home.clone()]);
     if let Some(h) = hint {
         for r in &roots {
             let p = r.join(h);

@@ -4,9 +4,20 @@
 //! says, for each kind of work (a theme, a new game, a port), whether
 //! this machine is ready for it.
 //!
-//! It only looks: it installs, downloads and changes nothing, except that
-//! a released gp unpacks the files it carries into $GP_HOME the first time
-//! (src/bundle.rs), as any command that needs them would.
+//! Then it uses what a released gp carries (src/bundle.rs), from the
+//! bundle alone, with the checkout gp was built from hidden even when it
+//! is there (crate::repo::hide_built): it opens the page's files and the
+//! templates, makes the module kit as `gp game kit` does, builds a module
+//! from it when Rust and the build sandbox are here, and starts the page's
+//! server on a free port and asks it for its first page. Each is a line:
+//! ready, failed with what it tried, or not checked and why. A failed one
+//! exits 1, so the release's own check of its archive fails on a gp that
+//! can't do these away from its source (issue 46).
+//!
+//! It installs, downloads and changes nothing outside $GP_HOME: there it
+//! unpacks the carried files the first time (as any command that needs
+//! them would), and keeps the kit and the module it built under
+//! work/self-check/ and work/module-build/self-check-kit/.
 
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
@@ -17,6 +28,7 @@ use gp_evidence::Paths;
 use serde_json::{Value, json};
 
 use crate::Outcome;
+use crate::bundle::Carried;
 
 /// The Rust release the module kit builds a game's hook code with.
 const TOOLCHAIN_FILE: &str = include_str!("../../../rust-toolchain.toml");
@@ -216,32 +228,6 @@ fn checks(paths: &Paths) -> Vec<Item> {
     });
 
     items.push(agent_item(paths));
-
-    let checkout = crate::repo::find_repo(|d| {
-        d.join("mechanic/index.html").is_file() && d.join("Cargo.toml").is_file()
-    });
-    let (n, bytes) = crate::bundle::count("");
-    let page_files = checkout.is_some() || crate::bundle::carried();
-    items.push(Item {
-        what: "the page's files",
-        ok: page_files,
-        found: match (&checkout, crate::bundle::carried()) {
-            (Some(c), _) => format!("read from the gameprinter checkout {}", c.display()),
-            (None, true) => format!(
-                "carried in this gp ({n} files, {:.1} MB, bundle {}{}), unpacked under {}",
-                bytes as f64 / 1e6,
-                crate::bundle::id(),
-                if crate::bundle::page().is_some() { ", the public page among them" } else { "" },
-                crate::bundle::root()
-                    .map(|r| r.display().to_string())
-                    .unwrap_or_else(|| "(couldn't unpack)".into())
-            ),
-            (None, false) => "none: this gp was built without them and there is no gameprinter checkout here".into(),
-        },
-        for_what: "gp serve and the game's page, gp mcp's templates, gp theme look play's page, the module kit",
-        fix: "use a released gp (it carries them), or run gp inside a gameprinter checkout".into(),
-        needed_by: vec![Theme, Game, Port],
-    });
 
     let (nes, zips) = roms_in(&paths.roms);
     let rom_ok = nes + zips > 0;
@@ -462,8 +448,240 @@ fn checks(paths: &Paths) -> Vec<Item> {
     items
 }
 
+/// What came of using one thing this gp carries.
+#[derive(Clone, Copy, PartialEq)]
+enum Did {
+    Ready,
+    Failed,
+    /// Not tried, for want of something on the machine (Rust, the
+    /// sandbox) or of an earlier use: never ready.
+    NotChecked,
+}
+
+impl Did {
+    fn word(self) -> &'static str {
+        match self {
+            Did::Ready => "ready",
+            Did::Failed => "failed",
+            Did::NotChecked => "skipped",
+        }
+    }
+}
+
+fn did(ok: bool) -> Did {
+    if ok { Did::Ready } else { Did::Failed }
+}
+
+/// `p` and what went wrong with it.
+fn at(p: &Path, e: impl std::fmt::Display) -> String {
+    format!("{}: {e:#}", p.display())
+}
+
+/// One use of the carried files, from the bundle alone.
+struct Use {
+    what: &'static str,
+    did: Did,
+    /// What it made or opened, what failed and the path it tried, or why
+    /// it wasn't tried.
+    said: String,
+    for_what: &'static str,
+    needed_by: Vec<Work>,
+}
+
+/// The page's files gp reads at run time from a checkout, or from the
+/// bundle unpacked: each must be there and open.
+const PAGE_FILES: [&str; 6] = [
+    "mechanic/index.html",
+    "mechanic/start.html",
+    "editor/dist/index.html",
+    "scripts/web/page/preview.js",
+    "target/play-web/gp_play.wasm",
+    "target/play-web/gp_arcade_play.wasm",
+];
+
+/// Why a gp built from source has nothing to use.
+const NO_FILES: &str = "this gp carries no files (a gp built from source reads its checkout; a released gp carries them)";
+
+/// What a module built from the kit alone is.
+const BUILT: &str = "built from the kit with its empty game slot, as for Moss Hop";
+
+/// The carried files unpacked under the home, or why they aren't.
+fn unpacked(home: &Path, carried: Carried<'_>) -> Result<PathBuf, String> {
+    if carried.files.is_empty() {
+        return Err(NO_FILES.to_owned());
+    }
+    let dir = home.join("work/bundle").join(carried.id);
+    carried.unpack(home).map_err(|e| at(&dir, e))
+}
+
+/// `dir` again when each of the page's files opens in it.
+fn opened(dir: &Path) -> Result<PathBuf, String> {
+    for rel in PAGE_FILES {
+        let p = dir.join(rel);
+        std::fs::read(&p).map_err(|e| at(&p, e))?;
+    }
+    Ok(dir.to_owned())
+}
+
+/// What the page's files line says once they opened in `dir`.
+fn opened_said(carried: Carried<'_>, dir: &Path) -> String {
+    let bytes: usize = carried.files.iter().map(|(_, b)| b.len()).sum();
+    let page = if dir.join("page/index.html").is_file() {
+        ", the public page among them"
+    } else {
+        "; no public page, so gp theme look play needs --page"
+    };
+    format!(
+        "opened from the bundle {} ({} files, {:.1} MB{page}), unpacked in {}",
+        carried.id,
+        carried.files.len(),
+        bytes as f64 / 1e6,
+        dir.display()
+    )
+}
+
+/// The templates under `root`'s templates/, each with a template.toml
+/// and a model.toml that parse: their names, or what failed. Moss Hop
+/// must be among them.
+fn templates(root: &Path) -> Result<Vec<String>, String> {
+    let dir = root.join("templates");
+    let mut names = Vec::new();
+    let entries = std::fs::read_dir(&dir).map_err(|e| at(&dir, e))?;
+    for e in entries.flatten() {
+        let t = e.path();
+        if !t.is_dir() {
+            continue;
+        }
+        for f in ["template.toml", "model.toml"] {
+            let p = t.join(f);
+            let text = std::fs::read_to_string(&p).map_err(|e| at(&p, e))?;
+            text.parse::<toml::Table>().map_err(|e| at(&p, e))?;
+        }
+        names.push(e.file_name().to_string_lossy().into_owned());
+    }
+    names.sort();
+    if !names.iter().any(|n| n == "mosshop") {
+        return Err(format!("{} has no mosshop/", dir.display()));
+    }
+    Ok(names)
+}
+
+/// A module built from the kit in `kit` as it is.
+fn built_module(kit: &Path) -> (Did, String) {
+    match crate::module::build_kit_alone(kit) {
+        Ok((n, hash)) => (Did::Ready, format!("{BUILT}: {n} bytes, hash {hash}")),
+        Err(e) => (Did::Failed, format!("{e:#}")),
+    }
+}
+
+/// The page's server with the page's files in `dir`, asked for `/`.
+fn ask_server(paths: &Paths, dir: &Path, games: &Path) -> Result<String, String> {
+    std::fs::create_dir_all(games).map_err(|e| at(games, e))?;
+    let first = crate::serve::first_page(paths, dir, games);
+    let (port, status, body) = first.map_err(|e| format!("{e:#}"))?;
+    let url = format!("http://127.0.0.1:{port}/");
+    if status != 200 {
+        return Err(format!("{url} answered {status}"));
+    }
+    if body.contains("isn't here") {
+        return Err(format!("{url} answered without its page: {body}"));
+    }
+    let editor = dir.join("editor/dist");
+    let editor = editor.display();
+    Ok(format!(
+        "answered 200 at {url}, with the editor from {editor}"
+    ))
+}
+
+/// Each use of the carried files `carried`, from them alone. `rust`:
+/// what is missing of Rust, when something is; `sandbox`: whether the
+/// build sandbox is here.
+fn uses(paths: &Paths, carried: Carried<'_>, rust: Option<&str>, sandbox: bool) -> Vec<Use> {
+    use Work::*;
+    let mut out = Vec::new();
+    let root = unpacked(&paths.home, carried);
+    let page = root.clone().and_then(|r| opened(&r));
+    out.push(Use {
+        what: "the page's files",
+        did: did(page.is_ok()),
+        said: match &page {
+            Ok(r) => opened_said(carried, r),
+            Err(e) => e.clone(),
+        },
+        for_what: "gp serve and the game's page, gp theme look play's page, the preview and the players",
+        needed_by: vec![Theme, Game, Port],
+    });
+
+    let tpl = root.clone().and_then(|r| templates(&r));
+    out.push(Use {
+        what: "the templates",
+        did: did(tpl.is_ok()),
+        said: match &tpl {
+            Ok(n) => format!("{} read from the bundle: {}", n.len(), n.join(", ")),
+            Err(e) => e.clone(),
+        },
+        for_what: "gp mcp's templates and gp game new's copies (Moss Hop and the games made here)",
+        needed_by: vec![Game],
+    });
+
+    let kit_dir = paths.home.join("work/self-check/kit");
+    let kit = crate::module::kit_with(&kit_dir, carried);
+    out.push(Use {
+        what: "the module kit",
+        did: did(kit.is_ok()),
+        said: match &kit {
+            Ok(o) => o.text.clone(),
+            Err(e) => format!("{e:#}"),
+        },
+        for_what: "gp game kit, which gp model gate runs first, and gp game build",
+        needed_by: vec![Game, Port],
+    });
+
+    let skip = |why: &str| (Did::NotChecked, format!("not checked: {why}"));
+    let (built, said) = match (&kit, rust, sandbox) {
+        (Err(_), _, _) => skip("no module kit"),
+        (_, Some(why), _) => skip(&format!("no toolchain ({why})")),
+        (_, _, false) => skip("no build sandbox"),
+        (Ok(_), None, true) => built_module(&kit_dir),
+    };
+    out.push(Use {
+        what: "a module built from the kit",
+        did: built,
+        said,
+        for_what: "gp game build: a game's module, its hooks with the interpreter, for the browser",
+        needed_by: vec![Port],
+    });
+
+    let games = paths.home.join("work/self-check/games");
+    let served = root.and_then(|r| ask_server(paths, &r, &games));
+    out.push(Use {
+        what: "the page's server",
+        did: did(served.is_ok()),
+        said: served.unwrap_or_else(|e| e),
+        for_what: "gp serve, the page you work on",
+        needed_by: vec![Theme, Game, Port],
+    });
+    out
+}
+
+/// `gp self check`, with the checkout gp was built from hidden for the
+/// whole run (crate::repo::hide_built).
 pub(crate) fn run(paths: &Paths) -> Result<Outcome> {
+    let _hidden = crate::repo::hide_built();
+    report(paths, Carried::own())
+}
+
+fn item<'a>(items: &'a [Item], what: &str) -> Option<&'a Item> {
+    items.iter().find(|i| i.what == what)
+}
+
+fn report(paths: &Paths, carried: Carried<'_>) -> Result<Outcome> {
     let items = checks(paths);
+    let rust = item(&items, "Rust")
+        .filter(|i| !i.ok)
+        .map(|i| i.found.as_str());
+    let sandbox = item(&items, "the build sandbox").is_some_and(|i| i.ok);
+    let tried = uses(paths, carried, rust, sandbox);
     let exe = std::env::current_exe()
         .map(|p| p.display().to_string())
         .unwrap_or_default();
@@ -486,14 +704,27 @@ pub(crate) fn run(paths: &Paths) -> Result<Outcome> {
             let _ = writeln!(text, "        to get it: {}", i.fix);
         }
     }
+    let _ = writeln!(
+        text,
+        "\nWhat this gp carries, used from its bundle alone (the checkout it was built from hidden):"
+    );
+    for u in &tried {
+        let _ = writeln!(text, "{:<7} {}: {}", u.did.word(), u.what, u.said);
+        let _ = writeln!(text, "        why: {}", u.for_what);
+    }
     text.push('\n');
     let mut ready = serde_json::Map::new();
     for w in [Work::Theme, Work::Game, Work::Port] {
-        let missing: Vec<&str> = items
+        let mut missing: Vec<&str> = items
             .iter()
             .filter(|i| !i.ok && i.needed_by.contains(&w))
             .map(|i| i.what)
             .collect();
+        for u in &tried {
+            if u.did != Did::Ready && u.needed_by.contains(&w) {
+                missing.push(u.what);
+            }
+        }
         let _ = if missing.is_empty() {
             writeln!(text, "{}: ready", w.words())
         } else {
@@ -514,18 +745,41 @@ pub(crate) fn run(paths: &Paths) -> Result<Outcome> {
             })
         })
         .collect();
+    let tried_list: Vec<Value> = tried
+        .iter()
+        .map(|u| {
+            json!({
+                "what": u.what, "did": u.did.word(), "said": u.said, "for": u.for_what,
+                "needed_by": u.needed_by.iter().map(|w| w.key()).collect::<Vec<_>>(),
+            })
+        })
+        .collect();
     let home_ok = items.first().is_some_and(|i| i.ok);
+    let failed: Vec<&str> = tried
+        .iter()
+        .filter(|u| u.did == Did::Failed)
+        .map(|u| u.what)
+        .collect();
+    if !failed.is_empty() {
+        let _ = write!(
+            text,
+            "\nThis gp can't do what it carries files for: {} failed",
+            failed.join(", ")
+        );
+    }
     Ok(Outcome {
         json: json!({
             "version": env!("CARGO_PKG_VERSION"),
             "exe": exe,
-            "carries": crate::bundle::carried(),
-            "bundle": crate::bundle::id(),
+            "carries": !carried.files.is_empty(),
+            "bundle": carried.id,
             "checks": list,
+            "uses": tried_list,
+            "failed": failed,
             "ready": ready,
         }),
         text: text.trim_end().to_owned(),
-        exit: if home_ok { 0 } else { 1 },
+        exit: if home_ok && failed.is_empty() { 0 } else { 1 },
     })
 }
 
@@ -560,7 +814,15 @@ mod tests {
         )
         .unwrap();
         let o = run(&paths).unwrap();
-        assert_eq!(o.exit, 0, "{}", o.text);
+        // A gp built from source carries nothing, so it fails every use of
+        // the carried files, though its checkout is right here.
+        if !crate::bundle::carried() {
+            assert_eq!(o.exit, 1, "{}", o.text);
+            let none = "failed  the page's files: this gp carries no files";
+            assert!(o.text.contains(none), "{}", o.text);
+            let kit = "failed  the module kit: no module kit";
+            assert!(o.text.contains(kit), "{}", o.text);
+        }
         for k in ["theme", "game", "port"] {
             assert!(o.json["ready"][k]["ready"].is_boolean(), "{k}");
         }
@@ -583,5 +845,86 @@ mod tests {
                 .iter()
                 .any(|m| m == "your ROMs")
         );
+    }
+
+    /// The files a released gp carries, small: the page's files, Moss Hop's
+    /// template, and `kit` as the module kit's archive when given.
+    fn fake_bundle(kit: Option<&[u8]>) -> Vec<(&'static str, Vec<u8>)> {
+        let mut files: Vec<(&'static str, Vec<u8>)> = vec![
+            ("templates/mosshop/template.toml", b"x = 1\n".to_vec()),
+            ("templates/mosshop/model.toml", b"[model]\n".to_vec()),
+        ];
+        for rel in PAGE_FILES {
+            files.push((rel, b"<!doctype html>\n".to_vec()));
+        }
+        if let Some(k) = kit {
+            files.push((crate::bundle::KIT, k.to_vec()));
+        }
+        files
+    }
+
+    fn kit_zip() -> Vec<u8> {
+        use std::io::Write as _;
+        type O = zip::write::SimpleFileOptions;
+        let mut z = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        for (rel, text) in [
+            ("Cargo.toml", "[workspace]\n"),
+            ("crates/gp-web/Cargo.toml", "[package]\n"),
+            ("crates/gp-web/src/lib.rs", ""),
+        ] {
+            z.start_file(rel, O::default()).unwrap();
+            z.write_all(text.as_bytes()).unwrap();
+        }
+        z.finish().unwrap().into_inner()
+    }
+
+    /// Self check on the carried files `files`, the checkout hidden, in
+    /// a home of its own.
+    fn check_with(files: &[(&'static str, Vec<u8>)], id: &str) -> (Outcome, tempfile::TempDir) {
+        let t = tempfile::tempdir().unwrap();
+        let (home, roms) = (t.path().join("h"), t.path().join("roms"));
+        let paths = Paths::resolve(Some(home), None, Some(roms)).unwrap();
+        let list: Vec<(&str, &[u8])> = files.iter().map(|(r, b)| (*r, b.as_slice())).collect();
+        let _hidden = crate::repo::hide_built();
+        let o = report(&paths, Carried { files: &list, id }).unwrap();
+        (o, t)
+    }
+
+    fn says(o: &Outcome, line: &str) {
+        assert!(o.text.contains(line), "{}", o.text);
+    }
+
+    /// Issue 46: a released gp whose bundle has no module kit, checked
+    /// with the checkout it was built from hidden, exits 1 and names the
+    /// kit, though this test runs beside that checkout. The rest of the
+    /// bundle is used: its page's files open, its templates read, and the
+    /// page's server answers its first page.
+    #[test]
+    fn a_bundle_without_its_kit_fails_and_names_the_kit() {
+        let (o, _t) = check_with(&fake_bundle(None), "test-no-kit");
+        assert_eq!(o.exit, 1, "{}", o.text);
+        for line in [
+            "failed  the module kit: no module kit: this gp carries none (module-kit.zip",
+            "the checkout it was built from is hidden",
+            "skipped a module built from the kit: not checked: no module kit",
+            "ready   the page's files: opened from the bundle test-no-kit",
+            "ready   the templates: 1 read from the bundle: mosshop",
+            "ready   the page's server: answered 200 at http://127.0.0.1:",
+        ] {
+            says(&o, line);
+        }
+        assert_eq!(o.json["failed"], json!(["the module kit"]));
+        assert!(o.text.ends_with("the module kit failed"), "{}", o.text);
+    }
+
+    /// With the kit in the bundle, `gp game kit`'s path takes it from
+    /// there: the checkout is hidden, so nothing is made from source.
+    #[test]
+    fn a_bundle_with_its_kit_makes_the_kit_from_it() {
+        let (o, t) = check_with(&fake_bundle(Some(&kit_zip())), "test-kit");
+        says(&o, "ready   the module kit: module kit in ");
+        says(&o, "from this gp's bundle test-kit: 1 crates");
+        let kit = t.path().join("h/work/self-check/kit");
+        assert!(kit.join("crates/gp-web/Cargo.toml").is_file());
     }
 }

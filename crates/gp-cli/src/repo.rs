@@ -5,11 +5,51 @@
 //! The page's own files (mechanic/, editor/dist/) come first from those
 //! published with the running gp ([`page_files`]).
 
+use std::cell::Cell;
 use std::path::{Path, PathBuf};
 
-/// The checkout gp was built from.
-pub(crate) fn built() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
+/// Set (to anything but empty), the checkout gp was built from is treated
+/// as absent, as it is for a gp installed away from its source (issue 46):
+/// what the release's build job sets when it checks the archive it built.
+pub(crate) const HIDE_BUILT: &str = "GP_HIDE_BUILT_SOURCE";
+
+thread_local! {
+    /// [`hide_built`]'s switch, for this thread: `gp self check` runs on
+    /// one, and a test of it doesn't hide the checkout from other tests.
+    static HIDDEN: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Whether [`built`] answers none: [`hide_built`] is on, or
+/// GP_HIDE_BUILT_SOURCE is set.
+pub(crate) fn built_hidden() -> bool {
+    HIDDEN.get() || std::env::var_os(HIDE_BUILT).is_some_and(|v| !v.is_empty())
+}
+
+/// While the returned guard lives, every lookup of the checkout gp was
+/// built from on this thread answers none: [`built`], so
+/// [`find_repo`]'s fallback, and the module kit's source
+/// (crate::module). `gp self check` holds it for its whole run.
+pub(crate) fn hide_built() -> HideBuilt {
+    HideBuilt(HIDDEN.replace(true))
+}
+
+/// [`hide_built`]'s guard: dropped, the switch is as it was.
+pub(crate) struct HideBuilt(bool);
+
+impl Drop for HideBuilt {
+    fn drop(&mut self) {
+        HIDDEN.set(self.0);
+    }
+}
+
+/// The checkout gp was built from, by the path it had at build time:
+/// None under [`hide_built`]. On an installed gp the path is the build
+/// machine's, so callers check that what they want is there.
+pub(crate) fn built() -> Option<PathBuf> {
+    if built_hidden() {
+        return None;
+    }
+    Some(Path::new(env!("CARGO_MANIFEST_DIR")).join("../.."))
 }
 
 /// The working folder or the nearest one above it that `has` accepts,
@@ -21,8 +61,7 @@ pub(crate) fn find_repo(has: impl Fn(&Path) -> bool) -> Option<PathBuf> {
     {
         return Some(d.to_path_buf());
     }
-    let built = built();
-    if has(&built) {
+    if let Some(built) = built().filter(|b| has(b)) {
         return Some(built);
     }
     crate::bundle::root().filter(|r| has(r))

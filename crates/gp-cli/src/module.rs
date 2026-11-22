@@ -18,6 +18,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use serde_json::json;
 
 use crate::Outcome;
+use crate::bundle::Carried;
 
 /// The crate that exports the page's calls, and what the closure starts from.
 const TOP: &str = "gp-web";
@@ -159,16 +160,74 @@ fn browser_manifest(file: &Path) -> Result<String> {
     Ok(toml::to_string(&m)?)
 }
 
-/// The tool's source folder: GP_TOOL_SRC, or where this gp was built from.
-fn tool_src() -> PathBuf {
-    std::env::var_os("GP_TOOL_SRC").map_or_else(
-        || Path::new(env!("CARGO_MANIFEST_DIR")).join("../.."),
-        PathBuf::from,
+/// The tool's source folder to make the kit from: GP_TOOL_SRC when it is
+/// set, else the checkout this gp was built from when its crates are
+/// still there (a source build). None for an installed gp away from its
+/// source (issue 46), and always under crate::repo::hide_built.
+fn tool_src() -> Option<PathBuf> {
+    if crate::repo::built_hidden() {
+        return None;
+    }
+    if let Some(s) = std::env::var_os("GP_TOOL_SRC").filter(|s| !s.is_empty()) {
+        return Some(PathBuf::from(s));
+    }
+    crate::repo::built().filter(|b| has_kit_crates(b))
+}
+
+/// Whether `src` holds the kit's top crate.
+fn has_kit_crates(src: &Path) -> bool {
+    src.join("crates").join(TOP).join("Cargo.toml").is_file()
+}
+
+/// `gp game kit -o OUT`: the module kit in `out`, made from the tool's
+/// source when this gp has it (tool_src), else taken from the kit this gp
+/// carries.
+pub fn kit(out: &Path) -> Result<Outcome> {
+    kit_with(out, Carried::own())
+}
+
+/// Why there is no module kit to write: what [`kit_with`] tried.
+fn no_kit() -> anyhow::Error {
+    let built = match crate::repo::built() {
+        Some(b) => format!("{} isn't there", b.join("crates").join(TOP).display()),
+        None => "the checkout it was built from is hidden".to_owned(),
+    };
+    anyhow!(
+        "no module kit: this gp carries none ({} isn't in its bundle), and there is no source to make one from: GP_TOOL_SRC isn't set and {built}",
+        crate::bundle::KIT
     )
 }
 
-pub fn kit(out: &Path) -> Result<Outcome> {
-    let src = tool_src();
+/// Whether `rel` is a crate's manifest in the kit: crates/NAME/Cargo.toml.
+fn is_crate_manifest(rel: &str) -> bool {
+    rel.strip_prefix("crates/")
+        .and_then(|r| r.strip_suffix("/Cargo.toml"))
+        .is_some_and(|c| !c.contains('/'))
+}
+
+/// The module kit in `out`, from the tool's source or else from
+/// `carried`'s kit. Fails naming what it tried when there is neither.
+pub(crate) fn kit_with(out: &Path, carried: Carried<'_>) -> Result<Outcome> {
+    if let Some(src) = tool_src() {
+        return kit_from_source(&src, out);
+    }
+    let files = carried.kit_files()?.ok_or_else(no_kit)?;
+    write_tree(&files, out)?;
+    let out = out.canonicalize()?;
+    let crates = files.keys().filter(|rel| is_crate_manifest(rel)).count();
+    let hash = tree_hash(&out)?;
+    Ok(Outcome {
+        json: json!({ "kit": out, "hash": hash, "crates": crates, "from": "bundle", "bundle": carried.id }),
+        text: format!(
+            "module kit in {} from this gp's bundle {}: {crates} crates, hash {hash}",
+            out.display(),
+            carried.id
+        ),
+        exit: 0,
+    })
+}
+
+fn kit_from_source(src: &Path, out: &Path) -> Result<Outcome> {
     let crates = src.join("crates");
     let mut seen = BTreeSet::new();
     let mut todo = vec![TOP.to_owned()];
@@ -246,10 +305,11 @@ pub fn kit(out: &Path) -> Result<Outcome> {
     )?;
     let hash = tree_hash(&out)?;
     Ok(Outcome {
-        json: json!({ "kit": out, "hash": hash, "crates": seen.len() }),
+        json: json!({ "kit": out, "hash": hash, "crates": seen.len(), "from": "source", "source": src }),
         text: format!(
-            "module kit in {}: {} crates, hash {hash}",
+            "module kit in {} from {}: {} crates, hash {hash}",
             out.display(),
+            src.display(),
             seen.len()
         ),
         exit: 0,
@@ -591,6 +651,38 @@ pub(crate) fn build_with(
         }
     }
 
+    let bytes = compile(&work, &toolchain, &src, &models.join(","))?;
+    if let Some(p) = out.parent() {
+        fs::create_dir_all(p)?;
+    }
+    fs::write(out, &bytes)?;
+    let hash = blake3::hash(&bytes).to_hex().to_string();
+    Ok(Outcome {
+        json: json!({ "module": out, "hash": hash, "bytes": bytes.len(), "kit": tree_hash(&kit_dir)? }),
+        text: format!("{}: {} bytes, hash {hash}", out.display(), bytes.len()),
+        exit: 0,
+    })
+}
+
+/// The module the kit in `kit_dir` makes as it is, with its own empty
+/// game slot: what a game without hook code (Moss Hop) plays with. Built
+/// as `gp game build` builds, in the sandbox, in its own work folder.
+/// Returns its size and hash. `gp self check` builds it.
+pub(crate) fn build_kit_alone(kit_dir: &Path) -> Result<(usize, String)> {
+    let kit_dir = kit_dir
+        .canonicalize()
+        .with_context(|| format!("the module kit {}", kit_dir.display()))?;
+    let toolchain = toolchain_dir(&kit_dir)?;
+    let work = work_dir("self-check-kit")?;
+    let src = work.join("src");
+    write_tree(&read_all(&kit_dir)?, &src)?;
+    let bytes = compile(&work, &toolchain, &src, "")?;
+    Ok((bytes.len(), blake3::hash(&bytes).to_hex().to_string()))
+}
+
+/// The browser module of the tree in `src`, built in the sandbox, with
+/// `models` (comma-separated) as the hook crate's models.
+fn compile(work: &Path, toolchain: &Path, src: &Path, models: &str) -> Result<Vec<u8>> {
     let flags = format!("-Clink-arg=--max-memory={MAX_MEMORY}");
     let wrapper = work.join("rustc-wrapper.sh");
     fs::write(&wrapper, WRAPPER)?;
@@ -624,28 +716,18 @@ pub(crate) fn build_with(
         "--config",
         "profile.release.debug=false",
     ];
-    let mut c = sandboxed(&work, &toolchain, &args)?;
-    c.current_dir(&src)
+    let mut c = sandboxed(work, toolchain, &args)?;
+    c.current_dir(src)
         .env("RUSTFLAGS", flags)
         .env("RUSTC_WRAPPER", &wrapper)
-        .env("GP_MODULE_SRC", &src)
+        .env("GP_MODULE_SRC", src)
         .env("GP_MODULE_TARGET", &target_dir)
         .env("CARGO_TARGET_DIR", &target_dir)
-        .env("GP_HOOK_MODELS", models.join(","));
+        .env("GP_HOOK_MODELS", models);
     run(&mut c, "the sandboxed build")?;
 
     let built = target_dir.join(format!("{TARGET}/release/gp_web.wasm"));
-    let bytes = fs::read(&built).with_context(|| built.display().to_string())?;
-    if let Some(p) = out.parent() {
-        fs::create_dir_all(p)?;
-    }
-    fs::write(out, &bytes)?;
-    let hash = blake3::hash(&bytes).to_hex().to_string();
-    Ok(Outcome {
-        json: json!({ "module": out, "hash": hash, "bytes": bytes.len(), "kit": tree_hash(&kit_dir)? }),
-        text: format!("{}: {} bytes, hash {hash}", out.display(), bytes.len()),
-        exit: 0,
-    })
+    fs::read(&built).with_context(|| built.display().to_string())
 }
 
 /// The tests of a game's hook crate, run as `gp game build` builds it: in
@@ -750,18 +832,9 @@ pub(crate) fn own_kit(home: &Path) -> Result<PathBuf> {
         return Ok(dir);
     }
     let tmp = dir.with_extension(format!("tmp{}", std::process::id()));
-    // A released gp carries its kit (src/bundle.rs); one built in a
-    // checkout makes it from the sources it was built from.
-    let from_source = tool_src()
-        .join("crates")
-        .join(TOP)
-        .join("Cargo.toml")
-        .is_file();
-    if !from_source && crate::bundle::has_kit() {
-        crate::bundle::unpack_kit(&tmp).context("unpacking this gp's module kit")?;
-    } else {
-        kit(&tmp).context("making this gp's module kit")?;
-    }
+    // One built in a checkout makes it from the sources it was built from;
+    // a released gp carries its kit (src/bundle.rs).
+    kit(&tmp).context("making this gp's module kit")?;
     // Another gp may have made it meanwhile; theirs is the same.
     if fs::rename(&tmp, &dir).is_err() && !dir.join("Cargo.lock").is_file() {
         bail!("couldn't move the kit to {}", dir.display());

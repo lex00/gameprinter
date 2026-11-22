@@ -15,6 +15,7 @@
 //! and the checkout gp was built from. So the files on disk in a checkout
 //! always win.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
@@ -24,29 +25,71 @@ use anyhow::{Context, Result, bail};
 include!(concat!(env!("OUT_DIR"), "/bundle.rs"));
 
 /// The module kit's archive in the bundle.
-const KIT: &str = "module-kit.zip";
+pub(crate) const KIT: &str = "module-kit.zip";
+
+/// A set of carried files and its id: this gp's own ([`Carried::own`]),
+/// or, in a test, any list.
+#[derive(Clone, Copy)]
+pub(crate) struct Carried<'a> {
+    pub files: &'a [(&'a str, &'a [u8])],
+    pub id: &'a str,
+}
+
+impl Carried<'static> {
+    /// The files this gp carries.
+    pub(crate) fn own() -> Self {
+        Carried {
+            files: FILES,
+            id: ID,
+        }
+    }
+}
+
+impl<'a> Carried<'a> {
+    /// The carried file at `rel`.
+    pub(crate) fn file(&self, rel: &str) -> Option<&'a [u8]> {
+        let found = self.files.iter().find(|(p, _)| *p == rel);
+        found.map(|(_, b)| *b)
+    }
+
+    /// The module kit's files by path, read from its archive. None when
+    /// these files hold no kit.
+    pub(crate) fn kit_files(&self) -> Result<Option<BTreeMap<String, Vec<u8>>>> {
+        let Some(bytes) = self.file(KIT) else {
+            return Ok(None);
+        };
+        let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes))
+            .context("reading the carried module kit")?;
+        let mut out = BTreeMap::new();
+        for i in 0..zip.len() {
+            let mut f = zip.by_index(i)?;
+            let Some(rel) = f.enclosed_name() else {
+                bail!(
+                    "the carried module kit names a file outside it: {:?}",
+                    f.name()
+                );
+            };
+            if f.is_dir() {
+                continue;
+            }
+            let rel = rel.to_string_lossy().replace('\\', "/");
+            let mut b = Vec::with_capacity(f.size() as usize);
+            f.read_to_end(&mut b)?;
+            out.insert(rel, b);
+        }
+        Ok(Some(out))
+    }
+
+    /// The files, all but the kit, unpacked under
+    /// `home/work/bundle/<id>/`, the first time only.
+    pub(crate) fn unpack(&self, home: &Path) -> Result<PathBuf> {
+        unpack(home, self.files, self.id)
+    }
+}
 
 /// Whether this gp carries its files.
 pub(crate) fn carried() -> bool {
     !FILES.is_empty()
-}
-
-/// The carried file at `rel`.
-pub(crate) fn file(rel: &str) -> Option<&'static [u8]> {
-    FILES.iter().find(|(p, _)| *p == rel).map(|(_, b)| *b)
-}
-
-/// How many files and bytes this gp carries under `prefix` ("" for all).
-pub(crate) fn count(prefix: &str) -> (usize, usize) {
-    FILES
-        .iter()
-        .filter(|(p, _)| p.starts_with(prefix))
-        .fold((0, 0), |(n, b), (_, x)| (n + 1, b + x.len()))
-}
-
-/// The bundle's id: a hash of every file in it.
-pub(crate) fn id() -> &'static str {
-    ID
 }
 
 /// The folder the bundle is unpacked into, unpacking it the first time.
@@ -58,7 +101,7 @@ pub(crate) fn root() -> Option<PathBuf> {
     static ROOT: std::sync::OnceLock<Option<PathBuf>> = std::sync::OnceLock::new();
     ROOT.get_or_init(|| {
         let home = gp_evidence::Paths::from_env().ok()?.home;
-        match unpack(&home) {
+        match Carried::own().unpack(&home) {
             Ok(d) => Some(d),
             Err(e) => {
                 eprintln!("gp: couldn't unpack the files this gp carries: {e:#}");
@@ -69,14 +112,14 @@ pub(crate) fn root() -> Option<PathBuf> {
     .clone()
 }
 
-fn unpack(home: &Path) -> Result<PathBuf> {
-    let dir = home.join("work").join("bundle").join(ID);
+fn unpack(home: &Path, files: &[(&str, &[u8])], id: &str) -> Result<PathBuf> {
+    let dir = home.join("work").join("bundle").join(id);
     let done = dir.join(".unpacked");
     if done.is_file() {
         return Ok(dir);
     }
     let tmp = dir.with_extension(format!("tmp{}", std::process::id()));
-    for (rel, bytes) in FILES {
+    for (rel, bytes) in files {
         if *rel == KIT {
             continue;
         }
@@ -86,7 +129,8 @@ fn unpack(home: &Path) -> Result<PathBuf> {
         }
         fs::write(&to, bytes).with_context(|| to.display().to_string())?;
     }
-    fs::write(tmp.join(".unpacked"), ID)?;
+    fs::create_dir_all(&tmp)?;
+    fs::write(tmp.join(".unpacked"), id)?;
     // Another gp may have unpacked it meanwhile; theirs is the same.
     if fs::rename(&tmp, &dir).is_err() {
         if done.is_file() {
@@ -112,39 +156,9 @@ pub(crate) fn page() -> Option<PathBuf> {
 }
 
 /// Whether this gp carries the module kit.
+#[cfg(test)]
 pub(crate) fn has_kit() -> bool {
-    file(KIT).is_some()
-}
-
-/// Unpacks the carried module kit into `out`. False when this gp carries
-/// none.
-pub(crate) fn unpack_kit(out: &Path) -> Result<bool> {
-    let Some(bytes) = file(KIT) else {
-        return Ok(false);
-    };
-    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes))
-        .context("reading the carried module kit")?;
-    for i in 0..zip.len() {
-        let mut f = zip.by_index(i)?;
-        let Some(rel) = f.enclosed_name() else {
-            bail!(
-                "the carried module kit names a file outside it: {:?}",
-                f.name()
-            );
-        };
-        let to = out.join(rel);
-        if f.is_dir() {
-            fs::create_dir_all(&to)?;
-            continue;
-        }
-        if let Some(p) = to.parent() {
-            fs::create_dir_all(p)?;
-        }
-        let mut b = Vec::with_capacity(f.size() as usize);
-        f.read_to_end(&mut b)?;
-        fs::write(&to, b).with_context(|| to.display().to_string())?;
-    }
-    Ok(true)
+    Carried::own().file(KIT).is_some()
 }
 
 #[cfg(test)]
@@ -160,6 +174,6 @@ mod tests {
         assert!(root().is_none());
         assert!(page().is_none());
         assert!(!has_kit());
-        assert_eq!(count(""), (0, 0));
+        assert!(Carried::own().files.is_empty());
     }
 }

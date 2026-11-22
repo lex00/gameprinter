@@ -1184,7 +1184,9 @@ enum GameCmd {
         rom_dir: PathBuf,
     },
     /// Write the module kit: the tool's sources for a game module and the
-    /// crates they need, ready for a build with no network.
+    /// crates they need, ready for a build with no network. Made from the
+    /// checkout gp was built from (or GP_TOOL_SRC); a released gp away from
+    /// its source writes the kit it carries.
     Kit {
         #[arg(short, long)]
         out: PathBuf,

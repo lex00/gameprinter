@@ -81,8 +81,9 @@ pub(crate) fn repo_for(given: Option<&Path>, cwd: &Path) -> Result<PathBuf> {
             .filter(|t| has(t))
             .or_else(|| crate::bundle::root().filter(|r| has(r)))
             .or_else(|| {
-                let b = crate::repo::built();
-                has(&b).then(|| b.canonicalize().unwrap_or(b))
+                crate::repo::built()
+                    .filter(|b| has(b))
+                    .map(|b| b.canonicalize().unwrap_or(b))
             })
             .ok_or_else(|| anyhow!(NO_REPO))?,
     };
@@ -167,7 +168,7 @@ mod tests {
         let t = tempfile::tempdir().unwrap();
         let repo = repo_for(None, t.path()).unwrap();
         assert!(repo.join("templates").is_dir(), "{}", repo.display());
-        let built = crate::repo::built().canonicalize().unwrap();
+        let built = crate::repo::built().unwrap().canonicalize().unwrap();
         assert_eq!(repo.canonicalize().unwrap(), built);
         let home = t.path().join("home");
         let paths = Paths {
