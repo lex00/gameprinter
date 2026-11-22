@@ -522,9 +522,16 @@ does). It leads with progress (owner, loop-page-progress-first):
   bars with the frames matched of the clip's; and one sentence of what is
   being done for it now, counted from the open rows whose target names the
   line (`target_line` on a row of the quest log): fixes being worked on,
-  waiting for the person's YES, landing, landed and being measured, or
-  waiting for an agent. A bar that moved since the page was opened says by
-  how much. A game with no scoreboard says so in one line.
+  waiting for the person's YES, landing, landed and being measured,
+  waiting for an agent (a row up next), asking the person to look, or
+  parked (a row in line, which counts as worked only when marked agent
+  working). A bar that moved since the page was opened says by how much.
+  The page asks for the scoreboard first, with the game from its address,
+  before the player, the ROM and the session load; until the first answer
+  PROGRESS says "Reading the game's progress." (and a part's sentence
+  "Reading what is being done for it." until the quest log comes), and a
+  game with no scoreboard says so in one line only once an answer came
+  with no lines.
 - YOUR TURN, the screen page's, under it: each card still asking, with its
   clip and its box for words open (no WORDS to press), and each row's
   question with its clip and its ANSWER box; NOTHING NEEDS YOU when there

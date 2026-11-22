@@ -1174,6 +1174,7 @@ async function sealRecording(r, log) {
 // What the queue's statuses show as (app.js's LABELS).
 const LABELS = { done: "DONE", "asking you": "YOUR MOVE", "agent working": "WORKING ON IT", "in line": "IN LINE", next: "NEXT" };
 let rows = []; // the quest log, as api/session gives it
+let rowsRead = false; // rows came from the server once
 let clipsBy = []; // [{mechanic, clips: [{n, frames, by, note}]}]
 
 const el = (tag, cls, text) => {
@@ -1564,6 +1565,7 @@ async function refreshLists(force) {
     noAgent.hidden = !s.no_agent;
     noAgent.textContent = s.no_agent ?? "";
     rows = s.queue ?? [];
+    rowsRead = true;
     clipsBy = c.mechanics ?? [];
     drawQueue();
     drawClips();
@@ -2282,8 +2284,11 @@ let stepsWriting = false; // a WRONG box is open: don't redraw under it
 // with its game state, background and sprites as gp serve last measured
 // them and how each moved since the measure before.
 let scoreDrawn = "";
+// The page's game from its address (/mechanic/GAME/screen.html), so the
+// scoreboard is asked for before the session and the page's other polls.
+const URL_GAME = decodeURIComponent(location.pathname.match(/\/mechanic\/([^/]+)\//)?.[1] ?? "") || null;
 async function refreshScoreboard() {
-  const game = session?.game;
+  const game = session?.game ?? URL_GAME;
   if (!game) return;
   let v = null;
   try {
@@ -2389,19 +2394,34 @@ const count = (n, one, many) => `${n} ${n === 1 ? one : many}`;
 
 /** The one sentence of what is being done for line `l` now. */
 function partSays(l, state) {
+  // The scoreboard can come before the quest log: say so, not "nothing".
+  if (!rowsRead && state !== "locked") return "Reading what is being done for it.";
   const name = String(l.name ?? "").toLowerCase();
   const open = rows.filter((r) => r.mechanic && r.status !== "done" && r.target_line === name);
-  const working = open.filter((r) => worked(r)).length;
-  const yes = open.filter((r) => !worked(r) && cardState(r.mechanic) === "yes").length;
-  const landing = open.filter((r) => !worked(r) && cardState(r.mechanic) === "landing").length;
-  const measuring = open.filter((r) => !worked(r) && !cardState(r.mechanic) && r.awaiting_measure).length;
-  const waiting = open.length - working - yes - landing - measuring;
+  // A row parked in line is worked only when it says so: a worker the
+  // runner left on it isn't working it (every game row parked while the
+  // game's work is held read as being worked on).
+  const busy = (r) => (r.status === "in line" ? false : worked(r));
+  const rest = open.filter((r) => !busy(r));
+  const working = open.length - rest.length;
+  const yes = rest.filter((r) => cardState(r.mechanic) === "yes").length;
+  const landing = rest.filter((r) => cardState(r.mechanic) === "landing").length;
+  const after = rest.filter((r) => !cardState(r.mechanic));
+  const measuring = after.filter((r) => r.awaiting_measure).length;
+  const idle = after.filter((r) => !r.awaiting_measure);
+  // Only a row up next waits for an agent; one in line is parked, and one
+  // asking the person waits for them.
+  const parked = idle.filter((r) => r.status === "in line").length;
+  const asking = idle.filter((r) => r.status === "asking you").length;
+  const waiting = idle.length - parked - asking;
   const parts = [];
   if (working) parts.push(`${count(working, "fix is", "fixes are")} being worked on`);
   if (yes) parts.push(`${count(yes, "fix waits", "fixes wait")} for your YES`);
   if (landing) parts.push(`${count(landing, "fix is", "fixes are")} landing`);
   if (measuring) parts.push(`${count(measuring, "fix has", "fixes have")} landed and ${measuring === 1 ? "is" : "are"} being measured`);
   if (waiting) parts.push(`${count(waiting, "fix waits", "fixes wait")} for an agent`);
+  if (asking) parts.push(`${count(asking, "fix asks", "fixes ask")} you to look`);
+  if (parked) parts.push(`${count(parked, "fix is", "fixes are")} parked`);
   if (parts.length) return `${parts.join(", ")}.`.replace(/^./, (c) => c.toUpperCase());
   if (state === "locked") return "You said it looks right, so no change can make it look worse.";
   if (state === "ready") return "It measures near full: watch it beside the original and say if it looks right.";
@@ -2449,9 +2469,13 @@ function drawProgress() {
   progressDrawn = key;
   list.textContent = "";
   none.hidden = !(board?.error || !lines.length);
-  none.textContent = board?.error
-    ? `The scoreboard can't be read: ${board.error}`
-    : "This game has no scoreboard yet: its parts show here once it has one.";
+  // No answer yet is not "no scoreboard": that is said only once an answer
+  // came with no lines.
+  none.textContent = !board
+    ? "Reading the game's progress."
+    : board.error
+      ? `The scoreboard can't be read: ${board.error}`
+      : "This game has no scoreboard yet: its parts show here once it has one.";
   for (const { l, state, confirm, says } of parts) {
     const li = el("li", `part part-${state}`);
     const head = el("div", "phead");
@@ -2975,6 +2999,14 @@ async function setUpPictures() {
 
 async function main() {
   wire();
+  // PROGRESS first (progress-shows-at-once): it says it is reading until
+  // the scoreboard's first answer, asked for now, while the player, the
+  // ROM and the session load.
+  if (LOOP_PAGE) {
+    drawProgress();
+    void refreshScoreboard();
+    setInterval(() => { if (!document.hidden) void refreshScoreboard(); }, 20000);
+  }
   line("Loading the game.");
   player = await NesPlayer.load("gp_play.wasm");
   const r = await fetch("rom");
@@ -3052,8 +3084,10 @@ async function main() {
   setInterval(() => { if (!document.hidden) void refreshAsks(); }, 2000);
   void refreshSteps();
   setInterval(() => { if (!document.hidden) void refreshSteps(); }, 3000);
-  void refreshScoreboard();
-  setInterval(() => { if (!document.hidden) void refreshScoreboard(); }, 20000);
+  // The loop's page asked at the start; one with no game in its address
+  // asks again now the session names it.
+  if (!LOOP_PAGE || !URL_GAME) void refreshScoreboard();
+  if (!LOOP_PAGE) setInterval(() => { if (!document.hidden) void refreshScoreboard(); }, 20000);
 }
 
 main().catch((e) => {
