@@ -2,6 +2,22 @@
 
 Each release of gp has a section here, `## gp VERSION` (a date may follow), and its GitHub release's notes are that section. A release is refused before it is cut when its section is missing ([docs/release.md](docs/release.md)). Add the next one in a commit to main before `just release`.
 
+## gp 0.1.3
+
+Fixed: on an installed gp with no source checkout, `gp model gate` failed before any check, because `gp game kit` looked for files on the machine that built the release (issue 46). The kit is now made from the copy gp carries. `gp self check` uses what it carries (the kit, a module build, the page's files, the templates, the page's server) where it used to only count the files, and the release's own check runs it with the source moved away.
+
+Fixed: a gate that couldn't land for a reason outside the patch (a git lock, uncommitted edits to the same files) used up your yes (issue 45). It now checks it can land first, and keeps the yes and tries again when it can't.
+
+The loop's page opens on progress: one block per part of the game, saying locked, ready for you, or how close it is. YOUR TURN holds only what needs you. Everything the agents are doing is folded under one heading.
+
+You can say what you think where you're looking: every card has an answer box open on it, every row has COMMENT on its face, and your words carry the clip and frame you were watching. LOOK AT IT on a card plays the card's change, with BEFORE for the model as it is.
+
+Faster and less repeated work: a change is checked once, not three times; workers start from a warm build and from the fixes still awaiting an answer; rows for different parts of a game run side by side; game and tools landings no longer wait on each other. `gp loop set --hold GAME` pauses a game's own rows while its tools rows go on.
+
+Also fixed: `gp picture` could return an empty measure with no error; a reopened row kept its old target; the page could show changes that hadn't landed.
+
+Windows builds are still to come.
+
 ## gp 0.1.2
 
 New: one setup for every agent. Connect yours with `gp mcp setup` (Claude Code, Codex, Cursor and others that run MCP servers), then ask it to port a ROM you own; it follows gp's steps one at a time. On Claude Code the gp plugin is a shortcut: `/plugin marketplace add lex00/gameprinter`, then `/plugin install gp@gameprinter`, then `/gp:port`. Its version is always gp's. Two people porting the same ROM get the same steps, in the same order, with the same questions.
