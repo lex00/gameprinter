@@ -147,8 +147,59 @@ pub fn is_yes(v: &Value, now: u64) -> bool {
     let at = v["answered_ms"]
         .as_u64()
         .unwrap_or(0)
-        .max(v["after_held_ms"].as_u64().unwrap_or(0));
+        .max(v["after_held_ms"].as_u64().unwrap_or(0))
+        .max(v["kept_until_ms"].as_u64().unwrap_or(0));
     v["state"] == json!("yes") && now.saturating_sub(at) < YES_FOR_MS
+}
+
+/// How many times a yes whose gate failed for a cause outside its patch
+/// is put back and run again before the failure uses it.
+pub const KEPT_TRIES: u64 = 3;
+
+/// How long after such a failure the runner runs the yes again.
+pub const KEPT_WAIT_MS: u64 = 60 * 1000;
+
+/// Whether a yes put back after a failure outside its patch ([`keep_yes`])
+/// still waits its minute before the runner runs it again.
+pub fn kept_waits(v: &Value, now: u64) -> bool {
+    v["kept_until_ms"].as_u64().is_some_and(|t| now < t)
+}
+
+/// Why a gate's run failed for a cause outside its patch, from its JSON
+/// output (`not_the_patch` with its `why`: a lock in the gate's tree, a
+/// checkout with edits to the patch's files, a landing git refused, a tip
+/// that kept moving); None for any other run, a failed check among them.
+pub fn not_the_patch(out: &[u8]) -> Option<String> {
+    let v: Value = serde_json::from_slice(out).ok()?;
+    (v["not_the_patch"] == json!(true)).then(|| {
+        v["why"]
+            .as_str()
+            .unwrap_or("the gate couldn't land it")
+            .to_owned()
+    })
+}
+
+/// Puts a yes back after its run failed for a cause outside its patch
+/// (`why`): state `yes` again, its count in `kept`, why in `kept_why`, and
+/// the runner runs it again from `kept_until_ms`, [`KEPT_WAIT_MS`] on. Ok
+/// (false), writing nothing, once it was put back [`KEPT_TRIES`] times: the
+/// failure then uses it, as any other does.
+pub fn keep_yes(home: &Path, id: &str, why: &str) -> Result<bool, String> {
+    let mut v = read(home, id).ok_or_else(|| format!("there's no ask {id}"))?;
+    let n = v["kept"].as_u64().unwrap_or(0);
+    if n >= KEPT_TRIES {
+        return Ok(false);
+    }
+    v["state"] = json!("yes");
+    v["kept"] = json!(n + 1);
+    v["kept_why"] = json!(why);
+    v["kept_until_ms"] = json!(now_ms() + KEPT_WAIT_MS);
+    if let Some(o) = v.as_object_mut() {
+        o.remove("ran");
+        o.remove("used_ms");
+    }
+    write(home, &v)?;
+    Ok(true)
 }
 
 /// The asks a person may still answer, and the yeses not yet used: what
@@ -829,6 +880,44 @@ mod tests {
         assert!(a["ran"]["lines"][0].as_str().unwrap().starts_with(DIED));
         // Once ended, it isn't ended again.
         assert!(end_dead_runs(home, |id| id == "c-3").is_empty());
+    }
+
+    /// A gate that couldn't land for a cause outside its patch keeps the
+    /// person's yes: a yes again, waiting a minute, up to KEPT_TRIES times;
+    /// then the failure uses it. A failed check is no such cause.
+    #[test]
+    fn a_yes_is_kept_when_its_gate_fails_outside_the_patch() {
+        let d = tempfile::tempdir().unwrap();
+        let home = d.path();
+        let v = json!({"id": "k-1", "made_ms": 1, "state": "yes",
+            "answered_ms": now_ms(), "command": "tool gate"});
+        write(home, &v).unwrap();
+        let lock = br#"{"verdict": "FAIL", "phase": "ready", "not_the_patch": true,
+            "why": "git's index.lock is there"}"#;
+        let check = br#"{"verdict": "FAIL", "phase": "lanes", "not_the_patch": false,
+            "why": "cargo test failed"}"#;
+        assert_eq!(
+            not_the_patch(lock).as_deref(),
+            Some("git's index.lock is there")
+        );
+        assert_eq!(not_the_patch(check), None);
+        assert_eq!(not_the_patch(b"not json"), None);
+        for n in 1..=KEPT_TRIES {
+            claim_for_runner(home, "k-1").unwrap();
+            assert_eq!(keep_yes(home, "k-1", "git's index.lock is there"), Ok(true));
+            let a = read(home, "k-1").unwrap();
+            assert_eq!(a["state"], "yes");
+            assert_eq!(a["kept"], n);
+            assert!(a["ran"].is_null(), "{a}");
+            assert!(is_yes(&a, now_ms()));
+            assert!(kept_waits(&a, now_ms()), "it waits its minute");
+            assert!(!kept_waits(&a, now_ms() + KEPT_WAIT_MS));
+            // Kept past the yes's own half hour, it is still a yes.
+            assert!(is_yes(&a, a["answered_ms"].as_u64().unwrap() + YES_FOR_MS));
+        }
+        claim_for_runner(home, "k-1").unwrap();
+        assert_eq!(keep_yes(home, "k-1", "still locked"), Ok(false));
+        assert_eq!(read(home, "k-1").unwrap()["state"], "running");
     }
 
     /// A run no one saw exit is judged by its JSON alone.

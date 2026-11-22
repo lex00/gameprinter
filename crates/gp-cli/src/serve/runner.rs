@@ -419,6 +419,11 @@ fn run_yeses(ctx: &Arc<Ctx>) {
             continue;
         }
         let id = a["id"].as_str().unwrap_or("").to_owned();
+        // A gate that failed for a cause outside its patch kept its yes,
+        // and runs again a minute later (gp_mcp::asks::keep_yes).
+        if gp_mcp::asks::kept_waits(&a, now) {
+            continue;
+        }
         // A gate's patch made on top of cards not landed (`--after`) runs
         // after them: held, its yes kept alive, while one waits; failed
         // with why once one was refused.
@@ -528,7 +533,7 @@ fn run_yeses(ctx: &Arc<Ctx>) {
                     .stderr(e)
                     .spawn()
             });
-            let (state, lines) = match child {
+            let (state, lines, outside) = match child {
                 Ok(mut c) => {
                     let _ = gp_mcp::asks::set_child(&home, &id, c.id());
                     let ok = c.wait().map(|s| s.success()).unwrap_or(false);
@@ -536,10 +541,28 @@ fn run_yeses(ctx: &Arc<Ctx>) {
                     let err = fs::read(&err_f).unwrap_or_default();
                     let (state, mut lines) = gp_mcp::asks::outcome(Some(ok), &out, &err);
                     lines.push(format!("(ran in {})", dir.display()));
-                    (state, lines)
+                    (state, lines, gp_mcp::asks::not_the_patch(&out))
                 }
-                Err(e) => ("failed", vec![format!("it couldn't start: {e}")]),
+                Err(e) => ("failed", vec![format!("it couldn't start: {e}")], None),
             };
+            // A gate that couldn't land for a cause outside its patch keeps
+            // the person's yes and runs again; only a failed check, or a
+            // patch that doesn't apply, uses it.
+            let mut lines = lines;
+            if state == "failed"
+                && let Some(why) = outside
+            {
+                if gp_mcp::asks::keep_yes(&home, &id, &why) == Ok(true) {
+                    let _ = fs::remove_file(&out_f);
+                    let _ = fs::remove_file(&err_f);
+                    return;
+                }
+                lines.push(format!(
+                    "{} (it couldn't land {} times, a minute apart)",
+                    why.trim_end_matches('.'),
+                    gp_mcp::asks::KEPT_TRIES + 1
+                ));
+            }
             let _ = gp_mcp::asks::set_ran(&home, &id, state, &lines);
             let _ = fs::remove_file(&out_f);
             let _ = fs::remove_file(&err_f);

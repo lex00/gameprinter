@@ -1091,7 +1091,7 @@ pub(crate) fn run(a: &ToolGateArgs, paths: &Paths) -> Result<Outcome> {
     let c = Cx {
         repo,
         onto,
-        tree: tool.join("tree"),
+        tree: tool.join(TREE),
         target: tool.join("target"),
         home: paths.home.clone(),
         steps: Steps::new(tool.join("steps.jsonl"), &patch_hash),
@@ -1111,7 +1111,7 @@ pub(crate) fn run(a: &ToolGateArgs, paths: &Paths) -> Result<Outcome> {
     }];
     if let Some(t) = &ticket {
         for (k, (name, r)) in t.claim().into_iter().enumerate() {
-            match gate::read_patch(&r.patch, &tool.join("batch").join((k + 1).to_string()))? {
+            match gate::read_patch(&r.patch, &tool.join(BATCH).join((k + 1).to_string()))? {
                 Ok(p) => items.push(Item {
                     patch: p,
                     message: r
@@ -1141,6 +1141,16 @@ pub(crate) fn run(a: &ToolGateArgs, paths: &Paths) -> Result<Outcome> {
     );
     o
 }
+
+/// The tool gate's tree, under the gate home's `tool/`: one per lock. A
+/// tool gate of a gp from before the two locks holds `gate.lock`, not
+/// `tool.lock`, and works in `tool/tree`, so it could start while this
+/// gate runs and share its tree, each git stopping on the other's
+/// index.lock; this gate's tree is its own (issue 45).
+pub(crate) const TREE: &str = "tree-tool-lock";
+/// Where a batch's patches are read to, apart from an older gp's
+/// `tool/batch` for the same reason.
+const BATCH: &str = "batch-tool-lock";
 
 /// The run name of a tool gate's ticket: tool gates batch only together.
 const TOOL_RUN: &str = "tool gate";
@@ -1263,13 +1273,36 @@ fn tries_in(
         };
         return Ok(fail(f, lines));
     }
+    // Before the tree is touched: a lock in it, or a checkout to land in
+    // with edits to the same files, keeps the person's yes.
+    let files: Vec<String> = items
+        .iter()
+        .flat_map(|i| gate::patch_files(&c.repo, &i.patch.diff))
+        .collect();
+    if let Err(n) = gate::can_land(&c.repo, &c.tree, &c.onto, &files, !dry_run) {
+        let f = Failed {
+            why: n.why,
+            phase: n.phase,
+        };
+        return Ok(fail(f, lines));
+    }
     for _ in 0..TIP_TRIES {
         let tip = git(&c.repo, &["rev-parse", &c.onto])?;
-        c.steps.time(
+        let out = c.steps.time(
             "checkout",
             || gate::checkout(&c.repo, &c.tree, &tip),
             Result::is_ok,
-        )?;
+        );
+        if let Err(e) = out {
+            let f = Failed {
+                why: format!(
+                    "the gate's tree {} couldn't be checked out: {e:#}",
+                    c.tree.display()
+                ),
+                phase: "checkout",
+            };
+            return Ok(fail(f, lines));
+        }
         dropped.clear();
         let tried = c.steps.time(
             "try",
@@ -1346,7 +1379,13 @@ fn tries_in(
                     Err((why, moved)) if moved => {
                         lines.push(format!("the tip moved: {why}; again"));
                     }
-                    Err((why, _)) => bail!("couldn't land {commit}: {why}"),
+                    Err((why, _)) => {
+                        let f = Failed {
+                            why: format!("couldn't land {commit}: {why}"),
+                            phase: "land",
+                        };
+                        return Ok(fail(f, lines));
+                    }
                 }
             }
         }
@@ -1358,10 +1397,15 @@ fn tries_in(
     Ok(fail(f, lines))
 }
 
+/// The gate's FAIL. One whose cause is outside the patch (a phase of
+/// [`gate::NOT_THE_PATCH`]) says so in `not_the_patch`, and the runner
+/// keeps the yes and runs it again.
 fn fail(f: Failed, mut lines: Vec<String>) -> Outcome {
+    let outside = gate::NOT_THE_PATCH.contains(&f.phase);
     lines.push(format!("FAIL ({}): {}", f.phase, f.why));
     Outcome {
-        json: json!({"verdict": "FAIL", "phase": f.phase, "why": f.why, "lines": lines}),
+        json: json!({"verdict": "FAIL", "phase": f.phase, "why": f.why,
+            "not_the_patch": outside, "lines": lines}),
         text: lines.join("\n"),
         exit: 1,
     }
@@ -1581,6 +1625,67 @@ date +%s > '{times}/just.end'
 
     fn dry_run(c: &Cx, patch: &Patch) -> Outcome {
         gate(c, patch, true)
+    }
+
+    /// Before the gate touches its tree it checks it can land: git's
+    /// index.lock in the tree, or uncommitted edits to the patch's files in
+    /// the checkout it lands in, is a FAIL that says it isn't the patch
+    /// (`not_the_patch`, so the runner keeps the yes); edits to other files
+    /// don't stop it, a dry run doesn't land so edits don't stop it either,
+    /// and a failed check is the patch's (issue 45).
+    #[test]
+    fn a_gate_that_cant_land_says_it_isnt_the_patch() {
+        let dir = tempfile::tempdir().unwrap();
+        let c = gate_rig(dir.path());
+        let patch = patch_of(&c, "tool.txt", "the tool, said again\n");
+        let o = dry_run(&c, &patch);
+        assert_eq!(o.json["verdict"], "PASS", "{}", o.text);
+        assert_eq!(o.json["not_the_patch"], Value::Null);
+
+        let lock = PathBuf::from(
+            git(
+                &c.tree,
+                &[
+                    "rev-parse",
+                    "--path-format=absolute",
+                    "--git-path",
+                    "index.lock",
+                ],
+            )
+            .unwrap(),
+        );
+        fs::write(&lock, "").unwrap();
+        let o = dry_run(&c, &patch);
+        assert_eq!(o.json["verdict"], "FAIL", "{}", o.text);
+        assert_eq!(o.json["phase"], "ready");
+        assert_eq!(o.json["not_the_patch"], true);
+        assert!(o.text.contains("index.lock"), "{}", o.text);
+        fs::remove_file(&lock).unwrap();
+
+        // The person's checkout has an edit to tool.txt, not committed.
+        fs::write(c.repo.join("tool.txt"), "the person's own edit\n").unwrap();
+        let o = gate(&c, &patch, false);
+        assert_eq!(o.json["verdict"], "FAIL", "{}", o.text);
+        assert_eq!(o.json["phase"], "ready");
+        assert_eq!(o.json["not_the_patch"], true);
+        assert!(o.text.contains("tool.txt"), "{}", o.text);
+        assert_eq!(
+            o.json["why"].as_str().unwrap().matches("tool.txt").count(),
+            1
+        );
+        assert_eq!(dry_run(&c, &patch).json["verdict"], "PASS");
+        git_in(&c.repo, &["checkout", "--", "tool.txt"]);
+
+        // An edit to another file doesn't stop the landing.
+        fs::write(c.repo.join("README.md"), "the person's notes\n").unwrap();
+        let o = gate(&c, &patch, false);
+        assert_eq!(o.json["verdict"], "PASS", "{}", o.text);
+        git_in(&c.repo, &["checkout", "--", "README.md"]);
+
+        let failing = patch_of(&c, "tool.txt", "a failing test\n");
+        let o = dry_run(&c, &failing);
+        assert_eq!(o.json["verdict"], "FAIL", "{}", o.text);
+        assert_eq!(o.json["not_the_patch"], false);
     }
 
     /// The gate's game check is `just check`'s, through the patched gp: the

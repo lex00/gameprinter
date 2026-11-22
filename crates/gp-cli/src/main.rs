@@ -1498,7 +1498,7 @@ fn dispatch(cmd: &Cmd) -> Result<Outcome> {
         Cmd::Loop { cmd } => loop_cmd::run(cmd, &gp_evidence::Paths::from_env()?),
         Cmd::Tool {
             cmd: ToolCmd::Gate(a),
-        } => tool_gate::run(a, &gp_evidence::Paths::from_env()?),
+        } => gate::kept_yes(tool_gate::run(a, &gp_evidence::Paths::from_env()?)),
         Cmd::Itself { cmd } => publish::run(cmd, &gp_evidence::Paths::from_env()?),
         Cmd::Clip { cmd } => clip_score::run(cmd, &gp_evidence::Paths::from_env()?),
         Cmd::Rule { cmd } => rule_refine::run(cmd, &gp_evidence::Paths::from_env()?),
@@ -1514,7 +1514,7 @@ fn dispatch(cmd: &Cmd) -> Result<Outcome> {
             ModelCmd::Diff { a, b } => model_w9::diff(a, b),
             ModelCmd::Mutants { dir, out } => mutants::cli(dir, out.as_deref()),
             ModelCmd::Schema { which } => schemas::print(*which),
-            ModelCmd::Gate(a) => gate::run(a, &gp_evidence::Paths::from_env()?),
+            ModelCmd::Gate(a) => gate::kept_yes(gate::run(a, &gp_evidence::Paths::from_env()?)),
             ModelCmd::Mechanics(a) => mechanics::run(a, &gp_evidence::Paths::from_env()?),
             ModelCmd::Static(a) => model_static::run(a, &gp_evidence::Paths::from_env()?),
             ModelCmd::Refine(a) => refine::run(a, &gp_evidence::Paths::from_env()?),

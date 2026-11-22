@@ -91,9 +91,22 @@ A model gate `--dry-run` that passes keeps its pass in the gate's home, `passed/
 
 ### The locks
 
-A home has two locks. `gate.lock` is the model gate's (it works in the home's `tree/`, `kit/`, `modules/` and `scores/` and lands in the games checkout), and `tool.lock` is the tool gate's (it works in `tool/` and lands in gameprinter). A tool gate's publish moves `$GP_HOME/bin/gp` while a model gate may be running; the model gate finds the file of the gp it started on once, its links followed, and starts every gp of its run from that file, so it finishes on the gp it started on. A tool gate of a gp from before the two locks held `gate.lock` and worked in `tool/`: a tool gate that finds such a gate holding `gate.lock` (its holder file says `tool gate`) waits for it, and `gp loop clean --gate` leaves the tool gate's build folders while either runs.
+A home has two locks. `gate.lock` is the model gate's (it works in the home's `tree/`, `kit/`, `modules/` and `scores/` and lands in the games checkout), and `tool.lock` is the tool gate's (it works in `tool/` and lands in gameprinter). A tool gate's publish moves `$GP_HOME/bin/gp` while a model gate may be running; the model gate finds the file of the gp it started on once, its links followed, and starts every gp of its run from that file, so it finishes on the gp it started on. A tool gate of a gp from before the two locks held `gate.lock` and worked in `tool/tree`: a tool gate that finds such a gate holding `gate.lock` (its holder file says `tool gate`) waits for it, and `gp loop clean --gate` leaves the tool gate's build folders while either runs. Such a gate can also start after this one took `tool.lock`, since `gate.lock` is free then, so the tool gate's tree is one per lock: a gate under `tool.lock` works in `tool/tree-tool-lock` and reads a batch's patches to `tool/batch-tool-lock`, and never shares a tree with an older gp's (issue 45: an older gp's dry run held `gate.lock` and ran in `tool/tree` beside the server's landing, which failed in 0.1 s on git's `index.lock`).
 
 The gate holding a lock writes its holder file beside it (`gate.holder.json`, `tool.holder.json`): its pid, its parent's pid, when it took the lock, what it is (`tool gate`, `tool gate dry run`, `model gate`, `model gate dry run`) and the steps file it logs to (the tool gate's `tool/steps.jsonl`; the model gate has none). While it holds the lock it watches itself. A dry run whose parent pid changed (the worker or MCP server that started it ended) stops, since no one reads its verdict; a landing run doesn't, because the runner starts landings to outlive gp serve. A tool gate that has logged no step for 30 minutes stops (`GP_GATE_IDLE_S` sets the limit in seconds; a normal run's longest gap is about 15). Stopping ends the lanes' process groups, so the gate ends with a FAIL that says why; one that hasn't ended 30 s later exits, which frees the lock. `gp loop health` prints who holds each lock, and says PROBLEM naming the pid when the holder logged no step for 30 minutes (a model gate: held over 2 hours), or when the lock is held by a gate of an older gp that wrote no holder file.
+
+### A yes kept
+
+The person's yes to a gate card is used only by the patch's own failure: a check that failed, or a patch that doesn't apply. A gate that couldn't land for a cause outside the patch says so: its FAIL has `"not_the_patch": true` in `--json`, with the phase:
+
+| Phase | What stopped it |
+|---|---|
+| `ready` | Before the tree is touched: git's `index.lock` is in the gate's tree (another git, or a gate of another gp, works there), or, for a run that lands, the checkout where the branch is checked out has uncommitted changes to a file the patch changes, which `git merge --ff-only` would refuse (issue 45) |
+| `checkout` | The gate's tree couldn't be reset and checked out at the tip |
+| `land` | The checks passed and git refused the landing |
+| `tip` | The tip moved on every try |
+
+gp serve's runner reads that and puts the yes back: the card is a yes again, with `kept` (how many times), `kept_why` and `kept_until_ms`, and the runner runs it again a minute later, up to 3 times. A fourth such failure uses the yes like any other, its last line saying it couldn't land 4 times, and the card's row goes back to next with why in its note. Both gates do this; in a batch of model gates, each patch's gate is told.
 
 ### Guards the old gate had that the game gate doesn't
 

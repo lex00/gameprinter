@@ -625,6 +625,164 @@ pub(crate) fn clean(tree: &Path) {
     let _ = git(tree, &["clean", "-fdq"]);
 }
 
+/// What stopped a gate for a cause outside its patch: git's lock in the
+/// gate's tree, a checkout with uncommitted edits to the patch's files, a
+/// landing git refused, a tip that kept moving. The gate's FAIL says so
+/// (`not_the_patch` in its JSON) and gp serve's runner puts the person's
+/// yes back and runs it again (docs/gate.md, "A yes kept"); only a failed
+/// check or a patch that doesn't apply uses the yes.
+#[derive(Debug)]
+pub(crate) struct NotThePatch {
+    pub phase: &'static str,
+    pub why: String,
+}
+
+impl std::fmt::Display for NotThePatch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.why)
+    }
+}
+
+impl std::error::Error for NotThePatch {}
+
+/// The phases of a FAIL whose cause is outside the patch: `ready` (it
+/// can't land now: [`can_land`]), `checkout`, `land` and `tip`.
+pub(crate) const NOT_THE_PATCH: &[&str] = &["ready", "checkout", "land", "tip"];
+
+/// A gate's FAIL for a cause outside its patch, as its outcome.
+pub(crate) fn not_the_patch_outcome(n: &NotThePatch) -> Outcome {
+    let line = format!("FAIL ({}): {}", n.phase, n.why);
+    Outcome {
+        json: json!({"verdict": "FAIL", "phase": n.phase, "why": n.why,
+            "not_the_patch": true, "lines": [line]}),
+        text: line,
+        exit: 1,
+    }
+}
+
+/// A gate's result with an error it stopped on for a cause outside its
+/// patch ([`NotThePatch`]) made its FAIL outcome; any other as it was.
+pub(crate) fn kept_yes(r: Result<Outcome>) -> Result<Outcome> {
+    match r {
+        Err(e) => match e.downcast_ref::<NotThePatch>() {
+            Some(n) => Ok(not_the_patch_outcome(n)),
+            None => Err(e),
+        },
+        ok => ok,
+    }
+}
+
+/// `checkout`, its failure one outside the patch: the tree was reset and
+/// checked out before anything of the patch's was in it.
+pub(crate) fn checkout_for_patch(repo: &Path, tree: &Path, commit: &str) -> Result<()> {
+    checkout(repo, tree, commit).map_err(|e| {
+        anyhow::Error::new(NotThePatch {
+            phase: "checkout",
+            why: format!(
+                "the gate's tree {} couldn't be checked out: {e:#}",
+                tree.display()
+            ),
+        })
+    })
+}
+
+/// The worktree of `repo` where branch `onto` is checked out, if any.
+pub(crate) fn checked_out_at(repo: &Path, onto: &str) -> Result<Option<PathBuf>> {
+    let porcelain = git(repo, &["worktree", "list", "--porcelain"])?;
+    let mut at: Option<PathBuf> = None;
+    let mut cur: Option<PathBuf> = None;
+    for l in porcelain.lines() {
+        if let Some(p) = l.strip_prefix("worktree ") {
+            cur = Some(PathBuf::from(p));
+        } else if l == format!("branch refs/heads/{onto}") {
+            at = cur.clone();
+        }
+    }
+    Ok(at)
+}
+
+/// The files a patch file changes, by `git apply --numstat`.
+pub(crate) fn patch_files(repo: &Path, diff: &Path) -> Vec<String> {
+    git(repo, &["apply", "--numstat", &diff.to_string_lossy()])
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|l| l.split('\t').nth(2).map(str::to_owned))
+        .collect()
+}
+
+/// Whether the gate can use a yes now, before it touches its tree: Err
+/// with why when git's `index.lock` is in the gate's `tree` (another git,
+/// or a gate of another gp, works there), or, for a run that lands, when
+/// the checkout where `onto` is checked out has uncommitted changes to
+/// one of `files`, which its `git merge --ff-only` would refuse (issue
+/// 45). A patch that doesn't apply is the gate's own check, after this.
+pub(crate) fn can_land(
+    repo: &Path,
+    tree: &Path,
+    onto: &str,
+    files: &[String],
+    lands: bool,
+) -> std::result::Result<(), NotThePatch> {
+    let ready = |why: String| NotThePatch {
+        phase: "ready",
+        why,
+    };
+    if tree.join(".git").exists() {
+        let lock = git(
+            tree,
+            &[
+                "rev-parse",
+                "--path-format=absolute",
+                "--git-path",
+                "index.lock",
+            ],
+        )
+        .map(PathBuf::from);
+        if let Ok(lock) = lock
+            && lock.exists()
+        {
+            return Err(ready(format!(
+                "git's {} is there: another git, or a gate of another gp, works in the gate's tree {}",
+                lock.display(),
+                tree.display()
+            )));
+        }
+    }
+    if !lands || files.is_empty() {
+        return Ok(());
+    }
+    let Ok(Some(at)) = checked_out_at(repo, onto) else {
+        return Ok(());
+    };
+    // Changed against HEAD, staged or not; and a file the patch adds that
+    // is there untracked, which the merge would refuse to overwrite.
+    let mut changed = vec!["diff", "HEAD", "--name-only", "--"];
+    changed.extend(files.iter().map(String::as_str));
+    let mut untracked = vec!["ls-files", "--others", "--exclude-standard", "--"];
+    untracked.extend(files.iter().map(String::as_str));
+    let mut dirty: Vec<String> = [changed, untracked]
+        .iter()
+        .flat_map(|args| {
+            git(&at, args)
+                .unwrap_or_default()
+                .lines()
+                .map(str::to_owned)
+                .collect::<Vec<_>>()
+        })
+        .filter(|l| !l.is_empty())
+        .collect();
+    dirty.sort();
+    dirty.dedup();
+    if dirty.is_empty() {
+        return Ok(());
+    }
+    Err(ready(format!(
+        "{} has uncommitted changes to {}, which the patch changes too: git merge --ff-only would refuse to land it there",
+        at.display(),
+        dirty.join(", ")
+    )))
+}
+
 /// A failure's reason and the phase it failed in.
 #[derive(Clone)]
 pub(crate) struct Failed {
@@ -1580,10 +1738,14 @@ fn gate_batch(c: &Ctx, a: &GateArgs, items: &[Item], rom: &[u8]) -> Result<Vec<O
             return Ok(vec![o]);
         }
         let mut verdicts: Vec<Option<std::result::Result<(), Failed>>> = vec![None; n];
+        // Before the tree is touched: a lock in it, or a checkout to land
+        // in with edits to the same files, keeps the yes (NotThePatch).
+        let files: Vec<String> = items.iter().flat_map(|i| i.files.clone()).collect();
+        can_land(&c.repo, &c.tree, &c.onto, &files, !a.dry_run)?;
         // Before any scoring: a patch that doesn't apply on the tip, or
         // that the hook refuses, stops here in seconds.
         for (i, item) in items.iter().enumerate() {
-            checkout(&c.repo, &c.tree, &tip)?;
+            checkout_for_patch(&c.repo, &c.tree, &tip)?;
             let early = apply_how(&c.tree, &item.patch.diff, !a.no_rebase)
                 .map_err(|why| Failed {
                     why,
@@ -1631,7 +1793,7 @@ fn gate_batch(c: &Ctx, a: &GateArgs, items: &[Item], rom: &[u8]) -> Result<Vec<O
         } else {
             // The tip scored, with what the free patches add (no score
             // reads it), as the base of the rest.
-            checkout(&c.repo, &c.tree, &mid.commit)?;
+            checkout_for_patch(&c.repo, &c.tree, &mid.commit)?;
             let started = std::time::Instant::now();
             let tree_game = c.tree.join(&c.rel);
             let (base, scan_before) = if !tree_game.join("package.toml").is_file() {
@@ -1702,7 +1864,13 @@ fn gate_batch(c: &Ctx, a: &GateArgs, items: &[Item], rom: &[u8]) -> Result<Vec<O
                 said.push(format!("the tip moved: {why}; again (try {})", attempt + 1));
                 continue;
             }
-            Err((why, false)) => bail!("couldn't land {}: {why}", end.commit),
+            Err((why, false)) => {
+                return Err(NotThePatch {
+                    phase: "land",
+                    why: format!("couldn't land {}: {why}", end.commit),
+                }
+                .into());
+            }
             _ => {}
         }
         if landed.is_ok()
@@ -1757,7 +1925,8 @@ fn gate_batch(c: &Ctx, a: &GateArgs, items: &[Item], rom: &[u8]) -> Result<Vec<O
                     ),
                     (_, Some(k), Err((why, _))) => (
                         format!("{pre}PASS, but not landed: {why}. Gate it again on the new tip"),
-                        json!({"verdict": "PASS", "commit": k, "landed": false}),
+                        json!({"verdict": "PASS", "commit": k, "landed": false,
+                            "phase": "tip", "not_the_patch": true}),
                         2,
                     ),
                     (_, None, _) => (
@@ -2051,14 +2220,7 @@ pub(crate) fn run(a: &GateArgs, paths: &Paths) -> Result<Outcome> {
                 continue;
             }
         };
-        let files: Vec<String> = git(
-            &c.repo,
-            &["apply", "--numstat", &patch.diff.to_string_lossy()],
-        )
-        .unwrap_or_default()
-        .lines()
-        .filter_map(|l| l.split('\t').nth(2).map(str::to_owned))
-        .collect();
+        let files = patch_files(&c.repo, &patch.diff);
         items.push(Item {
             patch,
             shown,
@@ -2072,7 +2234,15 @@ pub(crate) fn run(a: &GateArgs, paths: &Paths) -> Result<Outcome> {
     let outcomes = if items.is_empty() {
         Vec::new()
     } else {
-        gate_batch(&c, a, &items, &rom)?
+        match gate_batch(&c, a, &items, &rom) {
+            Ok(o) => o,
+            // A cause outside the patches stopped the batch: each patch's
+            // gate is told so, and each yes is kept.
+            Err(e) => match e.downcast_ref::<NotThePatch>() {
+                Some(n) => items.iter().map(|_| not_the_patch_outcome(n)).collect(),
+                None => return Err(e),
+            },
+        }
     };
     let mut mine = None;
     for (name, o) in asked.into_iter().zip(outcomes).chain(early) {
@@ -2796,17 +2966,7 @@ pub(crate) fn land(
     tip: &str,
     commit: &str,
 ) -> std::result::Result<(), (String, bool)> {
-    let porcelain =
-        git(repo, &["worktree", "list", "--porcelain"]).map_err(|e| (format!("{e:#}"), false))?;
-    let mut at: Option<PathBuf> = None;
-    let mut cur: Option<PathBuf> = None;
-    for l in porcelain.lines() {
-        if let Some(p) = l.strip_prefix("worktree ") {
-            cur = Some(PathBuf::from(p));
-        } else if l == format!("branch refs/heads/{onto}") {
-            at = cur.clone();
-        }
-    }
+    let at = checked_out_at(repo, onto).map_err(|e| (format!("{e:#}"), false))?;
     let landed = match &at {
         Some(w) => git(w, &["merge", "--ff-only", "-q", commit]),
         None => git(
@@ -4079,5 +4239,36 @@ mod status_tests {
             (Some(2), 2)
         );
         assert_eq!(v["clips"][1]["first_split"]["what"], "player.x apart");
+    }
+}
+
+#[cfg(test)]
+mod kept_yes_tests {
+    use super::*;
+
+    /// A model gate that stopped for a cause outside its patch (its tree's
+    /// checkout, the landing) ends in a FAIL saying so, which keeps the
+    /// person's yes; any other error stays an error.
+    #[test]
+    fn a_stop_outside_the_patch_is_a_fail_that_keeps_the_yes() {
+        let stop = NotThePatch {
+            phase: "land",
+            why: "couldn't land abc: local changes would be overwritten".into(),
+        };
+        let o = kept_yes(Err(stop.into())).unwrap();
+        assert_eq!(o.exit, 1);
+        assert_eq!(o.json["verdict"], "FAIL");
+        assert_eq!(o.json["phase"], "land");
+        assert_eq!(o.json["not_the_patch"], true);
+        assert!(
+            o.text.starts_with("FAIL (land): couldn't land abc"),
+            "{}",
+            o.text
+        );
+        let other = kept_yes(Err(anyhow::anyhow!("the tip's module doesn't build")));
+        assert!(other.is_err());
+        // A tree that isn't a checkout yet can always be used.
+        let d = tempfile::tempdir().unwrap();
+        assert!(can_land(d.path(), &d.path().join("tree"), "main", &[], true).is_ok());
     }
 }
