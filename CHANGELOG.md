@@ -14,7 +14,7 @@ You can say what you think where you're looking: every card has an answer box op
 
 Faster and less repeated work: a change is checked once, not three times; workers start from a warm build and from the fixes still awaiting an answer; rows for different parts of a game run side by side; game and tools landings no longer wait on each other. `gp loop set --hold GAME` pauses a game's own rows while its tools rows go on.
 
-Also fixed: `gp picture` could return an empty measure with no error; a reopened row kept its old target; the page could show changes that hadn't landed.
+Also fixed: `gp picture` could return an empty measure with no error; a reopened row kept its old target; the page could show changes that hadn't landed. A gate run that lost its caller could hang and hold the tools lock, with every other landing waiting behind it; it now fails and frees the lock. `gp self check` works on a gp built from source, and `gp self check --as-installed` checks it the way a release is checked. A module can be built from the module kit as it is.
 
 Windows builds are still to come.
 
