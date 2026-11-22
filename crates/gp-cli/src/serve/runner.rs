@@ -2771,12 +2771,17 @@ fn launch(mut cmd: Command, brief: &Path, dir: &Path, n: u32) -> anyhow::Result<
 impl Launched {
     /// The process a worker's record names, when it can be taken up: one
     /// started detached (its exit file named), still running or ended with
-    /// its exit written.
+    /// its exit written. It asks the process table first and the file
+    /// after: the process writes its exit before it ends, so one found
+    /// ended has its file there, while the file looked for first could be
+    /// written, and the process end, between the two looks, and a worker
+    /// ending just then would read as neither (it couldn't start: the
+    /// worker's record names no process).
     pub(crate) fn of(rec: &Value) -> Option<Self> {
         let pid = rec["pid"].as_u64()? as u32;
         let exit = PathBuf::from(rec["exit_file"].as_str()?);
         let group = rec["group"].as_u64().map_or(pid, |g| g as u32);
-        (exit.is_file() || gp_mcp::proc::alive(u64::from(pid))).then_some(Self {
+        (gp_mcp::proc::alive(u64::from(pid)) || exit.is_file()).then_some(Self {
             pid,
             group,
             exit: Some(exit),
@@ -3975,6 +3980,41 @@ mod tests {
             b2.contains("Your try 1 at this step ended with exit 3"),
             "{b2}"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_worker_ending_while_it_is_looked_at_can_still_be_taken_up() {
+        // Looked at again and again while it ends, its record names a
+        // process every time: running, or ended with its exit written.
+        let t = tempfile::tempdir().unwrap();
+        let dir = t.path().join("w");
+        fs::create_dir_all(&dir).unwrap();
+        let brief = dir.join("brief.txt");
+        fs::write(&brief, "").unwrap();
+        let script = t.path().join("short.sh");
+        fs::write(&script, "sleep 0.05\n").unwrap();
+        for n in 1..=8 {
+            let mut cmd = launcher(
+                Path::new("/bin/sh"),
+                &[script.display().to_string()],
+                &brief,
+                &dir,
+                n,
+            );
+            cmd.stdout(Stdio::null()).stderr(Stdio::null());
+            gp_mcp::proc::own_group(&mut cmd);
+            let p = launch(cmd, &brief, &dir, n).unwrap();
+            let rec = json!({"pid": p.pid, "group": p.group, "exit_file": p.exit});
+            let t0 = Instant::now();
+            loop {
+                assert!(Launched::of(&rec).is_some(), "try {n}: {rec}");
+                if !gp_mcp::proc::alive(u64::from(p.pid)) {
+                    break;
+                }
+                assert!(t0.elapsed() < Duration::from_secs(10), "try {n} ran on");
+            }
+        }
     }
 
     /// A row of game g's quest log as a step, its claim made from its
