@@ -367,6 +367,9 @@ pub(crate) fn start(ctx: Arc<Ctx>) {
                     .contains(id)
             });
             settle_card_rows(&ctx.paths.home);
+            // A row whose look approved.toml has saved, by any landing, is
+            // done, so its CONFIRM isn't offered again (confirmed-row-closes).
+            settle_saved_rows(&ctx.paths.home, &ctx.games, gp_mcp::asks::now_ms());
             // Rows long finished leave the quest log for its archive, so the
             // page shows the work going on.
             if Instant::now() >= archive_at {
@@ -1128,6 +1131,29 @@ fn run_confirms(ctx: &Arc<Ctx>) {
             });
         }
     }
+}
+
+/// Each game's open rows whose look its approved.toml in the games checkout
+/// has saved go done with what was saved (crate::approved::settle_saved):
+/// a worker's model gate card that saved a look closes its row as the
+/// runner's own lock does. Returns the rows closed, `GAME/ROW`.
+fn settle_saved_rows(home: &Path, games: &Path, now: u64) -> Vec<String> {
+    let mut out = Vec::new();
+    for game in crate::next::games_in(games) {
+        if !crate::mechanic::session::name_ok(&game) {
+            continue;
+        }
+        let looks = crate::approved::saved_looks(Some(games), &game);
+        let qf = home.join("mechanics").join(&game).join("queue.json");
+        let closed = crate::approved::settle_saved(&qf, &game, &looks, now);
+        out.extend(
+            closed
+                .unwrap_or_default()
+                .into_iter()
+                .map(|r| format!("{game}/{r}")),
+        );
+    }
+    out
 }
 
 /// `gp mechanic approve GAME ROW` on a worktree of the games tip, and its
@@ -3063,14 +3089,17 @@ mod tests {
                 .unwrap()
         };
         // The yes: in line, confirmed, the question kept as asked.
-        crate::approved::confirm(&f, "l1", "CONFIRM", false).unwrap();
+        let confirm = |row: &str, said: &str, typed: bool| {
+            crate::approved::confirm(&f, "g", &[], row, said, typed)
+        };
+        confirm("l1", "CONFIRM", false).unwrap();
         // A typed yes: its turn has set the row agent working first.
         let mut q = crate::mechanic::session::read_queue(&f);
         q[1]["status"] = json!("agent working");
         crate::mechanic::session::write_queue(&f, &q).unwrap();
-        assert!(crate::approved::confirm(&f, "demo", "yes", false).is_err());
-        crate::approved::confirm(&f, "demo", "yes", true).unwrap();
-        assert!(crate::approved::confirm(&f, "theme", "yes", true).is_err());
+        assert!(confirm("demo", "yes", false).is_err());
+        confirm("demo", "yes", true).unwrap();
+        assert!(confirm("theme", "yes", true).is_err());
         let l1 = row("l1");
         assert_eq!(l1["status"], "in line");
         assert_eq!(l1["confirmed"]["said"], "CONFIRM");
@@ -3109,6 +3138,86 @@ mod tests {
         // A row whose yes is gone is left as it is.
         settle_lock(&f, "theme", &yes, 3000).unwrap();
         assert_eq!(row("theme")["status"], "asking you");
+    }
+
+    #[test]
+    fn a_row_whose_look_a_card_saved_closes_and_a_second_yes_does_nothing() {
+        let t = tempfile::tempdir().unwrap();
+        let (home, games) = (t.path().join("home"), t.path().join("games"));
+        let f = home.join("mechanics").join("g").join("queue.json");
+        fs::create_dir_all(f.parent().unwrap()).unwrap();
+        let dir = games.join("g");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("roms.toml"), "").unwrap();
+        fs::write(dir.join(gp_model::MODEL_FILE), "# a model\n").unwrap();
+        let clip =
+            |from: u64, to: u64| json!({"id": "g.l4.001", "from": from, "to": to, "look": "game"});
+        let q = vec![
+            // Confirmed, its look then saved by a worker's model gate card.
+            json!({"mechanic": "confirm-level-4", "status": "in line", "clip": clip(0, 99),
+                "confirmed": {"at_ms": 1, "said": "CONFIRM"}, "note": "You said yes to this look"}),
+            // Asking again about a look saved already.
+            json!({"mechanic": "again", "status": "asking you", "clip": clip(10, 20)}),
+            // Asking about frames the saved look doesn't hold.
+            json!({"mechanic": "later", "status": "asking you", "clip": clip(50, 150)}),
+            // A worker at it is left to them.
+            json!({"mechanic": "busy", "status": "agent working", "clip": clip(0, 99)}),
+            // With a target: in line for its measure.
+            json!({"mechanic": "aimed", "status": "in line", "clip": clip(0, 99),
+                "target": "level 4 sprites at least 99 of 100"}),
+        ];
+        crate::mechanic::session::write_queue(&f, &q).unwrap();
+        let look = |row: &str, to: u64| crate::approved::Look {
+            row: row.into(),
+            clip: "g.l4.001".into(),
+            frames: [0, to],
+            look: "game".into(),
+            approved: "2026-11-21".into(),
+            apart: (0..=to).map(|i| [i, 0, 0]).collect(),
+        };
+        let looks = ["confirm-level-4", "again", "later", "busy", "aimed"].map(|r| look(r, 99));
+        fs::write(dir.join("approved.toml"), crate::approved::text(&looks)).unwrap();
+        let row = |m: &str| {
+            crate::mechanic::session::read_queue(&f)
+                .into_iter()
+                .find(|r| r["mechanic"] == json!(m))
+                .unwrap()
+        };
+        // The second yes, before the runner looks: nothing locks.
+        let r = crate::approved::confirm(&f, "g", &looks, "again", "yes", false).unwrap();
+        assert_eq!(r["status"], "done");
+        assert!(r.get("confirmed").is_none() && r.get("clip").is_none());
+        let note = r["note"].as_str().unwrap();
+        assert!(note.starts_with("Already saved as right"), "{note}");
+        let closed = settle_saved_rows(&home, &games, 5000);
+        assert_eq!(closed, ["g/confirm-level-4", "g/aimed"]);
+        let c = row("confirm-level-4");
+        assert_eq!(c["status"], "done");
+        assert!(c.get("confirmed").is_none() && c.get("clip").is_none());
+        assert_eq!(c["locked"]["frames"], json!([0, 99]));
+        assert_eq!(c["locked"]["saved"], "2026-11-21");
+        let note = c["note"].as_str().unwrap();
+        assert!(
+            note.starts_with("Saved as right: g.l4.001 frames 0-99 (100 frames, saved 2026-11-21)"),
+            "{note}"
+        );
+        assert_eq!(row("later")["status"], "asking you");
+        assert_eq!(row("busy")["status"], "agent working");
+        let aimed = row("aimed");
+        assert_eq!(aimed["status"], "in line");
+        assert_eq!(aimed["awaiting_measure"], 5000);
+        // Settled once: the next look closes nothing.
+        assert!(settle_saved_rows(&home, &games, 6000).is_empty());
+        // The runner's lock arriving after leaves the closed row as it is.
+        let yes = Locked::Yes {
+            clip: "g.l4.001".into(),
+            frames: json!([0, 99]),
+            n: 100,
+            landed: false,
+        };
+        let was = row("confirm-level-4");
+        settle_lock(&f, "confirm-level-4", &yes, 7000).unwrap();
+        assert_eq!(row("confirm-level-4"), was);
     }
 
     #[test]

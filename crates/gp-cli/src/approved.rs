@@ -216,6 +216,113 @@ fn corpus_id(game: &str, row: &str, clip: &Value, ids: &[String]) -> Result<Stri
     Ok(id)
 }
 
+/// A row's clip as a corpus id with no corpus at hand: its own id, or
+/// GAME.ROW.NNN for clip N of a row.
+fn clip_id(game: &str, row: &str, clip: &Value) -> Option<String> {
+    if let Some(id) = clip["id"].as_str() {
+        return Some(id.to_owned());
+    }
+    let n = clip["n"].as_u64()?;
+    let of = clip["mechanic"].as_str().unwrap_or(row);
+    Some(format!("{game}.{of}.{n:03}"))
+}
+
+/// The game's approved looks in the games checkout `games` (default
+/// $GP_GAMES_DIR); none when there is no checkout, game or file, or the
+/// file doesn't read.
+pub(crate) fn saved_looks(games: Option<&Path>, game: &str) -> Vec<Look> {
+    crate::roms_cmd::games_dir(games)
+        .and_then(|g| crate::labels::game_folder(&g, game))
+        .and_then(|d| read(&d).ok())
+        .unwrap_or_default()
+}
+
+/// The saved look quest-log row `r` of `game` asks about: a look of
+/// approved.toml on the row's own name whose clip is the row's and whose
+/// frames hold the row's, in the game's own pictures.
+pub(crate) fn saved<'a>(game: &str, r: &Value, looks: &'a [Look]) -> Option<&'a Look> {
+    let row = r["mechanic"].as_str()?;
+    let c = r.get("clip").filter(|c| c.is_object())?;
+    if c["look"].as_str().unwrap_or("game") != "game" {
+        return None;
+    }
+    let id = clip_id(game, row, c)?;
+    let from = c["from"].as_u64().unwrap_or(0);
+    looks.iter().find(|l| {
+        let [a, z] = l.frames;
+        l.row == row && l.clip == id && a <= from && c["to"].as_u64().is_none_or(|t| t <= z)
+    })
+}
+
+/// Whether a saved look holds every frame of a clip's `0..=last`.
+pub(crate) fn holds_clip(looks: &[Look], clip: &str, last: u64) -> bool {
+    looks
+        .iter()
+        .any(|l| l.clip == clip && l.frames[0] == 0 && l.frames[1] >= last)
+}
+
+/// Row `o` closed on its saved look `l`, `how` the note's first words:
+/// done with what was saved (`locked`), its clip, yes and worker gone; a
+/// row with a target waits in line for its measure, as a lock's does.
+fn close_saved(o: &mut serde_json::Map<String, Value>, l: &Look, how: &str, now: u64) {
+    let [a, b] = l.frames;
+    let (clip, day, n) = (&l.clip, &l.approved, l.apart.len());
+    let note = format!(
+        "{how}: {clip} frames {a}-{b} ({n} frames, saved {day}); the model gate fails a change that draws one further from the original."
+    );
+    let target = o.get("target").and_then(Value::as_str).map(str::to_owned);
+    let (status, note) = match target {
+        Some(t) => {
+            o.insert("awaiting_measure".into(), json!(now));
+            (
+                "in line",
+                format!("{note} It closes itself when its target is met ({t})."),
+            )
+        }
+        None => ("done", note),
+    };
+    o.insert("status".into(), json!(status));
+    o.insert("note".into(), json!(note));
+    o.insert(
+        "locked".into(),
+        json!({"clip": clip, "frames": [a, b], "frames_locked": n, "at_ms": now, "saved": day}),
+    );
+    o.insert("changed_ms".into(), json!(now));
+    for k in ["confirmed", "clip", "worker"] {
+        o.remove(k);
+    }
+}
+
+/// Each open row of `game`'s quest log `qf` whose look approved.toml has
+/// saved (`looks`, [`saved`]), by the runner's lock, a worker's model gate
+/// card or any other landing, goes done with what was saved, so the page
+/// offers no CONFIRM on it again (owner, confirmed-row-closes). A row a
+/// worker is at (agent working) is left to them. Returns the rows closed.
+pub(crate) fn settle_saved(qf: &Path, game: &str, looks: &[Look], now: u64) -> Result<Vec<String>> {
+    use crate::mechanic::session::{read_queue, write_queue};
+    if looks.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut q = read_queue(qf);
+    let mut closed = Vec::new();
+    for r in &mut q {
+        let status = r["status"].as_str().unwrap_or("");
+        if matches!(status, "done" | "agent working") {
+            continue;
+        }
+        let Some(l) = saved(game, r, looks).cloned() else {
+            continue;
+        };
+        let Some(o) = r.as_object_mut() else { continue };
+        close_saved(o, &l, "Saved as right", now);
+        closed.push(l.row);
+    }
+    if !closed.is_empty() {
+        write_queue(qf, &q)?;
+    }
+    Ok(closed)
+}
+
 /// Whether quest-log row `r` asks the owner to confirm a look a yes can
 /// lock: it is asking them, with a clip (a corpus id or a number) in the
 /// game's own pictures.
@@ -260,8 +367,16 @@ pub(crate) fn says_yes(text: &str) -> bool {
 /// `confirmed` (when, and the words they said), and gp serve's runner
 /// locks it with no worker (serve/runner.rs, `run_confirms`). `typed`: the
 /// yes was their answer in the row's talk, whose turn has just set the row
-/// agent working.
-pub(crate) fn confirm(qf: &Path, row: &str, said: &str, typed: bool) -> Result<Value> {
+/// agent working. A yes on a look `game`'s approved.toml has saved already
+/// (`looks`, [`saved`]) locks nothing: the row goes done saying so.
+pub(crate) fn confirm(
+    qf: &Path,
+    game: &str,
+    looks: &[Look],
+    row: &str,
+    said: &str,
+    typed: bool,
+) -> Result<Value> {
     use crate::mechanic::session::{read_queue, write_queue};
     let mut q = read_queue(qf);
     let Some(r) = q.iter_mut().find(|r| r["mechanic"] == json!(row)) else {
@@ -280,9 +395,21 @@ pub(crate) fn confirm(qf: &Path, row: &str, said: &str, typed: bool) -> Result<V
         );
     }
     let now = gp_mcp::asks::now_ms();
+    let was = saved(game, r, looks).cloned();
     let Some(o) = r.as_object_mut() else {
         bail!("row {row} isn't a table");
     };
+    if let Some(l) = was {
+        close_saved(
+            o,
+            &l,
+            "Already saved as right, so your yes changes nothing",
+            now,
+        );
+        let out = r.clone();
+        write_queue(qf, &q)?;
+        return Ok(out);
+    }
     if !o.contains_key("asked") {
         o.insert("asked".into(), o.get("note").cloned().unwrap_or(json!("")));
     }

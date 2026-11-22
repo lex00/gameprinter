@@ -1363,6 +1363,7 @@ pub(crate) fn ask_looks(home: &Path, games: &Path, game: &str) -> Vec<String> {
     };
     let f = home.join("mechanics").join(game).join("queue.json");
     let mut q = crate::mechanic::session::read_queue(&f);
+    let looks = crate::approved::read(&games.join(game)).unwrap_or_default();
     let mut added = Vec::new();
     for l in b["lines"].as_array().into_iter().flatten() {
         if l["own_draws"] == json!(true)
@@ -1389,6 +1390,16 @@ pub(crate) fn ask_looks(home: &Path, games: &Path, game: &str) -> Vec<String> {
                 || (r["clip"]["id"] == l["clip"] && r["clip"]["look"] == json!("game"))
         };
         if row == "confirm" || l["clip"].is_null() || q.iter().any(asked) {
+            continue;
+        }
+        // A look approved.toml has saved over all the line's frames isn't
+        // asked again once its row has left for the archive (owner,
+        // confirmed-row-closes: a row popped up they had confirmed).
+        let last = bg.1.saturating_sub(1);
+        if l["clip"]
+            .as_str()
+            .is_some_and(|c| crate::approved::holds_clip(&looks, c, last))
+        {
             continue;
         }
         let state = l["state"]["pct"]
@@ -1649,6 +1660,27 @@ level = "field"
             r#"[{"mechanic": "confirm-title", "status": "done"}, {"mechanic": "confirm-level-1", "status": "done"}]"#,
         );
         assert!(ask_looks(h, d.path(), "hop").is_empty(), "by name");
+        // Its row archived, a look saved over all its frames isn't asked
+        // again; one saved over fewer frames is.
+        let saved = |to: u64| {
+            let l = crate::approved::Look {
+                row: "confirm-level-1".into(),
+                clip: "hop.l1.001".into(),
+                frames: [0, to],
+                look: "game".into(),
+                approved: "2026-11-21".into(),
+                apart: vec![[0, 0, 0]],
+            };
+            put(
+                &d.path().join("hop").join(crate::approved::FILE),
+                &crate::approved::text(&[l]),
+            );
+        };
+        put(&f, r#"[{"mechanic": "confirm-title", "status": "done"}]"#);
+        saved(199);
+        assert!(ask_looks(h, d.path(), "hop").is_empty(), "saved");
+        saved(150);
+        assert_eq!(ask_looks(h, d.path(), "hop"), vec!["confirm-level-1"]);
         assert_eq!(
             confirm_row("The first bonus round"),
             "confirm-first-bonus-round"

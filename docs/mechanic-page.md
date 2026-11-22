@@ -566,6 +566,18 @@ it locked (`locked`). A clip not in the corpus yet waits for the clip
 keeping and is tried again every two minutes; any other failure sends the
 row to next with why.
 
+However a row's look gets into approved.toml (the runner's lock, a worker's
+model gate card, any landing), the runner closes the row within seconds:
+an open row, not one a worker is at, whose clip and frames a look saved on
+its own name holds goes done with a note `Saved as right: CLIP frames A-B
+(N frames, saved DAY)` and `locked`, its clip and `confirmed` gone, so the
+page offers no CONFIRM on it again (a row with a target waits in line for
+its measure, as a lock's does). A yes on a look already saved locks nothing:
+the row goes done saying `Already saved as right, so your yes changes
+nothing`. The scoreboard asks for no new `confirm-LINE` row on a line whose
+clip has a look saved over all its frames, so a confirmed row that left for
+the archive doesn't come back asking.
+
 A card is one line; a click on its question opens what it does. The yeses the runner lands in turn say which
 runs now and which wait (RUNNING NOW, 1 OF 3; WAITS, 2 OF 3), and one it
 finished says LANDED, DONE or FAILED with its last line, then leaves a

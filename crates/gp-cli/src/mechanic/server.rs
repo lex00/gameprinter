@@ -1293,7 +1293,8 @@ fn handle(s: &Server, req: &Request) -> Result<Response> {
             let confirms = yes && row.is_some_and(crate::approved::confirmable);
             let (n, again) = session.turn_once(t)?;
             if confirms {
-                crate::approved::confirm(&qf, &me, &text, true)?;
+                let looks = crate::approved::saved_looks(None, &s.game);
+                crate::approved::confirm(&qf, &s.game, &looks, &me, &text, true)?;
             }
             Ok(Response::json(
                 &json!({"turn": n, "again": again, "confirmed": confirms}),
@@ -1304,7 +1305,8 @@ fn handle(s: &Server, req: &Request) -> Result<Response> {
         ("POST", "/api/confirm") => {
             let v: Value = serde_json::from_slice(&req.body)?;
             let m = v["mechanic"].as_str().context("mechanic")?;
-            match crate::approved::confirm(&s.queue_file()?, m, "CONFIRM", false) {
+            let looks = crate::approved::saved_looks(None, &s.game);
+            match crate::approved::confirm(&s.queue_file()?, &s.game, &looks, m, "CONFIRM", false) {
                 Ok(r) => Ok(Response::json(&json!({"mechanic": m, "row": r}))),
                 Err(e) => Ok(Response::error(409, &format!("{e:#}"))),
             }
