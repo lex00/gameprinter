@@ -737,7 +737,7 @@ function confirmButton(r) {
   if (!confirmable(r)) return null;
   const b = el("button", "judge confirm", "CONFIRM: IT LOOKS RIGHT");
   b.type = "button";
-  b.title = `Your yes to ${judgeWords(r).toLowerCase()}: the loop locks these frames, and the model gate then fails a change that draws them further from the original`;
+  b.title = "Say it looks right, so no later change can make it look worse";
   b.addEventListener("click", async (e) => {
     e.stopPropagation();
     const btn = e.currentTarget;
@@ -745,7 +745,7 @@ function confirmButton(r) {
     btn.disabled = true;
     try {
       await api("api/confirm", { mechanic: r.mechanic });
-      note(`${r.mechanic}: your yes is in. The loop locks the look now, with no worker.`, 6000);
+      note(`${r.mechanic}: you said it looks right. Saving it now.`, 6000);
       turnDrawn = "";
       await refreshLists(true);
     } catch (err) {

@@ -290,7 +290,7 @@ pub(crate) fn confirm(qf: &Path, row: &str, said: &str, typed: bool) -> Result<V
     o.insert("confirmed".into(), json!({"at_ms": now, "said": said}));
     o.insert(
         "note".into(),
-        json!("You said yes to this look: the loop locks it now (gp mechanic approve, landed through the model gate), with no worker."),
+        json!("You said it looks right. Saving it now."),
     );
     o.insert("changed_ms".into(), json!(now));
     o.remove("worker");

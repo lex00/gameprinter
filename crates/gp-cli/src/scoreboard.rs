@@ -1401,7 +1401,7 @@ pub(crate) fn ask_looks(home: &Path, games: &Path, game: &str) -> Vec<String> {
             "by": "loop",
             "from": format!("scoreboard line {name}, measured near full"),
             "note": format!(
-                "Watch {name} beside the original (LOOK AT IT). Does it look right? YES locks it: the gate then refuses any change that draws these frames worse. Measured: {state}background {} of {}, sprites {} of {}.",
+                "Watch {name} beside the original (LOOK AT IT). If it looks right, say YES and it stays that way: no later change can make it look worse. Measured: {state}background {} of {}, sprites {} of {}.",
                 bg.0, bg.1, sp.0, sp.1
             ),
             "clip": {

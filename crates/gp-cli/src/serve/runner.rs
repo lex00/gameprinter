@@ -1267,7 +1267,7 @@ fn settle_lock(qf: &Path, row: &str, out: &Locked, now: u64) -> anyhow::Result<(
     let tries = o["confirmed"]["tries"].as_u64().unwrap_or(0) + 1;
     let failed = |why: &str| {
         format!(
-            "You said yes to this look, but it couldn't be locked: {}. The loop takes it up again.",
+            "You said it looks right, but it couldn't be saved: {}. The loop tries again.",
             crate::next::cut(why.trim_end_matches('.'), 400)
         )
     };
@@ -1280,13 +1280,11 @@ fn settle_lock(qf: &Path, row: &str, out: &Locked, now: u64) -> anyhow::Result<(
         } => {
             let [a, b] = [0, 1].map(|i| frames[i].as_u64().unwrap_or(0));
             let how = if *landed {
-                "Locked on your yes"
+                "Saved as right"
             } else {
-                "Already locked as you said yes to it"
+                "Already saved as right"
             };
-            let note = format!(
-                "{how}: {clip} frames {a}-{b} ({n} frames); the model gate fails a change that draws one further from the original."
-            );
+            let note = format!("{how}: {row} ({clip} frames {a} to {b}).");
             let target = o.get("target").and_then(Value::as_str).map(str::to_owned);
             let (status, note) = match target {
                 Some(t) => {
@@ -1314,7 +1312,7 @@ fn settle_lock(qf: &Path, row: &str, out: &Locked, now: u64) -> anyhow::Result<(
             c["why"] = json!(why);
             let why = crate::next::cut(why.trim_end_matches('.'), 300);
             let note = format!(
-                "You said yes to this look: it locks once its clip is in the corpus, which the loop takes clips into every few minutes ({why})."
+                "You said it looks right. It is saved once the loop has taken its clip in, which it does every few minutes ({why})."
             );
             o.insert("note".into(), json!(note));
         }
@@ -3093,7 +3091,7 @@ mod tests {
             l1["note"]
                 .as_str()
                 .unwrap()
-                .starts_with("Locked on your yes: g.l1.001 frames 10-12 (3 frames)")
+                .starts_with("Saved as right: l1 (g.l1.001 frames 10 to 12).")
         );
         // A clip not in the corpus yet: tried again after a while.
         let wait = Locked::Wait("clip 1 of demo isn't in the corpus".into());
