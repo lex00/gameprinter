@@ -32,7 +32,7 @@ So the check is now run as a person runs gp. `scripts/release/chant-build.sh` un
 
 A failure stops the job, so the release is neither cut nor published. In `just check`, `self_check::tests::a_bundle_without_its_kit_fails_and_names_the_kit` runs the same self check on a small bundle with no kit and the switch on, beside the checkout: it exits 1 and names the kit.
 
-Not covered yet: copying Moss Hop with `gp game new` into a games folder and running `gp model gate --dry-run` there with a one-line patch on the bare archive.
+The job doesn't run `gp model gate` itself: the gate scores a game's clips on its ROM, and the runner has no ROM and no game. The gate is checked end to end in `just check` instead, by `crates/gp-cli/tests/gate_mosshop.rs`: it builds Moss Hop's ROM, makes the game with `gp game new` in a games repo of its own, saves two clips from `baselines/mosshop` with `gp clip presses`, and dry-runs a one-line `model.toml` patch through `gp model gate` from an empty `HOME`, `GP_HOME` and gate home, which must PASS. That test runs a dev build, which carries no bundle, so its kit comes from the checkout; the kit from the bundle is what the job's own `gp game kit` check covers.
 
 The cut and the build jobs stamp the version into the files `release.version` names: `crates/gp-cli/Cargo.toml` (gp-cli's own `version` line), gp-cli's entry in `Cargo.lock`, and the plugin's `plugin/.claude-plugin/plugin.json` and `.claude-plugin/marketplace.json` once they are in the tree, so the plugin is always gp's version. No commit bumps a version before a release, and the run itself commits nothing.
 
