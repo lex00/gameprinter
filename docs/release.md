@@ -9,6 +9,7 @@ Only the owner starts a release. An agent or a loop worker never runs `just rele
 1. Add a section to `CHANGELOG.md` for the version, `## gp 0.1.2` (a date may follow the version), with what changed, and land it on main.
 2. `just release-plan` (or `just release-plan 0.2.0`) prints what the release would cut from this checkout's commit: the label, whether the commit is pushed and green, the CHANGELOG check, and what goes where. It is `chant release cut LABEL --dry-run`: it cuts, tags, pushes and publishes nothing.
 3. `just release` (or `just release 0.2.0`) dispatches the workflow from main. `auto` takes the next version from the commits since the last release: gp's commits aren't conventional commits, so on 0.x that is the next patch. A minor or major release names its version.
+4. `just release` then waits for the run. Once the run passes it puts the released version on main (below). A failed run leaves main alone. If the wait is cut short (Ctrl-C, a closed terminal), run `just release-on-main latest` once the run has passed.
 
 ## What the run does
 
@@ -19,7 +20,13 @@ Only the owner starts a release. An agent or a loop worker never runs `just rele
 | cut | Runs `scripts/release/changelog.sh` (the release's `check`: CHANGELOG.md must have the version's section), records the five archives and `dist/SHA256SUMS`, and tags the commit `v<version>` |
 | publish | Publishes the GitHub release with the archives and `SHA256SUMS`, its notes CHANGELOG.md's section, then the formula `Formula/gp.rb` in lex00/homebrew-tap (`brew install lex00/tap/gp`), rendered from `scripts/release/homebrew/gp.rb` with each archive's URL and SHA-256 |
 
-The cut and the build jobs stamp the version into the files `release.version` names: `crates/gp-cli/Cargo.toml` (gp-cli's own `version` line), gp-cli's entry in `Cargo.lock`, and the plugin's `plugin/.claude-plugin/plugin.json` and `.claude-plugin/marketplace.json` once they are in the tree, so the plugin is always gp's version. No commit bumps a version: the committed versions stay where they are, and only a release's build carries the new one.
+The cut and the build jobs stamp the version into the files `release.version` names: `crates/gp-cli/Cargo.toml` (gp-cli's own `version` line), gp-cli's entry in `Cargo.lock`, and the plugin's `plugin/.claude-plugin/plugin.json` and `.claude-plugin/marketplace.json` once they are in the tree, so the plugin is always gp's version. No commit bumps a version before a release, and the run itself commits nothing.
+
+## Main carries the released version
+
+Claude Code's plugin marketplace reads `plugin/.claude-plugin/plugin.json` and `.claude-plugin/marketplace.json` from main, not from the release. If main kept the old version, `/plugin install gp@gameprinter` would install the previous release's plugin next to the new gp (this happened with 0.1.2, and 7e3f490c stamped it by hand). So after a run passes, `just release` runs `scripts/release/version-on-main.sh latest` (`just release-on-main LABEL` runs the same thing alone). The script works in a fresh worktree of origin/main. It runs `chant release stamp VERSION`, checks that only the four version files changed, commits "main carries VERSION", and pushes to main, trying a second time if main moved in between. A version with no GitHub release is refused, and if main already has the version nothing happens.
+
+This runs from the owner's machine and not in the train because chant's `after-release` job has only `contents: read`, and `release.workflow.env` only reaches the cut and publish jobs, so the job has no credential that can push to main.
 
 ## Setup the owner does once
 

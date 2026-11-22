@@ -54,12 +54,42 @@ release-build OUT *ARGS:
 # the plugin's manifests, and publishes the GitHub release (notes from
 # CHANGELOG.md's "## gp VERSION" section, which must be there) and the
 # Homebrew formula in lex00/tap. LABEL is auto (the next patch from the
-# commits since the last release) or a version such as 0.2.0. The owner's
-# to run: an agent never starts a release.
+# commits since the last release) or a version such as 0.2.0. It then waits
+# for the run and, once it has passed, puts the released version on main
+# (just release-on-main), since Claude Code's plugin marketplace reads the
+# plugin from main. A failed run leaves main as it was. The owner's to run:
+# an agent never starts a release.
 #   just release
 #   just release 0.2.0
 release label="auto":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    before="$(gh run list --workflow release.yml --limit 1 --json databaseId --jq '.[0].databaseId // ""')"
     gh workflow run release.yml --ref main -f label={{quote(label)}}
+    run=""
+    for _ in $(seq 30); do
+      run="$(gh run list --workflow release.yml --limit 1 --json databaseId --jq '.[0].databaseId // ""')"
+      [ -n "$run" ] && [ "$run" != "$before" ] && break
+      run=""; sleep 2
+    done
+    if [ -z "$run" ]; then
+      echo "release: dispatched, but found no new run of release.yml; once it passes, run: just release-on-main latest" >&2
+      exit 1
+    fi
+    echo "release: run $run; waiting for it (Ctrl-C leaves it running; then just release-on-main latest)"
+    gh run watch "$run" --exit-status --interval 30 >/dev/null
+    bash scripts/release/version-on-main.sh latest
+
+# Put a released version on main (scripts/release/version-on-main.sh): stamp
+# it into the files release.version names on a fresh worktree of origin/main
+# and push that commit, so /plugin install gp@gameprinter gives the plugin of
+# the gp just released. LABEL is the version or latest; a version with no
+# GitHub release is refused. `just release` runs it after a run passes. The
+# owner's to run.
+#   just release-on-main latest
+#   just release-on-main 0.1.3
+release-on-main label="latest":
+    bash scripts/release/version-on-main.sh {{quote(label)}}
 
 # What `just release` would cut from this checkout's commit: the label, the
 # checks it would pass or refuse, and what would be published where. A dry

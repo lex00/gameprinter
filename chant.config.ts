@@ -11,7 +11,10 @@
 // release whose notes are CHANGELOG.md's section for the version, then the
 // formula to the Homebrew tap lex00/tap. The cut stamps the version into the
 // files release.version names, so no commit bumps a version before a
-// release and the committed versions stay as they are. `just release-plan`
+// release. Once the run passes, `just release` puts the released version on
+// main (scripts/release/version-on-main.sh), since Claude Code's plugin
+// marketplace reads the plugin from main; the train's after-release job
+// can't, having only contents: read. `just release-plan`
 // prints what the next release would cut, and cuts, tags and pushes nothing.
 //
 // Only the owner starts a release. An agent never runs `chant release cut
