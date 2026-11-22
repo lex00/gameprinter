@@ -85,7 +85,7 @@ A measure out of tolerance names what to move: slopes and gaps move floors, the 
 
 The kit's verify steps also name `gp template derive T --write` and `gp interp baselines T`; run them too.
 
-There is no check on the game's own engine any more. `gp assets pack --base`, which wrote the stage's slots into a copy of the ROM to run beside the model, was removed on 2026-11-13, since Game Printer's games play in the browser on the model. A stage is checked on the model alone: the steps above, the kit's code rules kept by hand, and its "What fits" findings from the stages packed before. A rule the engine holds that the kit doesn't list yet won't show up; when the code is read and one is found, add it to the rules file.
+There is no check on the game's own engine any more. The pack's base option, which wrote the stage's slots into a copy of the ROM to run beside the model, was removed on 2026-11-13, since Game Printer's games play in the browser on the model. A stage is checked on the model alone: the steps above, the kit's code rules kept by hand, and its "What fits" findings from the stages packed before. A rule the engine holds that the kit doesn't list yet won't show up; when the code is read and one is found, add it to the rules file.
 
 ## 5. Theme it
 
