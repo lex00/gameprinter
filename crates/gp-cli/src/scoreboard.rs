@@ -442,6 +442,7 @@ pub(crate) fn board(home: &Path, games: &Path, game: &str) -> Option<Value> {
     let cache = read_cache(home, game);
     let gp = measuring_gp(home);
     let busy = measuring_now();
+    let looks = crate::approved::read(&dir).unwrap_or_default();
     let rows: Vec<Value> = lines
         .iter()
         .map(|l| {
@@ -487,6 +488,8 @@ pub(crate) fn board(home: &Path, games: &Path, game: &str) -> Option<Value> {
                 "sprites": sprites,
                 "own": own,
                 "approved": [],
+                "locked": locked(&looks, &l.clip, background["total"].as_u64()),
+                "confirm_row": confirm_row(&l.name),
                 "measured_ms": e.map(|e| e.measured_ms),
                 "stale": e.is_none_or(|e| e.key != key_of(home, &dir, game, &l.clip, &gp)),
                 "measuring": busy.as_deref() == Some(&format!("{game}/{}", l.slot())),
@@ -527,6 +530,29 @@ pub(crate) fn board(home: &Path, games: &Path, game: &str) -> Option<Value> {
         })
         .collect();
     Some(json!({"game": game, "lines": rows, "held_out": held, "error": null}))
+}
+
+/// The owner's lock on a line's clip, as the page shows it (`{day, row,
+/// frames}`), or null: a look of approved.toml on the clip from its first
+/// frame to its last (`total` frames, when measured; any look from frame 0
+/// before the line is measured).
+fn locked(looks: &[crate::approved::Look], clip: &str, total: Option<u64>) -> Value {
+    looks
+        .iter()
+        .filter(|k| k.clip == clip && k.frames[0] == 0)
+        .filter(|k| total.is_none_or(|t| k.frames[1] >= t.saturating_sub(1)))
+        .max_by(|a, b| a.approved.cmp(&b.approved))
+        .map_or(
+            Value::Null,
+            |k| json!({"day": k.approved, "row": k.row, "frames": k.frames}),
+        )
+}
+
+/// The board's line a target names, by its words (`level 1 sprites at
+/// least 330 of 336` is line `level 1`, in lower case), or None when the
+/// target doesn't read. The page counts a line's rows by it.
+pub(crate) fn target_line(target: &str) -> Option<String> {
+    parse_target(target).ok().map(|t| t.line)
 }
 
 /// The board as text lines, for `gp loop health`.
@@ -1727,6 +1753,9 @@ level = "field"
         );
         assert_eq!(l["state"]["pct"], json!(98.0));
         assert_eq!(l["approved"], json!([]));
+        // The page's PROGRESS: the line's confirm row, and no lock yet.
+        assert_eq!(l["confirm_row"], json!("confirm-title"));
+        assert!(l["locked"].is_null());
         // A landing changes the model: measured again, and the numbers say
         // how they moved.
         put(
@@ -1762,6 +1791,25 @@ level = "field"
             "b@0-1\n",
         );
         assert_eq!(out_of_date(h, d.path(), &gp).len(), 1);
+        // A look the owner locked over some of the clip's frames isn't the
+        // line's lock; one over all of them is, with its day.
+        let look = |to: u64| {
+            format!(
+                "[[look]]\nrow = \"confirm-title\"\nclip = \"hop.title.001\"\nframes = [0, {to}]\nlook = \"game\"\napproved = \"2026-11-22\"\napart = [[0, 0, 0]]\n"
+            )
+        };
+        put(&d.path().join("hop/approved.toml"), &look(50));
+        assert!(board(h, d.path(), "hop").unwrap()["lines"][0]["locked"].is_null());
+        put(&d.path().join("hop/approved.toml"), &look(99));
+        assert_eq!(
+            board(h, d.path(), "hop").unwrap()["lines"][0]["locked"],
+            json!({"day": "2026-11-22", "row": "confirm-title", "frames": [0, 99]})
+        );
+        assert_eq!(
+            target_line("The title sprites at least 99 of 100").as_deref(),
+            Some("the title")
+        );
+        assert_eq!(target_line("no target here"), None);
     }
 
     #[test]

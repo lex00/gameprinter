@@ -6,7 +6,7 @@
 //! |---|---|
 //! | `GET /api/steps` | `{open, halted, workers, settings, runner}`: the open steps as `gp loop steps` gives them, the halt, the runner's workers, the home's loop settings and the runner in words |
 //! | `POST /api/steps/{id}/wrong` | `{why}`: marks open step `id` wrong; the loop halts until a landed change names the objection |
-//! | `GET /api/scoreboard/{game}` | `{game, lines, error}`: the game's scoreboard as kept (crate::scoreboard), or `lines: []` when the game has none |
+//! | `GET /api/scoreboard/{game}` | `{game, lines, held_out, error, done_ms}`: the game's scoreboard as kept (crate::scoreboard), each line with its owner's lock (`locked`) and its confirm row, or `lines: []` when the game has none; `done_ms`, when each row finished in the last day |
 
 use serde_json::{Value, json};
 
@@ -40,9 +40,33 @@ fn scoreboard(ctx: &Ctx, _req: &Request, params: &Params) -> Result<Response, Fa
             "no game {game} in the games checkout"
         )));
     }
-    let v = crate::scoreboard::board(&ctx.paths.home, &ctx.games, game)
+    let mut v = crate::scoreboard::board(&ctx.paths.home, &ctx.games, game)
         .unwrap_or_else(|| json!({"game": game, "lines": [], "error": null}));
+    let since = gp_mcp::asks::now_ms().saturating_sub(DAY_MS);
+    v["done_ms"] = json!(done_since(&ctx.paths.home, game, since));
     Ok(Response::json(&v))
+}
+
+/// A day, in ms: the page counts the rows done since its own midnight
+/// out of the last day's.
+const DAY_MS: u64 = 24 * 60 * 60 * 1000;
+
+/// When each of the game's rows finished, newest first, since `since` (ms
+/// since the epoch): the quest log's done rows by their last change, and
+/// the archive's by when they closed.
+fn done_since(home: &std::path::Path, game: &str, since: u64) -> Vec<u64> {
+    let file = home.join("mechanics").join(game).join("queue.json");
+    let q = crate::mechanic::session::read_queue(&file);
+    let open = q
+        .iter()
+        .filter(|r| r["status"] == json!("done"))
+        .filter_map(|r| r["changed_ms"].as_u64());
+    let archived = crate::mechanic::archive::read_archive(home, game);
+    let closed = archived.iter().filter_map(|r| r["closed_ms"].as_u64());
+    let mut all: Vec<u64> = open.chain(closed).filter(|t| *t >= since).collect();
+    all.sort_unstable();
+    all.reverse();
+    all
 }
 
 fn list(ctx: &Ctx, _req: &Request, _params: &Params) -> Result<Response, Fail> {

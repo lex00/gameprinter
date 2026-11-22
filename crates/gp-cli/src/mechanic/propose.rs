@@ -43,6 +43,9 @@ pub(crate) struct Proposal<'a> {
     /// (crate::trouble::status_by_hand). A row the quest log has is left
     /// as it is.
     pub parked: Option<&'a str>,
+    /// One sentence a person can read (`--plain`): the new row's `plain`,
+    /// which the loop's page shows on its card in place of the note.
+    pub plain: Option<&'a str>,
 }
 
 /// Whether the row names the clip: in `seen_in`, or (rows from before
@@ -156,6 +159,9 @@ pub(crate) fn propose(paths: &Paths, game_dir: Option<&Path>, p: &Proposal) -> R
             });
             if p.repo == Some("tools") {
                 r["repo"] = json!("tools");
+            }
+            if let Some(s) = p.plain.map(str::trim).filter(|s| !s.is_empty()) {
+                r["plain"] = json!(s);
             }
             if !p.clips.is_empty() {
                 r["seen_in"] = json!(p.clips);

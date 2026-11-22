@@ -438,10 +438,15 @@ runner's is on the row, whose status stays next while it works), UP NEXT,
 IN LINE and DONE; IN LINE and DONE stay folded until their heading is
 clicked. Each row is a small card: its badge, a short title (its name in
 words, a trailing hash left off), the worker on it, and one line of what
-(the first sentence of what the person asked or its note), with LOOK AT IT
-and CONFIRM on the card when it has them. A click on the card shows the
-rest: its full name, scores, target, notes, talk, RECORD INTO THIS ROW and
-COMMENT. Each note says who wrote it:
+for a person: the row's `plain` sentence (`gp mechanic queue --plain`,
+`gp mechanic propose --plain`, kept until another `--plain`; an empty one
+takes it off), else the first sentence of what the person asked or its
+note with "Proposed by the loop:", "(from ...)" and the sentences for the
+tools left off. LOOK AT IT and CONFIRM are on the card when it has them. A
+click on the card shows the rest: its full name, scores, target, notes,
+talk, RECORD INTO THIS ROW, and a box for the person's words, open, whose
+SEND puts them in the row's talk as the person's turn (what is typed is
+kept through the list's redraws). Each note says who wrote it:
 YOU WROTE for a row the person made on the page, AGENT WROTE for the
 agent's; once the agent's note replaces the person's, their words stay as
 YOU ASKED (`asked` in `queue.json`, kept by `gp mechanic queue`). The
@@ -507,10 +512,32 @@ The screen page shows three things: the screens, YOUR TURN and one status
 line, which ends with THE LOOP'S PAGE. Everything else is on the loop's
 page, the same file at `screen.html?page=loop` (`&row=ROW` opens a row
 there, as a click on a row's name in the status line or a card's FOR ROW
-does): the quest log with the NEW ITEM box at its top (Enter makes a new
-item, SEND comments on the open row), the steps, the workers and the
-runner's switches, and the clips. The loop's page shows the screens only
-while a clip is open on them. Finished rows are folded under DONE with
+does). It leads with progress (owner, loop-page-progress-first):
+
+- PROGRESS, a line for each line of the game's scoreboard, in its order:
+  its name; its state, LOCKED with the day (an approved look over all the
+  line's clip, `locked` on `GET /api/scoreboard/GAME`), READY FOR YOU
+  while its confirm row (`confirm_row`) is asking the person (a click
+  outlines it in YOUR TURN), else the background and the sprites as two
+  bars with the frames matched of the clip's; and one sentence of what is
+  being done for it now, counted from the open rows whose target names the
+  line (`target_line` on a row of the quest log): fixes being worked on,
+  waiting for the person's YES, landing, landed and being measured, or
+  waiting for an agent. A bar that moved since the page was opened says by
+  how much. A game with no scoreboard says so in one line.
+- YOUR TURN, the screen page's, under it: each card with its clip and its
+  box for words open (no WORDS to press), and each row's question with its
+  clip and its ANSWER box; NOTHING NEEDS YOU when there is none.
+- WHAT THE AGENTS ARE DOING, one heading, folded until clicked (kept in the
+  browser), with the counts on it: rows in work, rows waiting, rows done
+  today (`done_ms` on the scoreboard's endpoint). Open, it holds the quest
+  log with the NEW ITEM box at its top (Enter makes a new item, SEND
+  comments on the open row), the steps, the workers and the runner's
+  switches, and the clips, drawn as before; while the pointer is on it or
+  a box in it is being typed in, it isn't drawn again or reordered, and it
+  catches up once the person moves away.
+
+The loop's page shows the screens only while a clip is open on them. Finished rows are folded under DONE with
 their count. A long sentence in YOUR TURN or the status line is cut to one
 plain sentence (the question it asks, else its first), with MORE for the
 rest. A row's badge comes from its status: the triage's mark (NEEDS YOU,

@@ -246,7 +246,7 @@ button.judge { flex: none; font: bold 12px var(--mono); padding: 0 10px; margin-
    and clips; the screens show there only while a clip is open on them. */
 #details { width: min(1200px, 100%); margin-top: 4px; }
 body:not(.loop-page) #details { display: none; }
-body.loop-page #your-turn, body.loop-page #now, body.loop-page #keys, body.loop-page #follow, body.loop-page #controls { display: none; }
+body.loop-page #now, body.loop-page #keys, body.loop-page #follow, body.loop-page #controls, body.loop-page #scoreboard { display: none; }
 body.loop-page main:has(#clipbar[hidden]) #screens { display: none; }
 #loop-head { margin: 0; padding: 4px 0; border-bottom: 2px solid var(--line); font: bold 13px var(--mono); letter-spacing: 0.08em; color: var(--gold); display: flex; justify-content: space-between; }
 #loop-head a, #now .now-page { color: var(--accent); font: bold 12px var(--mono); text-decoration: underline; }
@@ -271,3 +271,39 @@ body.loop-page main:has(#clipbar[hidden]) #screens { display: none; }
 #scoreboard td .mv.up { color: #58d854; }
 #scoreboard td .mv.down { color: var(--rec); }
 #scoreboard td.old { color: var(--muted); }
+/* The loop's page leads with PROGRESS: a line a part of the game, its
+   state (LOCKED, READY FOR YOU, or two bars) and what is done for it now. */
+#progress { margin: 6px 0 8px; }
+#progress h2, #agents summary { margin: 0 0 4px; font: bold 13px var(--mono); letter-spacing: 0.08em; color: var(--gold); }
+#parts { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+#parts .part { border: 2px solid var(--panel); background: var(--panel); padding: 6px 10px; }
+#parts .part-ready { border-color: var(--gold); }
+#parts .part-locked { border-color: #58d854; }
+#parts .phead { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+#parts .pname { font: bold 15px var(--mono); }
+#parts .pstate { font: bold 12px var(--mono); padding: 0 6px; }
+#parts .plocked { color: var(--bg); background: #58d854; }
+#parts .pready { color: var(--bg); background: var(--gold); border-color: var(--gold); cursor: pointer; }
+#parts .pbars { display: flex; flex-direction: column; gap: 2px; margin-top: 4px; }
+#parts .pbars.old { opacity: 0.6; }
+#parts .pbar { display: flex; gap: 8px; align-items: center; font-size: 12px; flex-wrap: wrap; }
+#parts .pbar-label { width: 11ch; color: var(--muted); font-weight: 700; }
+#parts .pbar-track { flex: 0 1 320px; min-width: 120px; height: 10px; border: 1px solid var(--muted); background: var(--bg); }
+#parts .pbar-fill { display: block; height: 100%; background: var(--accent); }
+#parts .pbar-fill.full { background: #58d854; }
+#parts .pbar-n { color: var(--fg); }
+#parts .pmoved { font-weight: 700; }
+#parts .pmoved.up { color: #58d854; }
+#parts .pmoved.down { color: var(--rec); }
+#parts .psays { margin-top: 4px; font-size: 13px; color: var(--fg); }
+/* YOUR TURN on the loop's page sits under PROGRESS, full width. */
+body.loop-page #your-turn { width: 100%; margin: 0 0 8px; padding: 6px 8px; }
+body.loop-page #your-turn h2 { font-size: 13px; }
+#turn .turn-item.turn-focus { border-color: var(--fg); }
+/* Everything the agents do, folded under one heading with counts. */
+#agents { border-top: 2px solid var(--line); padding-top: 6px; }
+#agents summary { cursor: pointer; }
+#agents-counts { color: var(--muted); font-weight: normal; }
+#agents-held { margin: 2px 0 0; }
+#agents-held[hidden] { display: none; }
+#queue .qmore form.answer { margin-top: 6px; }

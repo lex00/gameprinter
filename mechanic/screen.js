@@ -26,7 +26,10 @@
 //
 // The screen page shows only the screens, YOUR TURN and one status line
 // (owner, page-minimal). The loop's page, this same file at
-// screen.html?page=loop (LOOP_PAGE), shows the quest log (the rows `gp
+// screen.html?page=loop (LOOP_PAGE), leads with PROGRESS (a line for each
+// part on the game's scoreboard: its state and what is being done for it)
+// and YOUR TURN, with everything below folded under WHAT THE AGENTS ARE
+// DOING (owner, loop-page-progress-first). There it shows the quest log (the rows `gp
 // mechanic queue GAME` prints), grouped NEEDS YOU, AGENT WORKING (a row
 // marked so, or one a live worker of the runner's is on), UP NEXT, IN LINE
 // and DONE (those two folded), the steps, the workers and the clips of every row, and the screens
@@ -52,6 +55,9 @@ const LOOP_PAGE = new URLSearchParams(location.search).get("page") === "loop";
 document.body.classList.toggle("loop-page", LOOP_PAGE);
 /** The loop's page, opened at row `m` when one is given. */
 const loopHref = (m) => `screen.html?page=loop${m ? `&row=${encodeURIComponent(m)}` : ""}`;
+// The loop's page leads with PROGRESS, then YOUR TURN (the screen page's,
+// moved here), then WHAT THE AGENTS ARE DOING, folded.
+if (LOOP_PAGE) $("progress").after($("your-turn"));
 
 /** One plain sentence of `text`: the question it asks, else its first
  * sentence, at most `max` characters (cut at a word, with "..."). */
@@ -1350,7 +1356,11 @@ function drawQueue() {
   const shown = rows.filter((r) => r.mechanic && !String(r.mechanic).startsWith("sealed"));
   const live = shown.map((r) => workerOn(r)?.worker ?? null);
   const key = JSON.stringify([session?.mechanic, rows, live, clipsBy.map((g) => [g.mechanic, (g.talk ?? []).length]), cardClips]);
+  drawAgentsHead();
   if (q.dataset.key === key) { markTarget(); return; }
+  // Held still while the person reads or types in it.
+  if (agentsHeld()) { $("agents-held").hidden = false; return; }
+  $("agents-held").hidden = true;
   // Cards opened stay open when the log is drawn again.
   const opened = new Set([...q.querySelectorAll("li.expanded[data-mechanic]")].map((li) => li.dataset.mechanic));
   q.dataset.key = key;
@@ -1388,6 +1398,19 @@ function cardLine(text) {
   return oneSentence(String(text ?? "").replace(/^\s*Proposed by the loop:\s*/i, ""), 120);
 }
 
+/** A row's one line for a person: its `plain` sentence (gp mechanic queue
+ * or propose --plain), else one made from the person's words or the note,
+ * the loop's "Proposed by the loop:" and "(from ...)" and every sentence
+ * for the tools (addresses, hashes, RAM tests) left off. The note itself
+ * stays in the opened card. */
+function plainLine(r) {
+  if (r.plain) return oneSentence(r.plain, 160);
+  const src = String(r.asked || r.note || r.target_says || "")
+    .replace(/^\s*Proposed by the loop:\s*/i, "")
+    .replace(/\s*\(from [^()]*\)\.?\s*$/, "");
+  return cardLine(splitNote(src).plain);
+}
+
 /** A quest-log row as a small card: its badge, a short title, who is on it
  * and one line of what; a click shows the rest (its notes, target, talk,
  * RECORD INTO THIS ROW and COMMENT). Only RECORD INTO THIS ROW moves where
@@ -1407,7 +1430,7 @@ function queueRow(r, g, open) {
   }
   head.append(el("span", "qto", ""));
   li.append(head);
-  const what = cardLine(r.asked || r.note || r.target_says || "");
+  const what = plainLine(r);
   if (what) li.append(el("div", "qline", what));
   const judge = rowToJudge(r);
   const yes = confirmButton(r);
@@ -1439,6 +1462,14 @@ function queueRow(r, g, open) {
   here.addEventListener("click", (e) => { e.stopPropagation(); e.currentTarget.blur(); void pickRow(r.mechanic); });
   acts.append(here);
   more.append(acts);
+  // The person's words on the row, open once the card is: they go to its
+  // talk as the person's turn, which its worker hears.
+  more.append(answerBox(r.mechanic, [], {
+    kind: "row",
+    placeholder: `Your words on ${cardTitle(r.mechanic)}, for its agent`,
+    word: "SEND",
+    sent: `Your words went to ${cardTitle(r.mechanic)}'s talk.`,
+  }));
   li.append(more);
   if (r.mechanic === session?.mechanic) li.classList.add("open");
   li.classList.toggle("expanded", open);
@@ -1459,7 +1490,7 @@ function queueRow(r, g, open) {
 
 function drawClips() {
   const box = $("clips");
-  if (pressing) return;
+  if (pressing || agentsHeld()) return;
   const shown = clip ? `${clip.mechanic}/${clip.n}` : "";
   const key = JSON.stringify([clipsBy, shown, saved]);  // talk included
   if (box.dataset.key === key) return;
@@ -1499,6 +1530,7 @@ function drawClips() {
  * there; on the loop's page, the row opened and brought into view. */
 function toQuestLog(m) {
   if (!LOOP_PAGE) { location.href = loopHref(m); return; }
+  openAgents(true);
   if (m) void pickRow(m);
   $("quest").scrollIntoView({ behavior: "smooth", block: "start" });
 }
@@ -1537,6 +1569,7 @@ async function refreshLists(force) {
     drawClips();
     drawNowWork();
     drawYourTurn();
+    drawProgress();
     showNamedClip();
   } catch (e) { /* the next look */ }
   finally { listing = false; }
@@ -1630,6 +1663,7 @@ async function refreshAsks() {
   asksShown = list.length;
   asksNow = list;
   drawNowWork();
+  drawProgress();
   // The runner's turn: what it runs now, then the yeses in the order they
   // were said, which it runs one at a time.
   const turn = [
@@ -1837,16 +1871,25 @@ function askOf(r) {
   return { says: r.note || "Your agent asks you about this row.", from: "note", clip: null };
 }
 
+/** What is typed in a words box not sent yet, by its row (and kind), kept
+ * across the lists' redraws. */
+const typedWords = new Map();
+
 /** An ANSWER box, open: the person's words go into row `m`'s talk, which a
- * worker waiting on the row hears. */
-function answerBox(m, clips) {
+ * worker waiting on the row hears. `o` names it otherwise: its words
+ * (`placeholder`), its button (`word`) and what the page says once sent
+ * (`sent`); `o.kind` keeps its typed words apart from another box's. */
+function answerBox(m, clips, o = {}) {
   const f = el("form", "comment answer");
   f.autocomplete = "off";
   f.dataset.mechanic = m;
+  const keep = `${o.kind ?? "answer"}:${m}`;
   const t = el("input", "comment-text");
-  t.placeholder = `Your answer on ${m}`;
-  t.setAttribute("aria-label", `Your answer on ${m}`);
-  const go = el("button", "", "ANSWER");
+  t.placeholder = o.placeholder ?? `Your answer on ${cardTitle(m)}`;
+  t.setAttribute("aria-label", t.placeholder);
+  t.value = typedWords.get(keep) ?? "";
+  t.addEventListener("input", () => { if (t.value) typedWords.set(keep, t.value); else typedWords.delete(keep); });
+  const go = el("button", "", o.word ?? "ANSWER");
   go.type = "submit";
   f.append(t, go);
   for (const x of [f, t, go]) x.addEventListener("click", (ev) => ev.stopPropagation());
@@ -1859,8 +1902,9 @@ function answerBox(m, clips) {
     try {
       await api("api/talk", { text: withSeen(text), clips, mechanic: m });
       t.value = "";
+      typedWords.delete(keep);
       t.blur();
-      note(`Your answer on ${m} went to its agent.`, 5000);
+      note(o.sent ?? `Your answer on ${m} went to its agent.`, 5000);
       turnDrawn = "";
       await refreshLists(true);
     } catch (err) {
@@ -1887,6 +1931,8 @@ function lookButton(m, c) {
 }
 
 let turnDrawn = "";
+// The row PROGRESS's READY FOR YOU pointed at: outlined in YOUR TURN.
+let turnFocus = null;
 function drawYourTurn() {
   const list = $("turn");
   // An answer being typed stays until it is sent or left empty.
@@ -1896,7 +1942,7 @@ function drawYourTurn() {
     && (!game || (s.touches ?? []).includes(`row:${game}/${s.act.row}`)));
   const played = new Set(plays.map((s) => s.act.row));
   const asking = rows.filter((r) => !played.has(r.mechanic)).map((r) => [r, askOf(r)]).filter(([, q]) => q);
-  const key = JSON.stringify([plays.map((s) => [s.id, s.says]), asking.map(([r, q]) => [r.mechanic, q, r.clip ?? null]), asksShown]);
+  const key = JSON.stringify([plays.map((s) => [s.id, s.says]), asking.map(([r, q]) => [r.mechanic, q, r.clip ?? null]), asksShown, turnFocus]);
   if (key === turnDrawn) return;
   turnDrawn = key;
   list.textContent = "";
@@ -1913,10 +1959,13 @@ function drawYourTurn() {
   }
   for (const [r, q] of asking) {
     const li = el("li", "turn-item turn-ask");
+    if (r.mechanic === turnFocus) li.classList.add("turn-focus");
     li.dataset.mechanic = r.mechanic;
     const says = shortText("turn-says", q.says);
     if (q.was) says.title = `The row said: ${q.was}`;
-    li.append(el("span", "turn-row", r.mechanic.toUpperCase()), says);
+    const who = el("span", "turn-row", cardTitle(r.mechanic).toUpperCase());
+    who.title = r.mechanic;
+    li.append(who, says);
     // The clip it is about: the row's clip to judge, else the one its
     // agent's question names.
     let clips = [];
@@ -2218,6 +2267,7 @@ async function refreshScoreboard() {
     if (r.ok) v = await r.json();
   } catch (e) { /* the next look */ }
   const lines = v?.lines ?? [];
+  if (v) { board = v; drawProgress(); drawAgentsHead(); }
   const key = JSON.stringify([v?.error ?? null, lines, v?.held_out ?? []]);
   if (key === scoreDrawn) return;
   scoreDrawn = key;
@@ -2286,6 +2336,185 @@ async function refreshScoreboard() {
   }
 }
 
+// Progress ---------------------------------------------------------------
+//
+// The top of the loop's page (owner, loop-page-progress-first): a line for
+// each part of the game on its scoreboard, in its order: its name, its
+// state (LOCKED with the day the person said yes; READY FOR YOU while its
+// confirm row asks them; else the background and the sprites as bars, the
+// frames matched of the clip's), and one plain sentence of what is being
+// done for it now, from the open rows whose target names the line. A
+// number that moved since the page was opened says by how much.
+
+let board = null; // /api/scoreboard/GAME as last read
+// Each line's numbers when the page first read them, by name.
+const firstSeen = new Map();
+let progressDrawn = "";
+
+/** A row's cards (asksNow) by what they wait on: the person's YES, or the
+ * runner landing it. */
+function cardState(m) {
+  const cards = cardsOf(m);
+  if (cards.some((a) => !a.ran && a.state === "open")) return "yes";
+  if (cards.some((a) => a.ran?.state === "running" || (!a.ran && a.state === "yes"))) return "landing";
+  return null;
+}
+
+/** N and the word, a plural for any N but 1: "3 fixes", "1 fix". */
+const count = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+
+/** The one sentence of what is being done for line `l` now. */
+function partSays(l, state) {
+  const name = String(l.name ?? "").toLowerCase();
+  const open = rows.filter((r) => r.mechanic && r.status !== "done" && r.target_line === name);
+  const working = open.filter((r) => worked(r)).length;
+  const yes = open.filter((r) => !worked(r) && cardState(r.mechanic) === "yes").length;
+  const landing = open.filter((r) => !worked(r) && cardState(r.mechanic) === "landing").length;
+  const measuring = open.filter((r) => !worked(r) && !cardState(r.mechanic) && r.awaiting_measure).length;
+  const waiting = open.length - working - yes - landing - measuring;
+  const parts = [];
+  if (working) parts.push(`${count(working, "fix is", "fixes are")} being worked on`);
+  if (yes) parts.push(`${count(yes, "fix waits", "fixes wait")} for your YES`);
+  if (landing) parts.push(`${count(landing, "fix is", "fixes are")} landing`);
+  if (measuring) parts.push(`${count(measuring, "fix has", "fixes have")} landed and ${measuring === 1 ? "is" : "are"} being measured`);
+  if (waiting) parts.push(`${count(waiting, "fix waits", "fixes wait")} for an agent`);
+  if (parts.length) return `${parts.join(", ")}.`.replace(/^./, (c) => c.toUpperCase());
+  if (state === "locked") return "You said it looks right, so no change can make it look worse.";
+  if (state === "ready") return "It measures near full: watch it beside the original and say if it looks right.";
+  if (l.measuring) return "Being measured now.";
+  return "Nothing is being done for it right now.";
+}
+
+/** A bar: what it measures, the frames matched of the total, and how far
+ * it moved since the page was opened. */
+function bar(label, x, since) {
+  const box = el("div", "pbar");
+  box.append(el("span", "pbar-label", label));
+  const track = el("span", "pbar-track");
+  const fill = el("span", "pbar-fill");
+  const share = x && x.total ? x.matched / x.total : 0;
+  fill.style.width = `${(share * 100).toFixed(1)}%`;
+  if (x && x.total && x.matched >= x.total) fill.classList.add("full");
+  track.append(fill);
+  box.append(track, el("span", "pbar-n", x ? `${x.matched} of ${x.total} frames` : "not measured yet"));
+  if (x && typeof since === "number" && x.matched !== since) {
+    const d = x.matched - since;
+    box.append(el("span", `pmoved ${d > 0 ? "up" : "down"}`, `${d > 0 ? "+" : ""}${d} since you opened this page`));
+  }
+  return box;
+}
+
+function drawProgress() {
+  if (!LOOP_PAGE) return;
+  const list = $("parts");
+  const none = $("parts-none");
+  const lines = board?.lines ?? [];
+  for (const l of lines) {
+    if (!firstSeen.has(l.name) && (l.background || l.sprites || l.own)) {
+      firstSeen.set(l.name, { background: l.background?.matched, sprites: l.sprites?.matched, own: l.own?.matched });
+    }
+  }
+  const of = (l) => {
+    const confirm = rows.find((r) => r.mechanic === l.confirm_row && r.status === "asking you");
+    const state = l.locked ? "locked" : confirm ? "ready" : "measure";
+    return { l, state, confirm, says: partSays(l, state) };
+  };
+  const parts = lines.map(of);
+  const key = JSON.stringify([board?.error ?? null, parts.map((p) => [p.l, p.state, p.says]), [...firstSeen]]);
+  if (key === progressDrawn) return;
+  progressDrawn = key;
+  list.textContent = "";
+  none.hidden = !(board?.error || !lines.length);
+  none.textContent = board?.error
+    ? `The scoreboard can't be read: ${board.error}`
+    : "This game has no scoreboard yet: its parts show here once it has one.";
+  for (const { l, state, confirm, says } of parts) {
+    const li = el("li", `part part-${state}`);
+    const head = el("div", "phead");
+    const name = String(l.name ?? "").replace(/^./, (c) => c.toUpperCase());
+    head.append(el("span", "pname", name));
+    if (state === "locked") {
+      head.append(el("span", "pstate plocked", `LOCKED ${l.locked.day ?? ""}`.trim()));
+    } else if (state === "ready") {
+      const b = el("button", "pstate pready", "READY FOR YOU");
+      b.type = "button";
+      b.title = "It measures near full: it waits for you in YOUR TURN, below";
+      b.addEventListener("click", (e) => {
+        e.currentTarget.blur();
+        turnFocus = confirm.mechanic;
+        turnDrawn = "";
+        drawYourTurn();
+        $("your-turn").scrollIntoView({ behavior: "smooth", block: "start" });
+      });
+      head.append(b);
+    }
+    li.append(head);
+    if (state !== "locked") {
+      const seen = firstSeen.get(l.name) ?? {};
+      const bars = el("div", "pbars");
+      if (l.own_draws) bars.append(bar("ON ITS OWN", l.own, seen.own));
+      else bars.append(bar("BACKGROUND", l.background, seen.background), bar("SPRITES", l.sprites, seen.sprites));
+      if (l.stale || l.measuring) bars.classList.add("old");
+      bars.title = l.measuring ? "Being measured now" : l.stale ? "Out of date: measured again soon" : l.measured_ms ? `Measured ${ago(l.measured_ms)}` : "";
+      li.append(bars);
+    }
+    li.append(el("div", "psays", says));
+    list.append(li);
+  }
+}
+
+// What the agents are doing: the quest log, the steps, the workers and the
+// clips, folded under one heading with counts. Open, it doesn't redraw or
+// reorder while the person reads it (the pointer on it) or types in it,
+// and catches up once they move away.
+
+/** Whether the person reads or types in WHAT THE AGENTS ARE DOING. */
+function agentsHeld() {
+  const d = $("agents");
+  if (!LOOP_PAGE || !d?.open) return false;
+  const f = document.activeElement;
+  return d.matches(":hover") || (!!f && f !== d && d.contains(f) && f.tagName !== "SUMMARY");
+}
+
+function openAgents(on) {
+  const d = $("agents");
+  if (d) d.open = on;
+}
+
+/** The heading's counts: rows in work, rows waiting, rows done today. */
+function drawAgentsHead() {
+  if (!LOOP_PAGE) return;
+  const open = rows.filter((r) => r.mechanic && !String(r.mechanic).startsWith("sealed") && r.status !== "done");
+  const working = open.filter((r) => worked(r)).length;
+  const waiting = open.length - working;
+  const midnight = new Date().setHours(0, 0, 0, 0);
+  const done = (board?.done_ms ?? []).filter((t) => t >= midnight).length;
+  const text = `(${working} in work, ${waiting} waiting, ${done} done today)`;
+  if ($("agents-counts").textContent !== text) $("agents-counts").textContent = text;
+}
+
+/** The lists drawn again once the person moved away from them. */
+function agentsCatchUp() {
+  if (agentsHeld()) return;
+  $("agents-held").hidden = true;
+  drawQueue();
+  drawClips();
+  stepsDrawn = "";
+  workersDrawn = "";
+  void refreshSteps();
+}
+
+if (LOOP_PAGE) {
+  const d = $("agents");
+  try { d.open = localStorage.getItem("gp-agents-open") === "1"; } catch (e) { /* no storage */ }
+  d.addEventListener("toggle", () => {
+    try { localStorage.setItem("gp-agents-open", d.open ? "1" : ""); } catch (e) { /* no storage */ }
+    if (d.open) agentsCatchUp();
+  });
+  d.addEventListener("pointerleave", () => setTimeout(agentsCatchUp, 0));
+  d.addEventListener("focusout", () => setTimeout(agentsCatchUp, 0));
+}
+
 async function refreshSteps() {
   if (stepsWriting) return;
   let v = null;
@@ -2300,8 +2529,9 @@ async function refreshSteps() {
   drawQueue();
   drawNowWork();
   drawYourTurn();
+  drawProgress();
   const key = JSON.stringify([v.halted?.id ?? null, (v.open ?? []).map((s) => s.id)]);
-  if (key === stepsDrawn) return;
+  if (key === stepsDrawn || agentsHeld()) return;
   stepsDrawn = key;
   const halt = $("halt");
   halt.hidden = !v.halted;
@@ -2396,7 +2626,7 @@ let workersDrawn = "";
 function drawWorkers(v) {
   const shown = (v.workers ?? []).filter((w, i) => LIVE.includes(w.state) || i < 5);
   const key = JSON.stringify([v.runner?.says, shown.map((w) => [w.step?.id, w.state, w.last, w.why])]);
-  if (key === workersDrawn) return;
+  if (key === workersDrawn || agentsHeld()) return;
   workersDrawn = key;
   $("runner").textContent = [v.runner?.says, v.runner?.spending ? `Spending: ${v.runner.spending}.` : ""].filter(Boolean).join(" ");
   const list = $("workers");

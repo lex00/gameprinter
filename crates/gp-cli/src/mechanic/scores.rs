@@ -38,8 +38,11 @@ pub(crate) fn scored_queue(home: &Path, game: &str) -> Vec<Value> {
         let board =
             crate::roms_cmd::games_dir(None).and_then(|g| crate::scoreboard::board(home, &g, game));
         for r in &mut q {
-            if let Some(t) = r["target"].as_str() {
-                r["target_says"] = json!(crate::scoreboard::target_says(board.as_ref(), t));
+            if let Some(t) = r["target"].as_str().map(str::to_owned) {
+                r["target_says"] = json!(crate::scoreboard::target_says(board.as_ref(), &t));
+                if let Some(l) = crate::scoreboard::target_line(&t) {
+                    r["target_line"] = json!(l);
+                }
             }
         }
     }

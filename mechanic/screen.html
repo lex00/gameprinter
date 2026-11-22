@@ -77,7 +77,9 @@
          one line; and one status line (what is worked on, by whom, and
          whether the loop runs or waits on the person), which links to the
          loop's page. The loop's page (screen.html?page=loop) is this same
-         file showing only #details: the quest log, steps, workers, clips. -->
+         file showing #details: PROGRESS, this YOUR TURN (moved there), and
+         the quest log, steps, workers and clips folded under WHAT THE
+         AGENTS ARE DOING. -->
     <section id="your-turn" aria-live="polite" aria-label="Your turn">
       <h2>YOUR TURN</h2>
       <div id="asks"></div>
@@ -89,6 +91,19 @@
     </section>
     <section id="details" aria-label="The loop's page">
       <p id="loop-head"><span>THE LOOP'S PAGE</span> <a id="to-screens" href="screen.html">BACK TO THE SCREENS</a></p>
+      <!-- The loop's page leads with progress (owner, loop-page-progress-
+           first): a line for each part of the game on its scoreboard, with
+           its state and what is being done for it now; then YOUR TURN
+           (moved here from under the screens); then everything the agents
+           do, folded under one heading with counts. -->
+      <section id="progress" aria-label="Progress">
+        <h2>PROGRESS</h2>
+        <ol id="parts"></ol>
+        <p id="parts-none" class="how" hidden></p>
+      </section>
+      <details id="agents">
+        <summary><span id="agents-title">WHAT THE AGENTS ARE DOING</span> <span id="agents-counts"></span></summary>
+        <p id="agents-held" class="how" hidden>Held still while you read or type here: it catches up when you move away.</p>
       <section id="below">
         <section id="quest" aria-label="The quest log">
           <h2>QUEST LOG</h2>
@@ -116,6 +131,7 @@
           <div id="clips"></div>
         </section>
       </section>
+      </details>
     </section>
     <iframe id="model-frame" title="the model" src="about:blank" tabindex="-1"></iframe>
   </main>

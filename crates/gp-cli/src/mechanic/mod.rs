@@ -204,6 +204,10 @@ pub enum MechanicCmd {
         /// What is wrong or missing, in one line.
         #[arg(long)]
         what: String,
+        /// One sentence a person can read about it, with no addresses, row
+        /// names or ids: the loop's page shows it on the row's card.
+        #[arg(long, value_name = "SENTENCE")]
+        plain: Option<String>,
         /// Where it came from: the command, clip and frame, or the step.
         #[arg(long)]
         from: String,
@@ -466,13 +470,19 @@ pub enum MechanicCmd {
         mechanic: Option<String>,
         /// List the archive of finished rows: their notes, facts, session
         /// and landed commit, newest closed first.
-        #[arg(long, conflicts_with_all = ["status", "known", "reads", "opens", "out_of_scope", "in_scope", "repo", "clip", "no_clip", "target", "no_target", "measure_needed", "waits_on", "no_wait"])]
+        #[arg(long, conflicts_with_all = ["status", "known", "reads", "opens", "out_of_scope", "in_scope", "repo", "clip", "no_clip", "target", "no_target", "measure_needed", "waits_on", "no_wait", "plain"])]
         archived: bool,
         #[arg(long, requires = "mechanic", value_parser = ["done", "asking you", "agent working", "in line", "next"])]
         status: Option<String>,
         /// One plain line: what is known, or what it's waiting on.
         #[arg(long, requires = "status")]
         note: Option<String>,
+        /// One sentence a person can read: what the row is about or where
+        /// it stands, with no addresses, row names or ids. The loop's page
+        /// shows it on the row's card in place of the note (which stays in
+        /// the opened card). Kept until another --plain.
+        #[arg(long, value_name = "SENTENCE", requires = "mechanic")]
+        plain: Option<String>,
         /// Who works the row while it is "agent working": a worker's name
         /// (default: $GP_WORKER). The page shows it on the row and keeps
         /// the rows being worked at the top. Another status clears it.
@@ -949,6 +959,7 @@ pub(crate) fn run(cmd: &MechanicCmd, paths: &Paths) -> Result<Outcome> {
             game,
             mechanic,
             what,
+            plain,
             from,
             repo,
             goal,
@@ -981,6 +992,7 @@ pub(crate) fn run(cmd: &MechanicCmd, paths: &Paths) -> Result<Outcome> {
                     }),
                     clips: &[],
                     parked: parked.as_deref(),
+                    plain: plain.as_deref(),
                 },
             )?;
             let text = propose::words(&v);
@@ -1141,6 +1153,7 @@ pub(crate) fn run(cmd: &MechanicCmd, paths: &Paths) -> Result<Outcome> {
             mechanic,
             status,
             note,
+            plain,
             known,
             reads,
             opens,
@@ -1189,6 +1202,7 @@ pub(crate) fn run(cmd: &MechanicCmd, paths: &Paths) -> Result<Outcome> {
                 &RowChange {
                     status: status.as_deref(),
                     note: note.as_deref(),
+                    plain: plain.as_deref(),
                     worker: worker
                         .clone()
                         .or_else(|| std::env::var("GP_WORKER").ok().filter(|w| !w.is_empty()))
@@ -1401,6 +1415,8 @@ fn wait(paths: &Paths, game: &str, mechanic: Option<&str>) -> Result<Outcome> {
 struct RowChange<'a> {
     status: Option<&'a str>,
     note: Option<&'a str>,
+    /// The row's sentence for a person (`plain`), kept until replaced.
+    plain: Option<&'a str>,
     worker: Option<&'a str>,
     known: &'a [String],
     reads: &'a [String],
@@ -1552,6 +1568,7 @@ fn queue(paths: &Paths, game: &str, mechanic: Option<&str>, c: &RowChange) -> Re
             || c.target.is_some()
             || c.no_target
             || c.measure_needed.is_some()
+            || c.plain.is_some()
             || c.no_wait)
     {
         if !name_ok(m) {
@@ -1628,6 +1645,15 @@ fn queue(paths: &Paths, game: &str, mechanic: Option<&str>, c: &RowChange) -> Re
             }
             if let Some(w) = c.measure_needed {
                 o.insert("measure_needed".into(), json!(w.trim()));
+            }
+            match c.plain.map(str::trim) {
+                Some("") => {
+                    o.remove("plain");
+                }
+                Some(p) => {
+                    o.insert("plain".into(), json!(p));
+                }
+                None => {}
             }
             // A status set without a wait ends the row's wait.
             match &wait {
@@ -1938,6 +1964,7 @@ mod tests {
         let plain = RowChange {
             status: None,
             note: None,
+            plain: None,
             worker: None,
             known: none,
             reads: none,
@@ -2009,6 +2036,32 @@ mod tests {
         assert_eq!(r["asked"], "the duck is slow");
         assert_eq!(r["note"], "the duck is 2 frames late");
         assert!(read_queue(&f)[0].get("asked").is_none());
+        // A row's plain sentence stays through a new note, until another
+        // --plain (an empty one takes it off).
+        let said = RowChange {
+            plain: Some(" The duck comes up two frames late. "),
+            ..plain
+        };
+        queue(&p, "test-hop", Some("mine"), &said).unwrap();
+        let later = RowChange {
+            status: Some("next"),
+            note: Some("measured again at $00A3"),
+            ..plain
+        };
+        queue(&p, "test-hop", Some("mine"), &later).unwrap();
+        let mine = || {
+            read_queue(&f)
+                .into_iter()
+                .find(|r| r["mechanic"] == "mine")
+                .unwrap()
+        };
+        assert_eq!(mine()["plain"], "The duck comes up two frames late.");
+        let off = RowChange {
+            plain: Some(""),
+            ..plain
+        };
+        queue(&p, "test-hop", Some("mine"), &off).unwrap();
+        assert!(mine().get("plain").is_none());
     }
 
     /// --waits-on parks a row in line on a row there is, as a field the
@@ -2021,6 +2074,7 @@ mod tests {
         let plain = RowChange {
             status: None,
             note: None,
+            plain: None,
             worker: None,
             known: none,
             reads: none,
@@ -2113,6 +2167,7 @@ mod tests {
         let plain = RowChange {
             status: None,
             note: None,
+            plain: None,
             worker: None,
             known: none,
             reads: none,
@@ -2295,6 +2350,7 @@ mod tests {
         let plain = RowChange {
             status: None,
             note: None,
+            plain: None,
             worker: None,
             known: none,
             reads: none,
