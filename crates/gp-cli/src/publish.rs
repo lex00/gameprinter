@@ -152,19 +152,23 @@ fn self_publish(paths: &Paths) -> Result<Outcome> {
         &std::env::current_exe()?,
         &commit,
         &top,
+        &top,
         &mut Vec::new(),
     )?;
     Ok(Outcome::ok(json!({"published": line.clone()}), line))
 }
 
-/// Copies `binary` to `home/bin/gp-<commit>` and points the link at it,
-/// unless the link's commit already holds `commit`: the link only moves
-/// forward, so a slow gate finishing late can't undo a newer landing.
+/// Copies `binary` to `home/bin/gp-<commit>`, and the page's files from
+/// `tree` (the checkout it was built in, at `commit`) beside it, and
+/// points the link at it, unless the link's commit already holds
+/// `commit`: the link only moves forward, so a slow gate finishing late
+/// can't undo a newer landing. `repo` answers which commit is newer.
 pub(crate) fn publish(
     home: &Path,
     binary: &Path,
     commit: &str,
     repo: &Path,
+    tree: &Path,
     lines: &mut Vec<String>,
 ) -> Result<String> {
     let bin = home.join("bin");
@@ -176,6 +180,11 @@ pub(crate) fn publish(
     let tmp = bin.join(format!("gp-{short}.tmp{}", std::process::id()));
     fs::copy(binary, &tmp).with_context(|| format!("copying {}", binary.display()))?;
     fs::rename(&tmp, &dest)?;
+    // The page's files before the link moves, so a gp serve that moves
+    // onto it finds them there.
+    if let Some(l) = publish_pages(&bin, short, tree)? {
+        lines.push(l);
+    }
 
     let link = bin.join("gp");
     let held = fs::read_link(&link).ok().and_then(|p| commit_of(&p));
@@ -200,6 +209,40 @@ pub(crate) fn publish(
     lines.push(line.clone());
     prune(&bin, &link);
     Ok(line)
+}
+
+/// The page's own files a published gp serves, from the tree it was
+/// built in. They are copied beside the build because that tree is the
+/// tool gate's, which holds every patch it tries, landed or not.
+pub(crate) const PAGES: [&str; 2] = ["mechanic", "editor/dist"];
+
+/// Copies [`PAGES`] from `tree` to bin/gp-<short>.pages/, whole or not at
+/// all (crate::repo::page_files reads them). None when `tree` has none.
+fn publish_pages(bin: &Path, short: &str, tree: &Path) -> Result<Option<String>> {
+    if !tree.join("mechanic").is_dir() {
+        return Ok(None);
+    }
+    let dest = bin.join(format!("gp-{short}.pages"));
+    let tmp = bin.join(format!("gp-{short}.pages.tmp{}", std::process::id()));
+    let _ = fs::remove_dir_all(&tmp);
+    let mut copied = Vec::new();
+    for rel in PAGES {
+        let from = tree.join(rel);
+        if from.is_dir() {
+            crate::serve::game::copy_tree(&from, &tmp.join(rel))
+                .with_context(|| format!("copying {}", from.display()))?;
+            copied.push(rel);
+        }
+    }
+    // A build of this commit published before: its files are the same
+    // commit's, so the new copy replaces them.
+    let _ = fs::remove_dir_all(&dest);
+    fs::rename(&tmp, &dest)?;
+    Ok(Some(format!(
+        "the page's files ({}) published in {}",
+        copied.join(", "),
+        dest.display()
+    )))
 }
 
 /// Points `link` (bin/gp) at bin/gp-<short>: a symlink, renamed into
@@ -244,7 +287,8 @@ fn prune(bin: &Path, link: &Path) {
         .filter_map(|e| {
             let n = e.file_name();
             let n = n.to_str()?;
-            (n.starts_with("gp-") && !n.contains(".tmp")).then_some(())?;
+            let build = n.starts_with("gp-") && !n.contains(".tmp") && !n.ends_with(".pages");
+            build.then_some(())?;
             Some((e.metadata().ok()?.modified().ok()?, e.path()))
         })
         .collect();
@@ -252,6 +296,20 @@ fn prune(bin: &Path, link: &Path) {
     for (_, p) in builds.iter().rev().skip(KEEP) {
         if p.file_name().is_none_or(|n| !keep.contains(n)) {
             let _ = fs::remove_file(p);
+        }
+    }
+    // A build's page files go with it.
+    let Ok(rd) = fs::read_dir(bin) else {
+        return;
+    };
+    for e in rd.flatten() {
+        let n = e.file_name();
+        let orphan = n
+            .to_str()
+            .and_then(|n| n.strip_suffix(".pages"))
+            .is_some_and(|b| b.starts_with("gp-") && !bin.join(b).is_file());
+        if orphan {
+            let _ = fs::remove_dir_all(e.path());
         }
     }
 }
@@ -299,14 +357,18 @@ mod tests {
         let none = self_path(&paths).unwrap();
         assert_eq!(none.exit, 1, "{}", none.text);
         let mut lines = Vec::new();
-        publish(&home, &exe, &newer, &repo, &mut lines).unwrap();
+        publish(&home, &exe, &newer, &repo, &repo, &mut lines).unwrap();
         let published = home.join("bin").join(format!("gp-{}", &newer[..12]));
         assert!(published.is_file());
+        assert!(
+            crate::repo::pages_beside(&published).is_none(),
+            "a tree with no page publishes none"
+        );
         assert_eq!(
             fs::canonicalize(home.join("bin/gp")).unwrap(),
             fs::canonicalize(&published).unwrap()
         );
-        let said = publish(&home, &exe, &older, &repo, &mut lines).unwrap();
+        let said = publish(&home, &exe, &older, &repo, &repo, &mut lines).unwrap();
         assert!(said.contains("stays"), "{said}");
         assert_eq!(
             fs::canonicalize(home.join("bin/gp")).unwrap(),
@@ -352,5 +414,42 @@ mod tests {
         assert!(run_on.is_file(), "the port run's stays");
         assert!(bin.join(format!("gp-{:012}", 11)).is_file());
         assert!(!bin.join(format!("gp-{:012}", 1)).exists());
+    }
+
+    /// The page's files are published beside the build, are not a build
+    /// of their own when pruning, and go with their build.
+    #[cfg(unix)]
+    #[test]
+    fn the_page_is_published_beside_its_build_and_pruned_with_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let bin = dir.path().join("bin");
+        let tree = dir.path().join("tree");
+        fs::create_dir_all(tree.join("mechanic")).unwrap();
+        fs::create_dir_all(tree.join("editor/dist")).unwrap();
+        fs::write(tree.join("mechanic/screen.js"), "landed").unwrap();
+        fs::write(tree.join("editor/dist/index.html"), "editor").unwrap();
+        fs::create_dir_all(&bin).unwrap();
+        let said = publish_pages(&bin, "000000000000", &tree).unwrap();
+        let said = said.unwrap();
+        assert!(said.contains("mechanic, editor/dist"), "{said}");
+        let build = bin.join("gp-000000000000");
+        fs::write(&build, b"x").unwrap();
+        let pages = crate::repo::pages_beside(&build);
+        let pages = pages.unwrap();
+        assert_eq!(pages, bin.join("gp-000000000000.pages"));
+        // The tree moving on (a gate's next try) leaves the copy alone.
+        fs::write(tree.join("mechanic/screen.js"), "tried").unwrap();
+        let read = |rel: &str| fs::read_to_string(pages.join(rel)).unwrap();
+        assert_eq!(read("mechanic/screen.js"), "landed");
+        assert_eq!(read("editor/dist/index.html"), "editor");
+        // A build whose binary was pruned loses its page; the linked
+        // one's stays, and the folder counts as no build.
+        fs::create_dir_all(bin.join("gp-111111111111.pages/mechanic")).unwrap();
+        let link = bin.join("gp");
+        std::os::unix::fs::symlink("gp-000000000000", &link).unwrap();
+        prune(&bin, &link);
+        assert!(pages.join("mechanic/screen.js").is_file());
+        assert!(!bin.join("gp-111111111111.pages").exists());
+        assert!(crate::repo::pages_beside(&dir.path().join("gp")).is_none());
     }
 }

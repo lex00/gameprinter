@@ -239,7 +239,8 @@ fn mechanic(ctx: &Ctx, req: &Request, params: &Params) -> Result<Response, Fail>
                 "" | "index.html" | "screen.html" => waiting_page(game, &made),
                 // The waiting page's look, from the page's own files.
                 "style.css" => match mserver::repo_root()
-                    .and_then(|r| Ok(std::fs::read(r.join("mechanic/style.css"))?))
+                    .map(|r| crate::repo::page_files(&r, "mechanic").join("style.css"))
+                    .and_then(|f| Ok(std::fs::read(f)?))
                 {
                     Ok(b) => Response::bytes("text/css; charset=utf-8", b),
                     Err(_) => Response::error(404, "not here"),

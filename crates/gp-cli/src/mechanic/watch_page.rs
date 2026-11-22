@@ -27,11 +27,11 @@ pub(crate) struct Watch {
     port: u16,
 }
 
-/// The page's folder: `mechanic/` from the current folder upward, else in
-/// the checkout gp was built from.
+/// The page's folder: `mechanic/` published with this gp, else from the
+/// current folder upward, else in the checkout gp was built from.
 fn page_dir() -> Result<PathBuf> {
     crate::repo::find_repo(|d| d.join("mechanic").join("watch.html").is_file())
-        .map(|d| d.join("mechanic"))
+        .map(|d| crate::repo::page_files(&d, "mechanic"))
         .ok_or_else(|| {
             anyhow::anyhow!(
                 "no mechanic/watch.html here or above: run gp mechanic watch inside a gameprinter checkout"

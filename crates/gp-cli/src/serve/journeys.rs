@@ -118,8 +118,8 @@ fn page_file(ctx: &Ctx, _req: &Request, params: &Params) -> Result<Response, Fai
     } else {
         "text/html; charset=utf-8"
     };
-    let b = std::fs::read(ctx.repo.join("mechanic").join(f))
-        .map_err(|_| Fail::not_found("not here"))?;
+    let page = crate::repo::page_files(&ctx.repo, "mechanic");
+    let b = std::fs::read(page.join(f)).map_err(|_| Fail::not_found("not here"))?;
     Ok(Response::bytes(kind, b))
 }
 
@@ -127,7 +127,8 @@ fn page_file(ctx: &Ctx, _req: &Request, params: &Params) -> Result<Response, Fai
 /// here (the words of the port's first steps, or the games to carry on
 /// with), so it reads the same with or without its script.
 pub(super) fn start_page(ctx: &Ctx) -> Response {
-    let html = std::fs::read_to_string(ctx.repo.join("mechanic/start.html")).unwrap_or_else(|_| {
+    let file = crate::repo::page_files(&ctx.repo, "mechanic").join("start.html");
+    let html = std::fs::read_to_string(file).unwrap_or_else(|_| {
         "<!doctype html><title>Game Printer</title><p>The first screen's file, mechanic/start.html, isn't here.</p><!--PORT-->".into()
     });
     let games = super::game::all_runs(ctx);

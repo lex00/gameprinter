@@ -1191,6 +1191,7 @@ fn tries_in(
                                     &built_gp(c),
                                     &commit,
                                     &c.repo,
+                                    &c.tree,
                                     &mut lines,
                                 )
                             },
@@ -1738,6 +1739,42 @@ date +%s > '{times}/just.end'
             o.text.contains(&format!("PASS: landed {commit} on main")),
             "{}",
             o.text
+        );
+    }
+
+    /// A landing publishes the page's files beside the build, and a dry
+    /// run after it, which leaves its patch's page in the gate's tree,
+    /// leaves the published page as the landing left it: what gp serve
+    /// reads (crate::repo::page_files) changes only when a landing
+    /// publishes.
+    #[test]
+    fn a_dry_run_leaves_the_published_page_as_it_was() {
+        let dir = tempfile::tempdir().unwrap();
+        let c = gate_rig(dir.path());
+        fs::create_dir_all(c.repo.join("mechanic")).unwrap();
+        fs::write(c.repo.join("mechanic/screen.js"), "the page\n").unwrap();
+        git_in(&c.repo, &["add", "-A"]);
+        git_in(&c.repo, &["commit", "-q", "-m", "the page"]);
+
+        let landed = patch_of(&c, "mechanic/screen.js", "the landed page\n");
+        let o = gate(&c, &landed, false);
+        assert_eq!(o.json["verdict"], "PASS", "{}", o.text);
+        let commit = o.json["commit"].as_str().unwrap();
+        let build = c.home.join("bin").join(format!("gp-{}", &commit[..12]));
+        let pages = crate::repo::pages_beside(&build);
+        let pages = pages.expect("the page published with the build");
+        let js = pages.join("mechanic/screen.js");
+        let served = || fs::read_to_string(&js).unwrap();
+        assert_eq!(served(), "the landed page\n");
+
+        let tried = patch_of(&c, "mechanic/screen.js", "a page that may never land\n");
+        let o = dry_run(&c, &tried);
+        assert_eq!(o.json["verdict"], "PASS", "{}", o.text);
+        assert_eq!(crate::repo::pages_beside(&build), Some(pages.clone()));
+        assert_eq!(
+            served(),
+            "the landed page\n",
+            "a dry run leaves the published page alone"
         );
     }
 

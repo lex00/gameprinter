@@ -701,7 +701,7 @@ impl Server {
             paths,
             game: game.to_owned(),
             rom_sha: rom_sha.to_owned(),
-            page: repo.join("mechanic"),
+            page: crate::repo::page_files(repo, "mechanic"),
             repo: repo.to_path_buf(),
             wasm: wasm_path(repo, Platform::Nes),
             rom: Arc::new(rom),

@@ -272,7 +272,10 @@ impl Ctx {
                 "{} has no index.html; `just editor` builds the editor",
                 dir.display()
             ),
-            None => Some(repo.join("editor/dist")).filter(|d| d.join("index.html").is_file()),
+            None => {
+                let dist = crate::repo::page_files(&repo, "editor/dist");
+                dist.join("index.html").is_file().then_some(dist)
+            }
         };
         let games = crate::roms_cmd::games_dir(opts.games.as_deref())
             .context("no games checkout: pass --games or set GP_GAMES_DIR")?;
