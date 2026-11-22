@@ -1,11 +1,47 @@
 ---
 title: Install gp
-description: Download the gp command, check it, connect your AI agent to it, or build it from source.
+description: Start here. Install gp and its plugin for Claude Code and port a game from your own ROM with /gp:port; other agents connect by hand.
 ---
 
 You don't need anything installed to play; a browser is enough, plus your own ROM for a ported game such as Donkey Kong. To make something, you need `gp`, Game Printer's command-line tool.
 
 A released `gp` is a single file with the pages and files it needs built in. You can make a theme without a copy of the gameprinter repo and without Rust.
+
+## Start here
+
+Four steps take you from nothing to porting a game from a ROM you own.
+
+1. Install `gp`. On a Mac or Linux, Homebrew is the short way:
+
+   ```sh
+   brew install lex00/tap/gp
+   gp --version
+   ```
+
+   With no Homebrew, or on Windows, [download a release](#download-it) instead.
+
+2. Add Game Printer's plugin to [Claude Code](https://claude.com/claude-code) by typing these two lines into a Claude Code session:
+
+   ```sh
+   /plugin marketplace add lex00/gameprinter
+   /plugin install gp@gameprinter
+   ```
+
+   That gives the session gp's tools and skills along with the `/gp:port` command. The plugin finds `gp` by itself, so you never type its path. Everyone who ports a ROM gets this same setup, and two people porting one ROM end up with the same model.
+
+3. Start the port with your own ROM:
+
+   ```sh
+   /gp:port ~/Downloads/my-game.nes
+   ```
+
+   The command copies the ROM into your ROM folder (`~/.gameprinter/roms`) and starts the game's folder. Running `/gp:port my-game` again later picks up from the next step. The ROM stays on your machine; the [ROM rules](../rom-rules/) say what may happen with it.
+
+4. Open the page. The agent runs `gp mechanic start` when it needs you to play or watch. That starts `gp serve` and opens its page at `http://127.0.0.1:7710/` in your browser. On that page you record clips of the original and watch the model beside it. A landing or a paid call shows up there as a card and waits for your YES.
+
+[Bring in a game](../bring/) goes through every step of a port. `/plugin update gp` and `brew upgrade gp` keep the two up to date, and a new session says when their versions differ.
+
+Other agents connect to `gp mcp` [by hand](#connect-your-ai-agent), as Claude Desktop does. [AGENTS.md](https://github.com/lex00/gameprinter/blob/main/AGENTS.md) gives them the plugin's rules in words.
 
 ## Download it
 
@@ -146,17 +182,17 @@ gp reads the package's id from the version's `id` line in the registry's [index]
 
 ## Connect your AI agent
 
-`gp mcp` gives an agent Game Printer's tools over MCP. The agent starts it; all you do is tell the agent where `gp` is. Give the full path (`~/.local/bin/gp` above is `/Users/YOU/.local/bin/gp`), because agent apps don't read your shell's PATH. Outside the gameprinter repo, `gp mcp` uses the templates built into the released `gp`.
+In Claude Code, the gp plugin ([Start here](#start-here)) connects `gp` for you, and this section isn't needed. For any other agent, `gp mcp` gives it Game Printer's tools over MCP. The agent starts it; all you do is tell the agent where `gp` is. Give the full path (`~/.local/bin/gp` above is `/Users/YOU/.local/bin/gp`), because agent apps don't read your shell's PATH. Outside the gameprinter repo, `gp mcp` uses the templates built into the released `gp`. Have the agent read [AGENTS.md](https://github.com/lex00/gameprinter/blob/main/AGENTS.md) as well, since it holds the rules the plugin's hooks keep in Claude Code.
 
-### Claude Code
+### Claude Code without the plugin
 
-Run this once, from any folder:
+If you'd rather add only the MCP server to Claude Code, run this once, from any folder:
 
 ```sh
 claude mcp add gp --scope user -- /Users/YOU/.local/bin/gp mcp
 ```
 
-Then `/mcp` in Claude Code lists `gp` and its tools.
+Then `/mcp` in Claude Code lists `gp` and its tools. This way has no `/gp:port` and no hooks.
 
 ### Claude Desktop
 
@@ -182,6 +218,7 @@ The `env` line is only needed when your ROMs aren't in `~/.gameprinter/roms`. On
 
 ### What to ask your agent next
 
+- Porting a game from your own ROM starts with `/gp:port` in Claude Code, or with [Bring in a game](../bring/) in another agent.
 - To make a theme: [Themes and levels](../themes/) has a prompt to hand your agent.
 - To put your game or theme online: [Host your game or theme](../host-your-own/) has one too. For the upload your agent uses wrangler, which is Cloudflare's own tool. It asks you to log in once.
 

@@ -9,6 +9,16 @@ The finished folder holds the model and nothing from the ROM. That makes it a te
 
 So a port is not a remake of someone else's game. gp reads your ROM on your machine the way an emulator does, the model is the game's rules written as text and checked against clips of your ROM, no ROM bytes or art from it go in any repo or release, and the port plays only for someone who has the ROM. Ask your agent to port your ROM and it starts here.
 
+## Start with /gp:port
+
+In Claude Code, install `gp` and the gp plugin as [Start here](../install/#start-here) says, then type `/gp:port` with the path to your ROM:
+
+```sh
+/gp:port ~/Downloads/my-game.nes
+```
+
+The plugin's porter runs the steps below for you one at a time, and `/gp:port my-game` carries on from wherever it stopped. You play and watch on the page `gp serve` opens at `http://127.0.0.1:7710/`, and every landing waits for your YES there. With another agent, connect it [by hand](../install/#connect-your-ai-agent) and have it read [AGENTS.md](https://github.com/lex00/gameprinter/blob/main/AGENTS.md). The rest of this page is what the agent does, for when you want to follow along or run a step yourself.
+
 ## The steps, in order
 
 This is the checklist from game-printer, the older tool (its `docs/new-game.md`), with the command that does each step today. Donkey Kong's first stage taught us the order (`docs/research/dk-25m-retrospective.md` in the gameprinter repo). Set up the corpus and the gate before the first clip, and every clip gets scored the same way from the start. Put the player's place in the state mapping before the first clip joins the corpus too: a clip scored over no fields agrees on every frame and tells you nothing.

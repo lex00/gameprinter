@@ -68,7 +68,7 @@ export default defineConfig({
 				{
 					label: 'For all of these',
 					items: [
-						{ label: 'Install gp', slug: 'install' },
+						{ label: 'Start here: install gp', slug: 'install' },
 						{ label: 'ROM rules', slug: 'rom-rules' },
 					],
 				},

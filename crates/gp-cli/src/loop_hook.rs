@@ -535,4 +535,70 @@ mod tests {
             }
         }
     }
+
+    /// The plugin's install lines a page gives: each `/plugin marketplace
+    /// add X` and `/plugin install X`, as the line it is.
+    fn plugin_install_lines(text: &str) -> std::collections::BTreeSet<String> {
+        let mut out = std::collections::BTreeSet::new();
+        for verb in ["/plugin marketplace add ", "/plugin install "] {
+            for (at, _) in text.match_indices(verb) {
+                let rest = &text[at + verb.len()..];
+                let arg: String = rest
+                    .chars()
+                    .take_while(|c| !c.is_whitespace() && *c != '`' && *c != ')')
+                    .collect();
+                let arg = arg.trim_end_matches(['.', ',', ';']);
+                out.insert(format!("{verb}{arg}"));
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn the_site_and_docs_give_the_same_plugin_install_lines() {
+        let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let market: Value = serde_json::from_str(
+            &std::fs::read_to_string(repo.join(".claude-plugin/marketplace.json")).unwrap(),
+        )
+        .unwrap();
+        let plugin = market["plugins"][0]["name"].as_str().unwrap();
+        let place = market["name"].as_str().unwrap();
+        let mut want = std::collections::BTreeSet::new();
+        want.insert("/plugin marketplace add lex00/gameprinter".to_owned());
+        want.insert(format!("/plugin install {plugin}@{place}"));
+        let pages = [
+            "docs/plugin.md",
+            "site/src/content/docs/install.md",
+            "AGENTS.md",
+        ];
+        for page in pages {
+            let text = std::fs::read_to_string(repo.join(page)).unwrap();
+            assert_eq!(
+                plugin_install_lines(&text),
+                want,
+                "{page} gives the plugin's install lines docs/plugin.md and marketplace.json give"
+            );
+        }
+        // The site's first steps name the plugin and /gp:port.
+        let install = std::fs::read_to_string(repo.join(pages[1])).unwrap();
+        let start = install
+            .find("## Start here")
+            .expect("install.md has Start here");
+        let by_hand = install.find("## Connect your AI agent").unwrap();
+        assert!(
+            start < by_hand,
+            "Start here comes before connecting an agent by hand"
+        );
+        let rest = &install[start + 3..];
+        let first = &rest[..rest.find("\n## ").unwrap_or(rest.len())];
+        for word in [
+            "brew install lex00/tap/gp",
+            "/gp:port",
+            "gp serve",
+            "AGENTS.md",
+        ] {
+            assert!(first.contains(word), "install.md's Start here names {word}");
+        }
+        assert!(repo.join("plugin/commands/port.md").is_file());
+    }
 }

@@ -51,7 +51,7 @@ The docs site's pages, in `site/src/content/docs/`, are for people using the too
 
 | Page | For |
 |---|---|
-| [install.md](site/src/content/docs/install.md) | Building `gp` |
+| [install.md](site/src/content/docs/install.md) | Start here: installing `gp` and the gp plugin, `/gp:port`, connecting another agent, building `gp` |
 | [bring.md](site/src/content/docs/bring.md) | Bringing in a game from a ROM you own |
 | [improve.md](site/src/content/docs/improve.md) | Changing a published game and sending the change |
 | [make.md](site/src/content/docs/make.md) | Making your own game, from Moss Hop or from nothing |

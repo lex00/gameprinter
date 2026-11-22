@@ -11,7 +11,7 @@ const ways = [
 	{ title: 'Improve a game', href: `${base}/improve/`, text: 'Fix something in how a published game plays, and send the fix back.' },
 ];
 const more = [
-	{ title: 'Install gp', href: `${base}/install/` },
+	{ title: 'Start here: install gp', href: `${base}/install/` },
 	{ title: 'ROM rules', href: `${base}/rom-rules/` },
 	{ title: 'Run a registry', href: `${base}/registry/` },
 	{ title: 'Contribute to the tool', href: `${base}/contribute/` },
@@ -20,6 +20,7 @@ const more = [
 ---
 <div class="gp-landing not-content">
 	<p class="gp-intro">Game Printer lets you create original games that run in your browser with nothing to install. It has powerful tools to help you port mechanics from your old ROMs and breathe new life into old games.</p>
+	<p class="gp-intro">New here? <a href={`${base}/install/#start-here`}>Start here</a>: install <code>gp</code>, add the gp plugin to Claude Code, and port a game from your own ROM with <code>/gp:port</code>.</p>
 	<ul class="gp-ways">
 		{ways.map((w) => (
 			<li>
