@@ -211,9 +211,23 @@ pub(crate) fn git(dir: &Path, args: &[&str]) -> Result<String> {
     Ok(String::from_utf8_lossy(&o.stdout).trim().to_owned())
 }
 
+/// The gp file this gate runs, its links followed, found once: every gp
+/// the gate starts is this one, so a gate running while the tool gate
+/// publishes a new gp (moving `$GP_HOME/bin/gp`) finishes on the gp it
+/// started on. A published build is kept for the next eight publishes.
+pub(crate) fn this_gp() -> Result<PathBuf> {
+    static GP: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    if let Some(p) = GP.get() {
+        return Ok(p.clone());
+    }
+    let exe = std::env::current_exe()?;
+    let p = fs::canonicalize(&exe).unwrap_or(exe);
+    Ok(GP.get_or_init(|| p).clone())
+}
+
 /// `gp` itself as a command, with the gate's home as its $GP_HOME.
 fn self_cmd(c: &Path) -> Result<Command> {
-    let mut cmd = Command::new(std::env::current_exe()?);
+    let mut cmd = Command::new(this_gp()?);
     cmd.env("GP_HOME", c);
     Ok(cmd)
 }
@@ -825,7 +839,7 @@ fn apply_items(
 ) -> Result<Applied> {
     let tree = &c.tree;
     let rel = c.rel.to_string_lossy().into_owned();
-    let gp = std::env::current_exe()?;
+    let gp = this_gp()?;
     let mut commits = Vec::new();
     let mut all = Vec::new();
     let refuse = |i: usize, why: String, phase: &'static str| Ok(Err((i, Failed { why, phase })));
@@ -1128,7 +1142,7 @@ fn trial(
             author: None,
             date: None,
         };
-        commit(tree, &msg, &plain, &std::env::current_exe()?)?;
+        commit(tree, &msg, &plain, &this_gp()?)?;
         lines.push(msg);
     }
     // Kept under its commit, since the next try reuses it as its base.
@@ -1309,7 +1323,7 @@ fn settle(
 /// passed, all at once. A tip that moves before the landing runs the batch
 /// again on the new tip. One outcome a patch, in order.
 fn gate_batch(c: &Ctx, a: &GateArgs, items: &[Item], rom: &[u8]) -> Result<Vec<Outcome>> {
-    let gp = std::env::current_exe()?;
+    let gp = this_gp()?;
     let rel = c.rel.to_string_lossy().into_owned();
     let n = items.len();
     let mut said: Vec<String> = Vec::new();
@@ -1579,7 +1593,7 @@ pub(crate) fn run(a: &GateArgs, paths: &Paths) -> Result<Outcome> {
     // A new game's folder may not be here yet: the patch creates it.
     let game = gp_evidence::paths::real_path(&a.game);
     let home = gate_home(a.home.as_deref())?;
-    let gp = std::env::current_exe()?;
+    let gp = this_gp()?;
     let private = gp_evidence::paths::enclosing_git_work_tree(&game).is_none();
     if !game.is_dir() && (private || a.score_only) {
         bail!("{}: No such folder", a.game.display());
@@ -1610,10 +1624,12 @@ pub(crate) fn run(a: &GateArgs, paths: &Paths) -> Result<Outcome> {
         .find(|d| d.is_dir())
         .context("no folder above the game")?
         .to_owned();
-    // One gate at a time on a home: they share the worktree. A gate that
-    // may share a batch takes a ticket first, so the gate holding the lock
-    // can take its patch in (gate_queue).
-    let lock = crate::gate_hold::open_lock(&home)?;
+    // One model gate at a time on a home: they share the worktree. A tool
+    // gate holds a lock of its own and runs beside it (gate_hold::Lane). A
+    // gate that may share a batch takes a ticket first, so the gate holding
+    // the lock can take its patch in (gate_queue).
+    let lane = crate::gate_hold::Lane::Model;
+    let lock = crate::gate_hold::open_lock(&home, lane)?;
     let what = if a.dry_run {
         "model gate dry run"
     } else {
@@ -1631,7 +1647,7 @@ pub(crate) fn run(a: &GateArgs, paths: &Paths) -> Result<Outcome> {
             );
         }
         lock.lock()?;
-        let hold = crate::gate_hold::Hold::take(&home, what, None, a.dry_run);
+        let hold = crate::gate_hold::Hold::take(&home, lane, what, None, a.dry_run);
         match crate::gate_copy::open(&game, &home, &gp, a.message.as_deref())? {
             crate::gate_copy::Opened::Done(outcome) => return Ok(outcome),
             crate::gate_copy::Opened::Gate { repo, tree, diff } => {
@@ -1688,7 +1704,11 @@ pub(crate) fn run(a: &GateArgs, paths: &Paths) -> Result<Outcome> {
                 removes: a.removes.clone(),
                 replaces: a.replaces.clone(),
             };
-            ticket = Some(crate::gate_queue::Ticket::enter(&home, req, &file)?);
+            ticket = Some(crate::gate_queue::Ticket::enter(
+                &lane.queue_home(&home),
+                req,
+                &file,
+            )?);
         }
         lock.lock()?;
         if let Some(t) = &ticket
@@ -1696,7 +1716,7 @@ pub(crate) fn run(a: &GateArgs, paths: &Paths) -> Result<Outcome> {
         {
             return Ok(o);
         }
-        let hold = crate::gate_hold::Hold::take(&home, what, None, a.dry_run);
+        let hold = crate::gate_hold::Hold::take(&home, lane, what, None, a.dry_run);
         (repo, rel, onto, tree, file, hold)
     };
 
@@ -2946,6 +2966,13 @@ mod tests {
                 vec![5]
             ]
         );
+        // Three queued patches land in one run of the checks; with a bad
+        // middle one, the other two land and it fails alone.
+        let (pass, tried) = settle_with(3, &[], &[]);
+        assert_eq!((pass, tried), (vec![true; 3], vec![vec![0, 1, 2]]));
+        let (pass, tried) = settle_with(3, &[1], &[]);
+        assert_eq!(pass, [true, false, true]);
+        assert!(tried.len() <= 4, "{tried:?}");
         // One that doesn't apply drops out without a split.
         let (pass, tried) = settle_with(3, &[], &[1]);
         assert_eq!(pass, [true, false, true]);

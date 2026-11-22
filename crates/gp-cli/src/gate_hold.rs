@@ -1,7 +1,12 @@
-//! Who holds a gate home's `gate.lock`, and the watch that makes an
-//! orphaned gate run let go of it (docs/gate.md, "The lock").
+//! Who holds a gate home's locks, and the watch that makes an orphaned gate
+//! run let go of one (docs/gate.md, "The locks").
 //!
-//! The gate that takes the lock writes `gate.holder.json` beside it: its
+//! The two gates land in different repos, so each has its own lock
+//! ([`Lane`]): the model gate `gate.lock`, the tool gate `tool.lock`. A
+//! model gate and a tool gate run at the same time; two of one kind run in
+//! turn.
+//!
+//! The gate that takes a lock writes its holder file beside it: its
 //! pid, its parent's, when it took the lock, what it is and the steps file
 //! it logs to. While it holds the lock a thread watches it:
 //!
@@ -57,17 +62,90 @@ fn idle() -> Duration {
         .map_or(IDLE, Duration::from_secs)
 }
 
-/// `gate.lock` in `home`, opened without emptying it.
-pub(crate) fn open_lock(home: &Path) -> std::io::Result<fs::File> {
+/// Which gate a lock is for: each kind has its own lock, holder file and
+/// queue in the gate's home.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Lane {
+    /// gp model gate: lands in the games checkout.
+    Model,
+    /// gp tool gate: lands in gameprinter and publishes gp.
+    Tool,
+}
+
+impl Lane {
+    pub(crate) const ALL: [Lane; 2] = [Lane::Model, Lane::Tool];
+
+    fn lock_name(self) -> &'static str {
+        match self {
+            Lane::Model => "gate.lock",
+            Lane::Tool => "tool.lock",
+        }
+    }
+
+    fn holder_name(self) -> &'static str {
+        match self {
+            Lane::Model => "gate.holder.json",
+            Lane::Tool => "tool.holder.json",
+        }
+    }
+
+    /// The folder whose `queue/` holds this kind's tickets
+    /// (crate::gate_queue): the home itself for the model gate, its
+    /// `tool/` for the tool gate.
+    pub(crate) fn queue_home(self, home: &Path) -> PathBuf {
+        match self {
+            Lane::Model => home.to_owned(),
+            Lane::Tool => home.join("tool"),
+        }
+    }
+}
+
+/// The lock file of `lane` in `home`.
+pub(crate) fn lock_file(home: &Path, lane: Lane) -> PathBuf {
+    home.join(lane.lock_name())
+}
+
+/// `lane`'s lock in `home`, opened without emptying it.
+pub(crate) fn open_lock(home: &Path, lane: Lane) -> std::io::Result<fs::File> {
     fs::OpenOptions::new()
         .create(true)
         .truncate(false)
         .write(true)
-        .open(home.join("gate.lock"))
+        .open(lock_file(home, lane))
 }
 
-pub(crate) fn holder_file(home: &Path) -> PathBuf {
-    home.join("gate.holder.json")
+pub(crate) fn holder_file(home: &Path, lane: Lane) -> PathBuf {
+    home.join(lane.holder_name())
+}
+
+/// A tool gate of a gp from before the two locks holds `gate.lock` and
+/// works in the same `tool/` folders: a tool gate that holds `tool.lock`
+/// waits for it to end. Its holder file names it (`what` a tool gate).
+/// The lock it returns is held while this gate runs, or `None` when no
+/// such gate holds `gate.lock`.
+pub(crate) fn wait_for_an_older_tool_gate(home: &Path) -> Option<fs::File> {
+    let h = older_tool_gate(home)?;
+    let lock = open_lock(home, Lane::Model).ok()?;
+    eprintln!(
+        "tool gate: an older gp's tool gate (pid {}) holds gate.lock: waiting for it",
+        h["pid"]
+    );
+    lock.lock().ok()?;
+    Some(lock)
+}
+
+/// The holder of `gate.lock` when it is a tool gate (an older gp's).
+fn older_tool_gate(home: &Path) -> Option<Value> {
+    live_holder(home, Lane::Model).filter(|h| {
+        h["what"]
+            .as_str()
+            .is_some_and(|w| w.starts_with("tool gate"))
+    })
+}
+
+/// Whether a tool gate of an older gp runs now, holding `gate.lock`.
+pub(crate) fn older_tool_gate_runs(home: &Path) -> bool {
+    older_tool_gate(home).is_some()
 }
 
 fn parent() -> u32 {
@@ -123,10 +201,16 @@ pub(crate) struct Hold {
 }
 
 impl Hold {
-    /// Writes the holder file for the gate that just took `home`'s lock and
-    /// starts its watch. `what` names the gate ("tool gate dry run"),
-    /// `steps` is the file it logs its steps to.
-    pub(crate) fn take(home: &Path, what: &str, steps: Option<&Path>, dry_run: bool) -> Self {
+    /// Writes the holder file for the gate that just took `home`'s lock of
+    /// `lane` and starts its watch. `what` names the gate ("tool gate dry
+    /// run"), `steps` is the file it logs its steps to.
+    pub(crate) fn take(
+        home: &Path,
+        lane: Lane,
+        what: &str,
+        steps: Option<&Path>,
+        dry_run: bool,
+    ) -> Self {
         let h = json!({
             "pid": std::process::id(),
             "ppid": parent(),
@@ -135,14 +219,15 @@ impl Hold {
             "steps": steps.map(|p| p.display().to_string()),
             "dry_run": dry_run,
         });
-        let file = holder_file(home);
+        let file = holder_file(home, lane);
         let tmp = file.with_extension("tmp");
         if fs::write(&tmp, h.to_string()).is_ok() {
             let _ = fs::rename(&tmp, &file);
         }
         let done = Arc::new(AtomicBool::new(false));
         let (label, watched, ended) = (what.to_owned(), file.clone(), done.clone());
-        std::thread::spawn(move || watch(&h, &label, &watched, &ended));
+        let lock = lane.lock_name();
+        std::thread::spawn(move || watch(&h, &label, lock, &watched, &ended));
         Hold { file, done }
     }
 }
@@ -163,7 +248,7 @@ impl Drop for Hold {
 /// The watch: every few seconds, whether the gate should stop; when it
 /// should, the flag, a note in its steps file, and after [`GRACE`] the
 /// process's end.
-fn watch(h: &Value, what: &str, file: &Path, done: &AtomicBool) {
+fn watch(h: &Value, what: &str, lock: &str, file: &Path, done: &AtomicBool) {
     let idle = idle();
     loop {
         std::thread::sleep(Duration::from_secs(5));
@@ -173,7 +258,7 @@ fn watch(h: &Value, what: &str, file: &Path, done: &AtomicBool) {
         let Some(why) = why_stop(h, gp_mcp::asks::now_ms(), parent(), idle) else {
             continue;
         };
-        let says = format!("{what} {} gives up gate.lock: {why}", std::process::id());
+        let says = format!("{what} {} gives up {lock}: {why}", std::process::id());
         eprintln!("gate: {says}");
         *WHY.lock().unwrap_or_else(|e| e.into_inner()) = says.clone();
         STOP.store(true, Ordering::SeqCst);
@@ -194,33 +279,33 @@ fn watch(h: &Value, what: &str, file: &Path, done: &AtomicBool) {
     }
 }
 
-/// The live holder of `home`'s lock, from its holder file.
-fn live_holder(home: &Path) -> Option<Value> {
-    let h: Value = serde_json::from_slice(&fs::read(holder_file(home)).ok()?).ok()?;
+/// The live holder of `home`'s lock of `lane`, from its holder file.
+fn live_holder(home: &Path, lane: Lane) -> Option<Value> {
+    let h: Value = serde_json::from_slice(&fs::read(holder_file(home, lane)).ok()?).ok()?;
     let pid = h["pid"].as_u64()?;
     gp_mcp::proc::alive_since(pid, h["since_ms"].as_u64().unwrap_or(0)).then_some(h)
 }
 
-/// Whether some process holds `home`'s lock now.
-fn lock_held(home: &Path) -> bool {
-    if !home.join("gate.lock").is_file() {
+/// Whether some process holds `home`'s lock of `lane` now.
+pub(crate) fn lock_held(home: &Path, lane: Lane) -> bool {
+    if !lock_file(home, lane).is_file() {
         return false;
     }
-    match open_lock(home) {
+    match open_lock(home, lane) {
         Ok(f) => f.try_lock().is_err(),
         Err(_) => false,
     }
 }
 
-/// gp loop health's line on the gate home's lock: `Ok(line)` or
-/// `Err(problem)`, or `None` with no gate home.
-pub(crate) fn health_line(home: &Path, now_ms: u64) -> Option<Result<String, String>> {
+/// gp loop health's line on the gate home's lock of `lane`: `Ok(line)`
+/// or `Err(problem)`, or `None` with no gate home.
+pub(crate) fn health_line(home: &Path, lane: Lane, now_ms: u64) -> Option<Result<String, String>> {
     if !home.is_dir() {
         return None;
     }
-    let lock = home.join("gate.lock").display().to_string();
-    let Some(h) = live_holder(home) else {
-        return Some(if lock_held(home) {
+    let lock = lock_file(home, lane).display().to_string();
+    let Some(h) = live_holder(home, lane) else {
+        return Some(if lock_held(home, lane) {
             Err(format!(
                 "{lock} is held by a gate run that names no holder (an older gp): find it with lsof {lock}, and kill it if it has logged no step for {} min.",
                 IDLE.as_secs() / 60
@@ -243,7 +328,11 @@ pub(crate) fn health_line(home: &Path, now_ms: u64) -> Option<Result<String, Str
     );
     Some(if stuck {
         Err(format!(
-            "{line}: every other gate waits behind it. It gives the lock up by itself; if it doesn't, kill {pid}."
+            "{line}: every other {} waits behind it. It gives the lock up by itself; if it doesn't, kill {pid}.",
+            match lane {
+                Lane::Model => "model gate",
+                Lane::Tool => "tool gate",
+            }
         ))
     } else {
         Ok(line)
@@ -296,28 +385,75 @@ mod tests {
     fn health_names_the_pid_holding_the_lock() {
         let t = tempfile::tempdir().unwrap();
         let home = t.path();
-        let lock = open_lock(home).unwrap();
+        let lock = open_lock(home, Lane::Tool).unwrap();
         let now = gp_mcp::asks::now_ms();
         assert!(
-            health_line(home, now)
+            health_line(home, Lane::Tool, now)
                 .unwrap()
                 .unwrap()
-                .ends_with("is free")
+                .ends_with("tool.lock is free")
         );
         lock.lock().unwrap();
         let steps = home.join("steps.jsonl");
         fs::write(&steps, "{}\n").unwrap();
-        let hold = Hold::take(home, "tool gate dry run", Some(&steps), false);
+        let hold = Hold::take(home, Lane::Tool, "tool gate dry run", Some(&steps), false);
         let me = std::process::id();
-        let line = health_line(home, now).unwrap().unwrap();
+        let line = health_line(home, Lane::Tool, now).unwrap().unwrap();
         assert!(
-            line.contains(&format!("held by pid {me} (tool gate dry run)")),
+            line.contains(&format!(
+                "tool.lock is held by pid {me} (tool gate dry run)"
+            )),
             "{line}"
         );
+        // The model gate's lock is another lock: free while this is held.
+        assert!(
+            health_line(home, Lane::Model, now)
+                .unwrap()
+                .unwrap()
+                .ends_with("gate.lock is free")
+        );
         let later = now + IDLE.as_millis() as u64 + 60_000;
-        let problem = health_line(home, later).unwrap().unwrap_err();
+        let problem = health_line(home, Lane::Tool, later).unwrap().unwrap_err();
         assert!(problem.contains(&format!("kill {me}")), "{problem}");
+        assert!(problem.contains("every other tool gate"), "{problem}");
         drop(hold);
-        assert!(!holder_file(home).exists());
+        assert!(!holder_file(home, Lane::Tool).exists());
+    }
+
+    /// A tool gate and a model gate run at the same time: each holds its
+    /// own lock, so neither waits for the other, while a second gate of
+    /// the same kind does wait.
+    #[test]
+    fn a_tool_gate_and_a_model_gate_hold_different_locks() {
+        let t = tempfile::tempdir().unwrap();
+        let home = t.path();
+        let model = open_lock(home, Lane::Model).unwrap();
+        model.lock().unwrap();
+        let _m = Hold::take(home, Lane::Model, "model gate", None, false);
+        let tool = open_lock(home, Lane::Tool).unwrap();
+        assert!(
+            tool.try_lock().is_ok(),
+            "a model gate holds back no tool gate"
+        );
+        let _t = Hold::take(home, Lane::Tool, "tool gate", None, false);
+        assert!(lock_held(home, Lane::Model) && lock_held(home, Lane::Tool));
+        assert!(
+            open_lock(home, Lane::Model).unwrap().try_lock().is_err(),
+            "a second model gate waits"
+        );
+        assert!(
+            open_lock(home, Lane::Tool).unwrap().try_lock().is_err(),
+            "a second tool gate waits"
+        );
+        // Each holder file names its own gate.
+        let what = |lane| live_holder(home, lane).unwrap()["what"].clone();
+        assert_eq!(
+            (what(Lane::Model), what(Lane::Tool)),
+            (json!("model gate"), json!("tool gate"))
+        );
+        // A model gate holding gate.lock is no older tool gate to wait for.
+        assert!(wait_for_an_older_tool_gate(home).is_none());
+        // Each kind's tickets go in a queue of its own.
+        assert_ne!(Lane::Model.queue_home(home), Lane::Tool.queue_home(home));
     }
 }

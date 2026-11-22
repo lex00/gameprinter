@@ -893,7 +893,10 @@ pub(crate) fn run(a: &ToolGateArgs, paths: &Paths) -> Result<Outcome> {
     let repo = PathBuf::from(git(&cwd, &["rev-parse", "--show-toplevel"])?);
     let onto = gate::onto_branch(a.onto.as_deref(), &repo, false)?;
     let home = gate::gate_home(a.home.as_deref())?;
-    let lock = crate::gate_hold::open_lock(&home)?;
+    // The tool gate's own lock and queue: a model gate lands in the games
+    // checkout, holds gate.lock and runs beside this one (gate_hold::Lane).
+    let lane = crate::gate_hold::Lane::Tool;
+    let lock = crate::gate_hold::open_lock(&home, lane)?;
     // A gate that lands takes a ticket first, so the tool gate holding the
     // lock can take its patch into its batch (gate_queue), as model gates do.
     let ticket = if a.dry_run {
@@ -914,7 +917,11 @@ pub(crate) fn run(a: &ToolGateArgs, paths: &Paths) -> Result<Outcome> {
             removes: Vec::new(),
             replaces: Vec::new(),
         };
-        Some(crate::gate_queue::Ticket::enter(&home, req, &a.patch)?)
+        Some(crate::gate_queue::Ticket::enter(
+            &lane.queue_home(&home),
+            req,
+            &a.patch,
+        )?)
     };
     let waited = lock.try_lock().is_err();
     if waited {
@@ -923,11 +930,14 @@ pub(crate) fn run(a: &ToolGateArgs, paths: &Paths) -> Result<Outcome> {
     if let Some(o) = ticket.as_ref().and_then(|t| t.result()) {
         return Ok(o);
     }
+    // A tool gate of an older gp holds gate.lock and works in tool/ too.
+    let _older = crate::gate_hold::wait_for_an_older_tool_gate(&home);
     let tool = home.join("tool");
     // Who holds the lock, and the watch that gives it up when this run's
     // caller is gone (a dry run) or it logs no step for a while (gate_hold).
     let _hold = crate::gate_hold::Hold::take(
         &home,
+        lane,
         if a.dry_run {
             "tool gate dry run"
         } else {

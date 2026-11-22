@@ -313,14 +313,13 @@ pub(crate) fn clean(
         }
     }
     if let Some(g) = gate {
-        // The tool gate holds this lock while it runs (crate::tool_gate).
-        let lock = fs::OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .write(true)
-            .open(g.join("gate.lock"));
-        match lock.map(|f| f.try_lock().map(|()| f)) {
-            Ok(Ok(_held)) => {
+        // The tool gate holds its lock while it runs (crate::tool_gate), and
+        // a tool gate of a gp from before the two locks held gate.lock.
+        let free = crate::gate_hold::open_lock(g, crate::gate_hold::Lane::Tool)
+            .ok()
+            .filter(|f| f.try_lock().is_ok());
+        match free {
+            Some(_held) if !crate::gate_hold::older_tool_gate_runs(g) => {
                 for p in gate_builds(g).into_iter().filter(|p| p.is_dir()) {
                     let bytes = remove(&p);
                     done.push(Clear {
@@ -330,7 +329,7 @@ pub(crate) fn clean(
                     });
                 }
             }
-            _ => skipped.push("the gate's build folders: a gate runs now".into()),
+            _ => skipped.push("the gate's build folders: a tool gate runs now".into()),
         }
     }
     (done, skipped)

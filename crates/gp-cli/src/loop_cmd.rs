@@ -764,14 +764,16 @@ fn checks(paths: &gp_evidence::Paths, games_dir: Option<&std::path::Path>) -> Va
         Some(Err(l)) => bad(&mut lines, &mut problems, l),
         None => {}
     }
-    // The gate's lock: who holds it, and a holder that logs no step or
-    // names no pid (gate-lock-orphan) is a problem.
-    if let Some(g) = crate::gate::gate_home(None).ok().as_deref()
-        && let Some(l) = crate::gate_hold::health_line(g, now)
-    {
-        match l {
-            Ok(l) => ok(&mut lines, l),
-            Err(l) => bad(&mut lines, &mut problems, l),
+    // The gates' locks (the model gate's and the tool gate's): who holds
+    // each, and a holder that logs no step or names no pid
+    // (gate-lock-orphan) is a problem.
+    if let Some(g) = crate::gate::gate_home(None).ok().as_deref() {
+        for lane in crate::gate_hold::Lane::ALL {
+            match crate::gate_hold::health_line(g, lane, now) {
+                Some(Ok(l)) => ok(&mut lines, l),
+                Some(Err(l)) => bad(&mut lines, &mut problems, l),
+                None => {}
+            }
         }
     }
     // Each game's scoreboard, as gp serve last measured it.

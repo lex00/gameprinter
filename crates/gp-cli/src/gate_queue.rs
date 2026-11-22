@@ -1,7 +1,10 @@
-//! The gates' queue (docs/gate.md, "Batches"): the game gate's, and the
-//! tool gate's, whose tickets batch only with each other. Gates on one home run
-//! one at a time, holding `gate.lock`. A gate that waits leaves a ticket in
-//! the home's `queue/`: what it asks and a copy of its patch. The gate whose
+//! The gates' queues (docs/gate.md, "Batches"): the game gate's, and the
+//! tool gate's, whose tickets batch only with each other. Gates of one kind
+//! on one home run one at a time, holding their kind's lock
+//! (crate::gate_hold::Lane: `gate.lock`, `tool.lock`). A gate that waits
+//! leaves a ticket in its kind's `queue/` (the home's for the model gate,
+//! `tool/queue/` for the tool gate): what it asks and a copy of its patch.
+//! The gate whose
 //! turn comes takes the waiting tickets that agree with it on the repo, the
 //! game, the branch and the run into its batch (a `.claim` with its pid),
 //! gates them together, and writes each one's outcome beside its ticket

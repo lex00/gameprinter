@@ -477,8 +477,10 @@ fn run_yeses(ctx: &Arc<Ctx>) {
                 }
             }
             let _ran = Ran(id.clone());
-            // Gates all start at once (owner, yeses-land-together): they
-            // hold gate.lock in turn and the one holding it takes the
+            // Gates all start at once (owner, yeses-land-together): those
+            // of a kind hold their lock in turn (model gates gate.lock,
+            // tool gates tool.lock, so a model gate and a tool gate run at
+            // once: gate_hold::Lane) and the one holding it takes the
             // waiting ones of its kind into its batch (gate_queue), so
             // several yeses land in one run of the checks. Any other yes
             // runs one at a time.
