@@ -47,6 +47,15 @@ fi
 
 (cd editor && npm ci --silent --no-audit --no-fund && npm run --silent build)
 
+# Every crate Cargo.lock names, for every target: the module kit (gp game
+# kit) vendors them --offline, and a fresh runner's cargo cache holds only
+# what the gp build itself fetched.
+cargo fetch --locked
+
+# chant reads chant.config.ts through tsx (release stamp below); a runner
+# has none, and Windows' Node can't load the file without it.
+npm install --no-save --no-package-lock --silent --no-audit --no-fund tsx@4.19.2
+
 # The version gp says it is, in the files the cut stamps too.
 bash scripts/release/chant.sh release stamp "$label"
 
