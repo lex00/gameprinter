@@ -57,7 +57,8 @@ pub fn hook_hash(dir: &std::path::Path, files: &[std::path::PathBuf]) -> String 
 }
 
 /// The `version` of the `[package]` table of a Cargo.toml, following
-/// `version.workspace = true` to the workspace root's `[workspace.package]`.
+/// `version.workspace = true` (or the table `[package.version]` with
+/// `workspace = true`) to the workspace root's `[workspace.package]`.
 pub fn package_version(manifest: &str, workspace: &str) -> String {
     fn table_value(text: &str, table: &str, key: &str) -> Option<String> {
         let mut inside = false;
@@ -83,7 +84,14 @@ pub fn package_version(manifest: &str, workspace: &str) -> String {
         }
         None
     }
-    match table_value(manifest, "package", "version").as_deref() {
+    // The module kit writes its manifests through a TOML writer, which puts
+    // `version.workspace = true` as a table: `[package.version]`, then
+    // `workspace = true`.
+    let version = table_value(manifest, "package", "version").or_else(|| {
+        (table_value(manifest, "package.version", "workspace").as_deref() == Some("true"))
+            .then(|| "(workspace)".to_owned())
+    });
+    match version.as_deref() {
         Some("(workspace)") => table_value(workspace, "workspace.package", "version")
             .unwrap_or_else(|| panic!("the workspace has no [workspace.package] version")),
         Some(v) => v.to_owned(),

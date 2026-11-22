@@ -152,5 +152,13 @@ mod tests {
             ),
             "0.1.0"
         );
+        // The module kit's manifests say the same thing as a table.
+        assert_eq!(
+            hashing::package_version(
+                "[package]\nname = \"x\"\n\n[package.rust-version]\nworkspace = true\n\n[package.version]\nworkspace = true\n",
+                "[workspace.package]\nversion = \"0.1.0\"\n"
+            ),
+            "0.1.0"
+        );
     }
 }
