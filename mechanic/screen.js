@@ -1204,6 +1204,14 @@ function talkOf(m) {
   return clipsBy.find((g) => g.mechanic === m)?.talk ?? [];
 }
 
+/** The person's words with what they were watching when they wrote them:
+ * the clip on the screens and its frame, so "wrong here" says where. */
+function withSeen(text) {
+  if (mode !== "clip" || !clip) return text;
+  const what = clip.work ? `corpus clip ${clip.work}` : `clip ${clip.n}${clip.mechanic ? ` of ${clip.mechanic}` : ""}`;
+  return `${text} (written while watching ${what}, frame ${clip.f}${model.ask ? ", the card's change" : ""})`;
+}
+
 /** A COMMENT button that opens a line under `host`; what is typed goes to
  * the row's talk as the person's turn (POST api/talk), naming `clips`. */
 function commentBox(host, mechanic, clips, label, word = "COMMENT") {
@@ -1229,7 +1237,7 @@ function commentBox(host, mechanic, clips, label, word = "COMMENT") {
       if (!text) return;
       go.disabled = true;
       try {
-        await api("api/talk", { text, clips, mechanic });
+        await api("api/talk", { text: withSeen(text), clips, mechanic });
         f.remove();
         note(clips.length ? `Your comment on clip ${clips[0]} of ${mechanic} went to your agent.` : `Your comment on ${mechanic} went to your agent.`, 5000);
         await refreshLists(true);
@@ -1403,12 +1411,13 @@ function queueRow(r, g, open) {
   if (what) li.append(el("div", "qline", what));
   const judge = rowToJudge(r);
   const yes = confirmButton(r);
-  if (judge || yes) {
-    const acts = el("div", "qacts");
-    if (judge) acts.append(judgeButton(judge));
-    if (yes) acts.append(yes);
-    li.append(acts);
-  }
+  // COMMENT is on the card's face, as it was before the cards: the person
+  // can say something about any row without opening it.
+  const face = el("div", "qacts qface");
+  if (judge) face.append(judgeButton(judge));
+  if (yes) face.append(yes);
+  face.append(commentBox(face, r.mechanic, [], `A comment on ${r.mechanic} for your agent`));
+  li.append(face);
   const more = el("div", "qmore");
   more.append(el("div", "qnote qfull", r.mechanic));
   if (r.scores) more.append(noteLine("SCORES", r.scores, "qscore"));
@@ -1428,7 +1437,7 @@ function queueRow(r, g, open) {
   here.type = "button";
   here.title = "Recordings go to this row from now on";
   here.addEventListener("click", (e) => { e.stopPropagation(); e.currentTarget.blur(); void pickRow(r.mechanic); });
-  acts.append(here, commentBox(more, r.mechanic, [], `A comment on ${r.mechanic} for your agent`));
+  acts.append(here);
   more.append(acts);
   li.append(more);
   if (r.mechanic === session?.mechanic) li.classList.add("open");
@@ -1726,7 +1735,7 @@ async function refreshAsks() {
         const m = askRow(a);
         w.disabled = true;
         try {
-          if (m) await api("api/talk", { text, clips: [], mechanic: m });
+          if (m) await api("api/talk", { text: withSeen(`On the card "${cardLine(a.says)}": ${text}`), clips: [], mechanic: m });
           else throw new Error("this card has no row to carry your words: press NO with them");
           t.value = "";
           askWords.delete(a.id);
@@ -1750,7 +1759,7 @@ async function refreshAsks() {
         b.addEventListener("click", async (e) => {
           e.currentTarget.blur();
           for (const x of card.querySelectorAll("button")) x.disabled = true;
-          const words = t.value.trim();
+          const words = t.value.trim() ? withSeen(t.value.trim()) : "";
           try {
             const r = await fetch(`/api/asks/${encodeURIComponent(a.id)}`, {
               method: "POST",
@@ -1848,7 +1857,7 @@ function answerBox(m, clips) {
     if (!text) { t.focus(); return; }
     go.disabled = true;
     try {
-      await api("api/talk", { text, clips, mechanic: m });
+      await api("api/talk", { text: withSeen(text), clips, mechanic: m });
       t.value = "";
       t.blur();
       note(`Your answer on ${m} went to its agent.`, 5000);
