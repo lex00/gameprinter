@@ -169,7 +169,7 @@ fn agent_item(paths: &Paths) -> Item {
         .map(|f| format!("{} ({})", f.harness.words(), f.found))
         .collect();
     let on_machine = if here.is_empty() {
-        "no Claude Code, Codex or Cursor found on this machine".to_owned()
+        "no Claude Code, Codex, Cursor, Gemini CLI or VS Code found on this machine".to_owned()
     } else {
         format!("on this machine: {}", here.join("; "))
     };

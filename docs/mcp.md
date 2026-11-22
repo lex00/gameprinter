@@ -61,7 +61,7 @@ The server keeps the recordings its children query open between calls: a `gp que
 
 ## Registering it with an agent
 
-`gp mcp setup` says how to connect an agent: for each of Claude Code, Codex and Cursor found on the machine (its program on PATH or its folder in the home; all three when none is), whether gp is connected there already (for Claude Code, the gp plugin installed or a server named gp in `~/.claude.json`) and the line that connects it. `--harness claude|codex|cursor` picks one, and `--write` with it makes the connection after printing what it writes: Codex gets `[mcp_servers.gp]` at the end of `~/.codex/config.toml`, Cursor gets `mcpServers.gp` in `~/.cursor/mcp.json` (what else the file has is kept), and Claude Code runs its own `claude mcp add --scope user gp -- GP mcp`. A config already naming gp is left as it is. The gp in the line is gp on PATH, else `~/.gameprinter/bin/gp`, else the gp running. On Claude Code the plugin is the shorter road: `/plugin marketplace add lex00/gameprinter`, then `/plugin install gp@gameprinter`.
+`gp mcp setup` says how to connect an agent: for each of Claude Code, Codex, Cursor, Gemini CLI and VS Code found on the machine (its program on PATH, `code` for VS Code, or its folder in the home; every one when none is), whether gp is connected there already (for Claude Code, the gp plugin installed or a server named gp in `~/.claude.json`) and the line that connects it. `--harness claude|codex|cursor|gemini|vscode` picks one, and `--write` with it makes the connection after printing what it writes: Codex gets `[mcp_servers.gp]` at the end of `~/.codex/config.toml`, Cursor gets `mcpServers.gp` in `~/.cursor/mcp.json`, Gemini CLI `mcpServers.gp` in `~/.gemini/settings.json`, VS Code `servers.gp` with `"type": "stdio"` in its user `mcp.json` (`~/Library/Application Support/Code/User` on macOS, `~/.config/Code/User` on Linux; what else a file has is kept), and Claude Code runs its own `claude mcp add --scope user gp -- GP mcp`. A config already naming gp is left as it is. The gp in the line is gp on PATH, else `~/.gameprinter/bin/gp`, else the gp running. On Claude Code the plugin is the shorter road: `/plugin marketplace add lex00/gameprinter`, then `/plugin install gp@gameprinter`.
 
 gp is used through an agent, so gp says when none is connected. Every client that starts a session with `gp mcp` is kept in `$GP_HOME/agents.json` (its name and version from `initialize`, the gp serving it, when, and whether it was a loop worker's; `gp_mcp::clients`). While none connected in the last week:
 
@@ -76,6 +76,20 @@ Any MCP client can launch it as a command. In a config file of the form `claude 
 ```
 
 `gp serve` writes this file itself for the agent it starts on a point-and-tell request, and lets that agent call `mcp__gp` and nothing else.
+
+## Prompts and resources
+
+So every agent reads the same words, the server serves the gp plugin's own files as MCP prompts, and each as a resource too (`text/markdown`), for clients that read resources and not prompts (crates/gp-mcp/src/prompts.rs). They are built into the server from plugin/ (the skills from `.claude/skills`, which `plugin/skills` links to), so there is one copy of each.
+
+| Prompt | Resource | The file | Arguments |
+|---|---|---|---|
+| `port` | `gp://commands/port` | `plugin/commands/port.md`, what `/gp:port` says | `target`: the game's name or the ROM's path, for its `$ARGUMENTS` |
+| `porter` | `gp://agents/porter` | `plugin/agents/porter.md`, the brief for one step of a port | `game`, `row`, `step`, named in a last line |
+| `element-extraction` | `gp://skills/element-extraction` | the skill | none |
+| `level-design` | `gp://skills/level-design` | the skill | none |
+| `theme-generation` | `gp://skills/theme-generation` | the skill | none |
+
+A prompt is the file without its front matter, as one user message; its description is the front matter's. A resource is the whole file. `prompts/get` with a name there isn't refuses with the names there are. The instructions name every prompt and say when to read a skill.
 
 ## Working copies
 
@@ -103,7 +117,7 @@ Each tool carries the MCP annotations. `readOnlyHint` marks the tools that leave
 
 ## The tools
 
-The server's instructions tell the agent to call `next` at the start of every conversation and after each step it takes, to tell the person where things stand and offer the next step in plain words without being asked, to start what `next` marks for the tools itself, and to stop and ask before anything in `waits_for_yes`. While the person plays, `next` with `wait_s` hears a hand-off from the page.
+The server's instructions tell the agent to call `next` at the start of every conversation and after each step it takes, to tell the person where things stand and offer the next step in plain words without being asked, to start what `next` marks for the tools itself, and to stop and ask before anything in `waits_for_yes`. While the person plays, `next` with `wait_s` hears a hand-off from the page. They also say what the gp plugin's hooks hold in Claude Code, for agents that have no hooks: before stopping, run a yes not used yet and wait on a card just raised (the stop hook); never edit a game's folder of the games checkout by hand, since a change lands only through the gate (the pre-tool-use hook); ask the person only about a look, with its clip; and which prompts to read.
 
 | Roadmap name | MCP name | Status | Backed by | Read-only |
 |---|---|---|---|---|
@@ -360,12 +374,35 @@ The server has to follow gp as gp changes: a tool added or renamed, a command re
 | `everything_names_only_tools_the_server_has` | Any file git tracks (a worker's allowed tools, a skill, a plugin's hooks and commands, the docs) names `mcp__gp__NAME` for a tool the server hasn't |
 | `the_docs_table_has_every_tool` | The table of the tools above has no row for a tool, or a row for one gone |
 | `a_plugin_carries_gps_version` | A plugin manifest in the repo (`.claude-plugin/plugin.json`) has a version other than gp's (crates/gp-cli/Cargo.toml) |
+| `the_prompts_are_the_plugins_files` | A command, agent or skill in plugin/ has no prompt, a prompt names no file there or isn't its text, the instructions leave a prompt out, or `port` or `porter` names a gp command or flag gp hasn't (the skills join once they name none: row skills-name-gone-commands) |
 | `every_command_has_a_rule_in_gp_run_s_policy` (cli_tree.rs) | A command has no rule in gp_run's policy, or a rule names no command |
 | tests/mcp.rs, every tool call | A named tool's reply over stdio has no `next_step` (its id, or null with why), or has an id and its last text item doesn't say `NEXT STEP ID` |
 
 The server says gp's version as its own (`serverInfo.version`, from gp-cli), not gp-mcp's crate version, so a plugin pinned to a gp release and the server it starts agree; tests/mcp.rs checks it on connecting.
 
 A new capability reaches an agent through these: a new command through gp_run (its policy rule) and a line in the instructions or a tool's description when it is one an agent should reach for unasked; a new named tool through its row above and its words in the instructions. The gameprinter plugin is held as it lands: its skills, hooks and `/gp:port` may name only tools the server has (the scan of tracked files), and its manifest carries gp's version.
+
+## The audit of 2026-11-21
+
+The quest-log row mcp-audit held the server against what a person and a worker did that day. Each gap is fixed in the same change or is a line of the checks above, or a row of its own.
+
+| What they do | Where an agent reaches it | Gap, and what was done |
+|---|---|---|
+| Connect an agent app that isn't Claude Code | `gp mcp setup` | It covered Claude Code, Codex and Cursor (row cli-nudges-mcp): Gemini CLI and VS Code added (above), and AGENTS.md points at it |
+| Read `/gp:port`, the porter's brief and the skills | The prompts and resources | Only Claude Code read them, through the plugin: served as prompts and resources from the plugin's files, held by `the_prompts_are_the_plugins_files` |
+| The session-start hook: call `next` first, or `gp loop health` with the runner on | The instructions | Already said |
+| The stop hook: a yes not used yet, a card just raised | The instructions, `next`'s `waits_for_yes` | Not said: added to the instructions |
+| The pre-tool-use hook: no hand edit in a game's folder | The gates, `gp loop health`, the instructions | Not said, and only Claude Code was held: the instructions say a change lands only through the gate. The guard every agent has is that a games repo's main moves only by `gp model gate`, and `gp loop health` says PROBLEM while the checkout holds a local change; the hook only adds to it |
+| The runner and its workers | `gp loop health` through `gp_run`, the instructions | Already said. A worker's brief is held by `a_workers_brief_names_commands_gp_has_and_tools_it_may_call` |
+| Cards and YES | `gp_run`'s ask, `next`'s `waits_for_yes`, MCP forms | Already said |
+| LOOK AT IT and saved looks | `gp mechanic queue --status "asking you" --clip --frames --look`, `gp mechanic approve`, both through `gp_run` | Only the porter said it: the instructions now say to ask only about a look, with its clip, and that a yes locks it. The commands and flags are held by `the_server_names_only_commands_gp_has` |
+| A row waiting on another row | `gp mechanic queue --waits-on` | The porter didn't say it: added |
+| The archive of finished rows | gp serve's runner | Nothing for an agent to call |
+| Port runs pinned to a gp | `gp loop health`'s port run lines | Already in what `gp loop health` prints |
+| Scripted clips | `gp corpus import` through `gp_run` (a write) | Already reachable; corpus.toml's `[import.script]` is the game's, not an agent's |
+| Structured results | The runner's worker | A worker's alone; nothing for the server |
+| MCP forms | `gp_run`, `template_fork` | Already said |
+| The skills name only commands gp has | The prompts | element-extraction names `gp dataset export --hf` (removed 2026-11-13) and level-design `gp assets pack --base` (no such flag). `.claude/skills` takes no edit from a worker, so it is the row skills-name-gone-commands, and `the_prompts_are_the_plugins_files` checks only `port` and `porter` until it lands |
 
 ## Measurements
 

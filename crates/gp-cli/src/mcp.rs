@@ -50,9 +50,10 @@ pub struct McpArgs {
 
 #[derive(Subcommand)]
 pub enum McpCmd {
-    /// How to connect your agent (Claude Code, Codex, Cursor) to gp mcp: what
-    /// this machine has of each, the line that connects it, and with --write
-    /// the connection made after printing what it writes.
+    /// How to connect your agent (Claude Code, Codex, Cursor, Gemini CLI,
+    /// VS Code) to gp mcp: what this machine has of each, the line that
+    /// connects it, and with --write the connection made after printing
+    /// what it writes.
     Setup(crate::mcp_setup::SetupArgs),
 }
 

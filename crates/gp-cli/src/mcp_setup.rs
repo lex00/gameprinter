@@ -1,7 +1,8 @@
 //! `gp mcp setup`: how to connect an agent to gp mcp, per harness (Claude
-//! Code, Codex, Cursor), and with `--write` the connection made after
-//! showing what it writes. `gp self check`'s Agent line reads the same
-//! [`harnesses`] (docs/mcp.md, "Registering it with an agent").
+//! Code, Codex, Cursor, Gemini CLI, VS Code), and with `--write` the
+//! connection made after showing what it writes. `gp self check`'s Agent
+//! line reads the same [`harnesses`] (docs/mcp.md, "Registering it with an
+//! agent").
 
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
@@ -18,16 +19,34 @@ pub enum Harness {
     Claude,
     Codex,
     Cursor,
+    Gemini,
+    Vscode,
 }
 
 impl Harness {
-    const ALL: [Harness; 3] = [Harness::Claude, Harness::Codex, Harness::Cursor];
+    const ALL: [Harness; 5] = [
+        Harness::Claude,
+        Harness::Codex,
+        Harness::Cursor,
+        Harness::Gemini,
+        Harness::Vscode,
+    ];
 
     fn key(self) -> &'static str {
         match self {
             Harness::Claude => "claude",
             Harness::Codex => "codex",
             Harness::Cursor => "cursor",
+            Harness::Gemini => "gemini",
+            Harness::Vscode => "vscode",
+        }
+    }
+
+    /// Its program, when it is on PATH.
+    fn program(self) -> &'static str {
+        match self {
+            Harness::Vscode => "code",
+            h => h.key(),
         }
     }
 
@@ -36,15 +55,23 @@ impl Harness {
             Harness::Claude => "Claude Code",
             Harness::Codex => "Codex",
             Harness::Cursor => "Cursor",
+            Harness::Gemini => "Gemini CLI",
+            Harness::Vscode => "VS Code",
         }
     }
 
-    /// Its own folder in the user's home.
+    /// Its own folder in the user's home (VS Code's user settings folder).
     fn dir(self, user: &Path) -> PathBuf {
         match self {
             Harness::Claude => user.join(".claude"),
             Harness::Codex => user.join(".codex"),
             Harness::Cursor => user.join(".cursor"),
+            Harness::Gemini => user.join(".gemini"),
+            Harness::Vscode if cfg!(target_os = "macos") => {
+                user.join("Library/Application Support/Code/User")
+            }
+            Harness::Vscode if cfg!(windows) => user.join("AppData/Roaming/Code/User"),
+            Harness::Vscode => user.join(".config/Code/User"),
         }
     }
 
@@ -55,6 +82,26 @@ impl Harness {
             Harness::Claude => user.join(".claude.json"),
             Harness::Codex => user.join(".codex").join("config.toml"),
             Harness::Cursor => user.join(".cursor").join("mcp.json"),
+            Harness::Gemini => user.join(".gemini").join("settings.json"),
+            Harness::Vscode => self.dir(user).join("mcp.json"),
+        }
+    }
+
+    /// The key of a JSON config's servers (VS Code's is `servers`).
+    fn servers_key(self) -> &'static str {
+        if self == Harness::Vscode {
+            "servers"
+        } else {
+            "mcpServers"
+        }
+    }
+
+    /// The server's entry in a JSON config.
+    fn json_entry(self, gp: &str) -> Value {
+        if self == Harness::Vscode {
+            json!({"type": "stdio", "command": gp, "args": ["mcp"]})
+        } else {
+            json!({"command": gp, "args": ["mcp"]})
         }
     }
 }
@@ -62,7 +109,7 @@ impl Harness {
 #[derive(Args)]
 pub struct SetupArgs {
     /// The agent to connect (default: each one found on this machine, or
-    /// all three when none is).
+    /// every one when none is).
     #[arg(long, value_enum)]
     harness: Option<Harness>,
     /// Write the connection into the agent's config (for Claude Code, run
@@ -111,7 +158,7 @@ fn plugin_installed(user: &Path) -> bool {
 fn in_config(h: Harness, user: &Path) -> bool {
     let p = h.config(user);
     if h != Harness::Codex {
-        return read_json(&p)["mcpServers"]["gp"].is_object();
+        return read_json(&p)[h.servers_key()]["gp"].is_object();
     }
     let Ok(text) = std::fs::read_to_string(&p) else {
         return false;
@@ -126,7 +173,7 @@ fn in_config(h: Harness, user: &Path) -> bool {
 /// What one harness has here, in words.
 fn found_words(h: Harness, user: &Path, program: bool, plugin: bool, config: bool) -> String {
     let mut parts = vec![if program {
-        format!("{} on PATH", h.key())
+        format!("{} on PATH", h.program())
     } else {
         format!("{} is here", h.dir(user).display())
     }];
@@ -146,7 +193,7 @@ fn found_words(h: Harness, user: &Path, program: bool, plugin: bool, config: boo
 pub(crate) fn harnesses(user: &Path, on_path: &dyn Fn(&str) -> bool) -> Vec<Found> {
     let mut out = Vec::new();
     for h in Harness::ALL {
-        let program = on_path(h.key());
+        let program = on_path(h.program());
         let here = program || h.dir(user).is_dir();
         let plugin = h == Harness::Claude && plugin_installed(user);
         let config = in_config(h, user);
@@ -186,20 +233,31 @@ pub(crate) fn line(h: Harness, gp: &str) -> String {
         Harness::Codex => format!(
             "add to ~/.codex/config.toml: [mcp_servers.gp] command = \"{gp}\" args = [\"mcp\"] (gp mcp setup --harness codex --write does it)"
         ),
-        Harness::Cursor => format!(
-            "add to ~/.cursor/mcp.json: {{\"mcpServers\": {{\"gp\": {{\"command\": \"{gp}\", \"args\": [\"mcp\"]}}}}}} (gp mcp setup --harness cursor --write does it)"
-        ),
+        Harness::Cursor | Harness::Gemini | Harness::Vscode => {
+            let file = match h {
+                Harness::Cursor => "~/.cursor/mcp.json",
+                Harness::Gemini => "~/.gemini/settings.json",
+                _ => "VS Code's user mcp.json",
+            };
+            let entry = json!({h.servers_key(): {"gp": h.json_entry(gp)}});
+            format!(
+                "add to {file}: {entry} (gp mcp setup --harness {} --write does it)",
+                h.key()
+            )
+        }
     }
 }
 
 /// What `h`'s setup writes, as text: Claude Code's command, Codex's TOML
-/// table, Cursor's JSON entry.
+/// table, the others' JSON entry.
 fn snippet(h: Harness, gp: &str) -> String {
-    let entry = json!({"mcpServers": {"gp": {"command": gp, "args": ["mcp"]}}});
     match h {
         Harness::Claude => format!("claude mcp add --scope user gp -- {gp} mcp"),
         Harness::Codex => format!("[mcp_servers.gp]\ncommand = {gp:?}\nargs = [\"mcp\"]\n"),
-        Harness::Cursor => serde_json::to_string_pretty(&entry).unwrap_or_default(),
+        Harness::Cursor | Harness::Gemini | Harness::Vscode => {
+            let entry = json!({h.servers_key(): {"gp": h.json_entry(gp)}});
+            serde_json::to_string_pretty(&entry).unwrap_or_default()
+        }
     }
 }
 
@@ -239,8 +297,10 @@ fn write_codex(p: &Path, gp: &str) -> Result<String> {
     Ok(format!("added [mcp_servers.gp] to {}", p.display()))
 }
 
-/// Adds mcpServers.gp to Cursor's config, `p`, keeping what it has.
-fn write_cursor(p: &Path, gp: &str) -> Result<String> {
+/// Adds the server gp to `h`'s JSON config, `p` (mcpServers.gp, or VS
+/// Code's servers.gp), keeping what it has.
+fn write_json(h: Harness, p: &Path, gp: &str) -> Result<String> {
+    let key = h.servers_key();
     let mut v = json!({});
     if p.is_file() {
         let t = std::fs::read_to_string(p)?;
@@ -252,17 +312,17 @@ fn write_cursor(p: &Path, gp: &str) -> Result<String> {
     let Some(obj) = v.as_object_mut() else {
         bail!("{} isn't a JSON object", p.display());
     };
-    let servers = obj.entry("mcpServers").or_insert_with(|| json!({}));
+    let servers = obj.entry(key).or_insert_with(|| json!({}));
     let Some(servers) = servers.as_object_mut() else {
-        bail!("{}'s mcpServers isn't an object", p.display());
+        bail!("{}'s {key} isn't an object", p.display());
     };
-    servers.insert("gp".into(), json!({"command": gp, "args": ["mcp"]}));
+    servers.insert("gp".into(), h.json_entry(gp));
     if let Some(d) = p.parent() {
         std::fs::create_dir_all(d)?;
     }
     let text = serde_json::to_string_pretty(&v)? + "\n";
     std::fs::write(p, text).with_context(|| p.display().to_string())?;
-    Ok(format!("added mcpServers.gp to {}", p.display()))
+    Ok(format!("added {key}.gp to {}", p.display()))
 }
 
 /// Writes `h`'s connection under `user`, returning what changed.
@@ -275,7 +335,7 @@ fn write(h: Harness, user: &Path, gp: &str) -> Result<String> {
     match h {
         Harness::Claude => write_claude(gp),
         Harness::Codex => write_codex(&p, gp),
-        Harness::Cursor => write_cursor(&p, gp),
+        Harness::Cursor | Harness::Gemini | Harness::Vscode => write_json(h, &p, gp),
     }
 }
 
@@ -362,9 +422,9 @@ mod tests {
         let t = tempfile::tempdir().unwrap();
         let user = t.path();
         let none = |_: &str| false;
-        // Nothing here: all three, each with its line.
+        // Nothing here: every one, each with its line.
         let o = setup_in(&args(None, false), user, "/bin/gp", &none).unwrap();
-        assert_eq!(names(&o).len(), 3);
+        assert_eq!(names(&o).len(), 5);
         let plugin = "/plugin install gp@gameprinter";
         assert!(o.text.contains(plugin), "{}", o.text);
         // Codex and Cursor here: only those, and --write connects them.
@@ -393,6 +453,38 @@ mod tests {
         let o = setup_in(&args(codex, true), user, "/bin/gp", &none).unwrap();
         assert!(o.text.contains("connected here already"), "{}", o.text);
         assert!(o.json["harnesses"][0]["wrote"].is_null());
+    }
+
+    /// Gemini CLI and VS Code are found by their folders and connected by
+    /// their own JSON: mcpServers.gp in Gemini's settings.json (the rest
+    /// kept), servers.gp of type stdio in VS Code's mcp.json.
+    #[test]
+    fn gemini_cli_and_vs_code_are_connected_in_their_own_json() {
+        let t = tempfile::tempdir().unwrap();
+        let user = t.path();
+        let none = |_: &str| false;
+        std::fs::create_dir_all(user.join(".gemini")).unwrap();
+        let theme = r#"{"theme": "x"}"#;
+        std::fs::write(user.join(".gemini/settings.json"), theme).unwrap();
+        std::fs::create_dir_all(Harness::Vscode.dir(user)).unwrap();
+        let o = setup_in(&args(None, false), user, "/bin/gp", &none).unwrap();
+        assert_eq!(names(&o), ["\"gemini\"", "\"vscode\""]);
+        assert!(o.text.contains("Gemini CLI"), "{}", o.text);
+        assert!(o.text.contains("--harness vscode --write"), "{}", o.text);
+        for h in [Harness::Gemini, Harness::Vscode] {
+            setup_in(&args(Some(h), true), user, "/bin/gp", &none).unwrap();
+            assert!(in_config(h, user), "{h:?}");
+        }
+        let gemini = read_json(&user.join(".gemini/settings.json"));
+        assert_eq!(gemini["theme"], "x");
+        assert_eq!(gemini["mcpServers"]["gp"]["command"], "/bin/gp");
+        let code = read_json(&Harness::Vscode.config(user));
+        assert_eq!(code["servers"]["gp"]["type"], "stdio");
+        assert_eq!(code["servers"]["gp"]["args"][0], "mcp");
+        // VS Code on PATH as `code` counts as here.
+        let code_on_path = |p: &str| p == "code";
+        let f = &harnesses(tempfile::tempdir().unwrap().path(), &code_on_path)[4];
+        assert!(f.here && f.found.contains("code on PATH"), "{}", f.found);
     }
 
     #[test]

@@ -38,6 +38,7 @@ pub mod place;
 pub mod policy;
 pub mod proc;
 pub mod progressive;
+pub mod prompts;
 pub mod publish;
 pub mod ready;
 pub mod refine;

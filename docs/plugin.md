@@ -1,6 +1,6 @@
 # The gp plugin
 
-Everyone who ports a ROM gets the same agent setup, so two people on one ROM get the same model and the same experience. For Claude Code that setup is one plugin, `gp`, in this repo's `plugin/` folder, released with gp: its version is gp-cli's, and a test (`loop_hook::tests::the_plugin_is_released_with_gp_and_runs_these_hooks`) fails `just check` when they differ. Other harnesses read [AGENTS.md](../AGENTS.md), which gives the same tools and rules in words.
+Everyone who ports a ROM gets the same agent setup, so two people on one ROM get the same model and the same experience. For Claude Code that setup is one plugin, `gp`, in this repo's `plugin/` folder, released with gp: its version is gp-cli's, and a test (`loop_hook::tests::the_plugin_is_released_with_gp_and_runs_these_hooks`) fails `just check` when they differ. The way in for every agent is gp's MCP server ([docs/mcp.md](mcp.md)), and the plugin is Claude Code's shortcut onto it: the server serves `/gp:port`, the porter and the skills as its prompts and resources from these same files, so Codex, Cursor, Gemini CLI and VS Code, connected with `gp mcp setup`, read the words Claude Code reads (`mcp_keeps_up::tests::the_prompts_are_the_plugins_files` fails when a file here has no prompt), and its instructions say what the hooks below hold. [AGENTS.md](../AGENTS.md) says the rest.
 
 ## Install
 
@@ -29,7 +29,7 @@ Each hook runs `gp loop hook EVENT` (crates/gp-cli/src/loop_hook.rs), which read
 | Event | What it does |
 |---|---|
 | `session-start` | Puts in the session gp's and the plugin's versions; when `gp mcp` would not start in the session's folder (no templates/ to serve, or working copies inside a git work tree), why and what to install, shown to the person too, with `/mcp` to reconnect once fixed (Claude Code keeps a failed start for a while); whether the loop's runner works the rows (then the session watches the setup with `gp loop health`) or not (then it calls `next`), each yes the person gave that hasn't been used, and `gp progress --next` |
-| `pre-tool-use` | Refuses Edit, Write, MultiEdit and NotebookEdit on a file in a game's folder (one holding `roms.toml`) of a games checkout (its parent is `$GP_GAMES_DIR` or a git work tree's root), and says to change it through gp's tools and `gp model gate`. A copy of a game outside a checkout is the person's to edit |
+| `pre-tool-use` | Refuses Edit, Write, MultiEdit and NotebookEdit on a file in a game's folder (one holding `roms.toml`) of a games checkout (its parent is `$GP_GAMES_DIR` or a git work tree's root), and says to change it through gp's tools and `gp model gate`. A copy of a game outside a checkout is the person's to edit. This only adds to the guard every agent has: a change reaches a games repo's main only through `gp model gate`, a hand edit in the checkout lands nowhere and makes the gate's landing there fail until it is set aside, and `gp loop health` says PROBLEM while it is there |
 | `stop` | Refuses the first stop while a yes on the person's page hasn't been used (call `gp_run` again with its `ask_id`), or while a card raised in the last half hour waits for them (wait with `next`, or say the card is up). A second stop in a row goes, as Claude Code's `stop_hook_active` says. A runner worker's cards don't hold it |
 
 ## The loop's workers

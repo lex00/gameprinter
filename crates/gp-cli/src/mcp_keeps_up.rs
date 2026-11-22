@@ -69,20 +69,23 @@ fn snake_words(text: &str) -> BTreeSet<&str> {
 const PROSE: &[&str] = &[
     "a", "an", "and", "as", "at", "binary", "by", "command", "commands", "does", "for", "from",
     "has", "in", "is", "it", "its", "needs", "reads", "takes", "writes", "itself", "of", "on",
-    "or", "runs", "serving", "that", "the", "this", "to", "with",
+    "or", "runs", "serving", "that", "the", "this", "to", "with", "server", "plugin",
 ];
 
 /// A word as a command's: without the quotes and brackets around it, the
 /// punctuation after it or a possessive `'s`.
 fn clean(w: &str) -> &str {
     let w = w.trim_start_matches(['(', '"', '`', '\'']);
-    let w = w.trim_end_matches([',', '.', ';', ':', ')', '"', '`', '\'']);
-    w.strip_suffix("'s").unwrap_or(w)
+    let end = [',', '.', ';', ':', ')', '"', '`', '\''];
+    let w = w.trim_end_matches(end);
+    w.strip_suffix("'s").unwrap_or(w).trim_end_matches(end)
 }
 
-/// Whether a raw word ends the phrase it is in.
+/// Whether a raw word ends the phrase it is in (a closing backtick ends
+/// the command it quotes: "the `gp element` output").
 fn ends_phrase(w: &str) -> bool {
-    w.ends_with([',', '.', ';', ':', ')'])
+    let w = w.strip_suffix("'s").unwrap_or(w);
+    w.ends_with([',', '.', ';', ':', ')', '`'])
 }
 
 fn is_word(w: &str) -> bool {
@@ -278,6 +281,8 @@ mod tests {
         assert!(unknown_commands("the gp this server runs, with gp serve's runner").is_empty());
         assert!(unknown_commands("gp_run runs reads; gp_run mechanic queue with game").is_empty());
         assert!(unknown_commands("gp tool gate --patch FILE -m MESSAGE.").is_empty());
+        assert!(unknown_commands("the shape of the `gp element` output").is_empty());
+        assert!(unknown_commands("`gp element inputs --json`'s `bytes`").is_empty());
         assert_eq!(
             unknown_commands("gp mechanic qeue GAME"),
             ["gp mechanic qeue"]
@@ -381,6 +386,76 @@ mod tests {
         assert!(
             missing.is_empty() && gone.is_empty(),
             "docs/mcp.md's table of the tools: no row for {missing:?}; rows for no tool {gone:?}"
+        );
+    }
+
+    /// The server's prompts are the gp plugin's own files: each command,
+    /// agent and skill in plugin/ is a prompt with the file's text, each
+    /// prompt is a file there, and the instructions name every prompt. So
+    /// Claude Code through the plugin and every other agent through the
+    /// server read the same words.
+    #[test]
+    fn the_prompts_are_the_plugins_files() {
+        let plugin = repo().join("plugin");
+        let mut files = BTreeSet::new();
+        for (dir, inner) in [
+            ("commands", None),
+            ("agents", None),
+            ("skills", Some("SKILL.md")),
+        ] {
+            for e in std::fs::read_dir(plugin.join(dir)).unwrap().flatten() {
+                let p = match inner {
+                    Some(f) => e.path().join(f),
+                    None => e.path(),
+                };
+                if p.extension().is_some_and(|x| x == "md") && p.is_file() {
+                    let rel = p
+                        .strip_prefix(repo())
+                        .unwrap()
+                        .to_string_lossy()
+                        .into_owned();
+                    files.insert(rel.replace('\\', "/"));
+                }
+            }
+        }
+        let prompts: BTreeSet<String> = gp_mcp::prompts::SOURCES
+            .iter()
+            .map(|s| s.path.to_owned())
+            .collect();
+        let missing: Vec<&String> = files.difference(&prompts).collect();
+        let gone: Vec<&String> = prompts.difference(&files).collect();
+        assert!(
+            missing.is_empty() && gone.is_empty(),
+            "the plugin's files with no prompt (add them to crates/gp-mcp/src/prompts.rs SOURCES): {missing:?}; prompts of no file: {gone:?}"
+        );
+        for s in gp_mcp::prompts::SOURCES {
+            let file = std::fs::read_to_string(repo().join(s.path)).unwrap();
+            assert_eq!(
+                file, s.text,
+                "{}: the prompt {} is the file's text",
+                s.path, s.name
+            );
+            assert!(
+                gp_mcp::server::INSTRUCTIONS.contains(s.name),
+                "the server's instructions name the prompt {}",
+                s.name
+            );
+            // The skills are held to it once they name no gone command
+            // (the quest-log row skills-name-gone-commands).
+            if !s.path.starts_with("plugin/skills/") {
+                let bad = unknown_commands(s.text);
+                assert!(
+                    bad.is_empty(),
+                    "{}: gp commands the prompt {} names that gp hasn't: {bad:?}",
+                    s.path,
+                    s.name
+                );
+            }
+        }
+        // The plugin's skills are the repo's (a link to .claude/skills).
+        assert_eq!(
+            plugin.join("skills").canonicalize().unwrap(),
+            repo().join(".claude/skills").canonicalize().unwrap()
         );
     }
 

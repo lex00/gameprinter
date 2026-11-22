@@ -9,21 +9,32 @@
 use std::sync::Arc;
 
 use rmcp::model::{
-    CallToolRequestParams, CallToolResponse, CallToolResult, Implementation,
-    InitializeRequestParams, InitializeResult, ListToolsResult, PaginatedRequestParams,
-    ProgressNotificationParam, ServerCapabilities, ServerConfig, ServerRequest, Tool,
+    CallToolRequestParams, CallToolResponse, CallToolResult, GetPromptRequestParams,
+    GetPromptResponse, GetPromptResult, Implementation, InitializeRequestParams, InitializeResult,
+    ListPromptsResult, ListResourcesResult, ListToolsResult, PaginatedRequestParams,
+    ProgressNotificationParam, ReadResourceRequestParams, ReadResourceResponse, ReadResourceResult,
+    ServerCapabilities, ServerConfig, ServerRequest, Tool,
 };
 use rmcp::service::{PeerRequestOptions, RequestContext};
 use rmcp::{ErrorData, RoleServer, ServerHandler, ServiceExt};
 use serde_json::{Value, json};
 
-use crate::{Config, Reply, elicit, tools};
+use crate::{Config, Reply, elicit, prompts, tools};
+
+/// The prompts' names, for a refusal.
+fn prompt_names() -> String {
+    prompts::SOURCES
+        .iter()
+        .map(|s| s.name)
+        .collect::<Vec<_>>()
+        .join(", ")
+}
 
 /// How often a long tool call reports progress.
 pub const PROGRESS_EVERY: std::time::Duration = std::time::Duration::from_secs(1);
 
 /// What the server tells a client when it connects.
-pub const INSTRUCTIONS: &str = "In Game Printer, a model is a game's rules and numbers as plain text (model.toml), read when the game loads and never compiled, and a template is a game's folder holding a model and nothing from any ROM, ready to copy. What a person makes here plays in a browser with nothing installed; it is never a new ROM. Porting a ROM the person owns is what gp is for, and you start it when they ask (roms add, roms scan, game new): gp reads their ROM on their own machine the way an emulator does, to play it, record clips and read its code; the model is the game's rules and numbers written as text and checked against clips of that ROM; no ROM bytes, art lifted from the ROM or built game go in any repo, commit or release; and the port reads its art and levels from the player's own ROM when it plays, so it plays only for someone who has the ROM. That is not recreating someone else's game. A new game or theme of the person's own is a copy of a template with new art. Some games also have custom code (Rust hooks) for what the model text can't say. Every ported game's folder in the games checkout is a template, and so is each folder under the repo's templates/ (Moss Hop and the games made here). Find a template with registry_search and copy it for the person with template_fork (its reply says whether the copy is ready and, if not, the next step), or start a game from nothing with gp_run running game new NAME with empty true (one stage, a player that walks and jumps, plain pictures, no sound, ready to build; every tool below then names it as a copy), read the copy with surface_describe, change it with model_edit and contract_edit (model paths, docs/formats/model-path.md), replace its art with assets_generate and assets_place, edit a sprite or a level tile with assets_edit (assets_history reads what the person decided on its card; assets_export hands a sprite to their pixel editor), change its music and effects with sound_edit after sound_describe (sound_banks lists what they can play through, sound_preview plays a run with them), try it with run_preview, hold it to its contract with validate, measure and correct a ported game's feel with model_refine (asking the person model_questions), and build it for the browser with build_publish. When the person wants their own registry and page (a theme maker hosting their theme, say), host_your_own walks the road step by step: their repo, the registry in it, their namespace, their theme, the check from outside, the public page with their registry as r= (games still come from the page's own registry; theirs adds themes), and optionally a page of their own; run each step through gp_run and ask before every one that writes to the outside world. When the person points at the screen on their page and says what's wrong, it comes as their turn in the talk of the mechanic open there, with point (the recording, the frame, the box and what is under it): gp mechanic wait GAME (through gp_run) waits for it and gp mechanic show GAME MECHANIC reads it; answer in plain words with gp mechanic say GAME MECHANIC. When the turn asks what something is (point.ask is explain), run the gp element explain call it names (point.explain) through gp_run and answer from its output, saying what it could not determine. Show them what you talk about with screen_show, and find the moment their words name in a recording (the second jump) with moments. To read a ROM's code as it runs, watch_start starts a watch session and watch_events follows it; watch_watch and watch_hook run it again watching addresses or hooking instructions, watch_detail gives a window's instructions, watch_explore searches again, watch_point says what is under a box of the screen and view_now what the person's watch page shows. Every edit is checked and written in canonical form; a refused edit writes nothing. When the loop's runner is on, the loop does the work, and your job is the setup, not the work: run gp loop health through gp_run at the start and after anything changes, and fix each PROBLEM it lists (a gp serve on an old build or down: restart it on the published gp; a stuck row or card: set it from its worker's report; a bug in the loop or the tools: fix it and land it through gp tool gate); put what the person reports into the quest log as a row (gp mechanic queue) instead of doing it yourself, tell them in one line what is on their page, and never do a row's work, raise a row's card or write their games checkout yourself. Without a runner, call next at the start of every conversation and after each step you take, tell the person where things stand and offer its next step in plain words without being asked, start what it marks for the tools yourself, and stop and ask before anything in waits_for_yes, which costs money or makes something public, until the person says yes to that item. While the person plays, call next with wait_s so you hear when they hand you something. The named tools are the short road for common steps; gp_commands lists every other gp command (porting steps such as roms scan, game new, corpus score and progress among them) and gp_run runs any of them. gp_run runs reads and writes to the person's games, copies and home at once, but a change to a file already in their games checkout is put back and held until their yes on its card, and anything that publishes, lands a change, spends money (paid clip agents too) or downloads a lot runs only with the person's yes. While their page is open, gp_run's refusal puts a card with YES and NO on it (ask_id): tell them what it is, wait with next and wait_s until waits_for_yes shows it answered, then call gp_run again with ask_id; a yes runs that exact call once. With no page open, a client that shows forms (MCP elicitation) gets the question from gp_run itself, in the card's own words: the person answers it there, and their answer stands whatever confirmed_by_person says; a client that shows none needs confirmed_by_person, set only after the person said yes to that exact action here. template_fork asks the same way for the path of the person's own ROM when a copy needs one that isn't in their ROM folder.";
+pub const INSTRUCTIONS: &str = "In Game Printer, a model is a game's rules and numbers as plain text (model.toml), read when the game loads and never compiled, and a template is a game's folder holding a model and nothing from any ROM, ready to copy. What a person makes here plays in a browser with nothing installed; it is never a new ROM. Porting a ROM the person owns is what gp is for, and you start it when they ask (roms add, roms scan, game new): gp reads their ROM on their own machine the way an emulator does, to play it, record clips and read its code; the model is the game's rules and numbers written as text and checked against clips of that ROM; no ROM bytes, art lifted from the ROM or built game go in any repo, commit or release; and the port reads its art and levels from the player's own ROM when it plays, so it plays only for someone who has the ROM. That is not recreating someone else's game. A new game or theme of the person's own is a copy of a template with new art. Some games also have custom code (Rust hooks) for what the model text can't say. Every ported game's folder in the games checkout is a template, and so is each folder under the repo's templates/ (Moss Hop and the games made here). Find a template with registry_search and copy it for the person with template_fork (its reply says whether the copy is ready and, if not, the next step), or start a game from nothing with gp_run running game new NAME with empty true (one stage, a player that walks and jumps, plain pictures, no sound, ready to build; every tool below then names it as a copy), read the copy with surface_describe, change it with model_edit and contract_edit (model paths, docs/formats/model-path.md), replace its art with assets_generate and assets_place, edit a sprite or a level tile with assets_edit (assets_history reads what the person decided on its card; assets_export hands a sprite to their pixel editor), change its music and effects with sound_edit after sound_describe (sound_banks lists what they can play through, sound_preview plays a run with them), try it with run_preview, hold it to its contract with validate, measure and correct a ported game's feel with model_refine (asking the person model_questions), and build it for the browser with build_publish. When the person wants their own registry and page (a theme maker hosting their theme, say), host_your_own walks the road step by step: their repo, the registry in it, their namespace, their theme, the check from outside, the public page with their registry as r= (games still come from the page's own registry; theirs adds themes), and optionally a page of their own; run each step through gp_run and ask before every one that writes to the outside world. When the person points at the screen on their page and says what's wrong, it comes as their turn in the talk of the mechanic open there, with point (the recording, the frame, the box and what is under it): gp mechanic wait GAME (through gp_run) waits for it and gp mechanic show GAME MECHANIC reads it; answer in plain words with gp mechanic say GAME MECHANIC. When the turn asks what something is (point.ask is explain), run the gp element explain call it names (point.explain) through gp_run and answer from its output, saying what it could not determine. Show them what you talk about with screen_show, and find the moment their words name in a recording (the second jump) with moments. To read a ROM's code as it runs, watch_start starts a watch session and watch_events follows it; watch_watch and watch_hook run it again watching addresses or hooking instructions, watch_detail gives a window's instructions, watch_explore searches again, watch_point says what is under a box of the screen and view_now what the person's watch page shows. Every edit is checked and written in canonical form; a refused edit writes nothing. When the loop's runner is on, the loop does the work, and your job is the setup, not the work: run gp loop health through gp_run at the start and after anything changes, and fix each PROBLEM it lists (a gp serve on an old build or down: restart it on the published gp; a stuck row or card: set it from its worker's report; a bug in the loop or the tools: fix it and land it through gp tool gate); put what the person reports into the quest log as a row (gp mechanic queue) instead of doing it yourself, tell them in one line what is on their page, and never do a row's work, raise a row's card or write their games checkout yourself. Without a runner, call next at the start of every conversation and after each step you take, tell the person where things stand and offer its next step in plain words without being asked, start what it marks for the tools yourself, and stop and ask before anything in waits_for_yes, which costs money or makes something public, until the person says yes to that item. While the person plays, call next with wait_s so you hear when they hand you something. The named tools are the short road for common steps; gp_commands lists every other gp command (porting steps such as roms scan, game new, corpus score and progress among them) and gp_run runs any of them. gp_run runs reads and writes to the person's games, copies and home at once, but a change to a file already in their games checkout is put back and held until their yes on its card, and anything that publishes, lands a change, spends money (paid clip agents too) or downloads a lot runs only with the person's yes. While their page is open, gp_run's refusal puts a card with YES and NO on it (ask_id): tell them what it is, wait with next and wait_s until waits_for_yes shows it answered, then call gp_run again with ask_id; a yes runs that exact call once. With no page open, a client that shows forms (MCP elicitation) gets the question from gp_run itself, in the card's own words: the person answers it there, and their answer stands whatever confirmed_by_person says; a client that shows none needs confirmed_by_person, set only after the person said yes to that exact action here. template_fork asks the same way for the path of the person's own ROM when a copy needs one that isn't in their ROM folder. Ask the person only about what they judge by watching, with the clip that shows it: gp mechanic queue GAME ROW --status \"asking you\" --note QUESTION --clip N --frames A-B --look THEME puts LOOK AT IT on the row and its card, which sets the original beside the model on their screen, and their yes on a look in the game's own pictures locks it (gp mechanic approve through gp_run when they say yes in other words). Before you stop, look at next's waits_for_yes: a yes the person gave that hasn't run yet, run it with gp_run and its ask_id; a card you raised in the last half hour, wait for with next and wait_s, or tell the person in one line that it is up. A game's folder in the games checkout changes only through gp: the tools on a copy, or a patch made in a worktree of the games repo and landed with gp model gate GAME through gp_run (a change to gameprinter itself with gp tool gate); never edit a file there by hand, since a hand edit lands nowhere and blocks every landing until it is set aside (gp loop health says so). Every agent gets the same words from this server's prompts, also served as resources: port is what to do to start or go on with a port, one step at a time; porter is the brief for one step of it, to hand to a subagent or to follow yourself; element-extraction, level-design and theme-generation are the skills (gp://skills/NAME): read the skill before the work it covers.";
 
 /// The tools as MCP tool definitions.
 pub fn tool_list() -> Vec<Tool> {
@@ -101,9 +112,67 @@ impl ServerHandler for Server {
     }
 
     fn get_info(&self) -> ServerConfig {
-        ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
-            .with_server_info(Implementation::new("game-printer", &*self.version))
-            .with_instructions(INSTRUCTIONS)
+        ServerConfig::new(
+            ServerCapabilities::builder()
+                .enable_tools()
+                .enable_prompts()
+                .enable_resources()
+                .build(),
+        )
+        .with_server_info(Implementation::new("game-printer", &*self.version))
+        .with_instructions(INSTRUCTIONS)
+    }
+
+    async fn list_prompts(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ListPromptsResult, ErrorData> {
+        Ok(serde_json::from_value(prompts::list()).expect("a prompt list"))
+    }
+
+    async fn get_prompt(
+        &self,
+        request: GetPromptRequestParams,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<GetPromptResponse, ErrorData> {
+        let args = request.arguments.unwrap_or_default();
+        let Some(p) = prompts::get(&request.name, &args) else {
+            return Err(ErrorData::invalid_params(
+                format!(
+                    "there's no prompt named `{}`; there are {}",
+                    request.name,
+                    prompt_names()
+                ),
+                None,
+            ));
+        };
+        let r: GetPromptResult = serde_json::from_value(p).expect("a prompt fits the SDK's type");
+        Ok(r.into())
+    }
+
+    async fn list_resources(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ListResourcesResult, ErrorData> {
+        Ok(serde_json::from_value(prompts::resources()).expect("a resource list"))
+    }
+
+    async fn read_resource(
+        &self,
+        request: ReadResourceRequestParams,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ReadResourceResponse, ErrorData> {
+        let Some(r) = prompts::read(&request.uri) else {
+            return Err(ErrorData::resource_not_found(
+                format!("there's no resource `{}`", request.uri),
+                None,
+            ));
+        };
+        let r: ReadResourceResult =
+            serde_json::from_value(r).expect("a resource fits the SDK's type");
+        Ok(r.into())
     }
 
     async fn list_tools(
@@ -254,6 +323,35 @@ pub fn serve_stdio(config: Config, version: &str) -> Result<(), String> {
 #[cfg(test)]
 mod form_tests {
     use super::*;
+
+    /// The prompts and resources fit the SDK's types, as the server sends
+    /// them.
+    #[test]
+    fn the_prompts_and_resources_fit_the_sdk() {
+        let l: ListPromptsResult = serde_json::from_value(prompts::list()).unwrap();
+        assert_eq!(l.prompts.len(), prompts::SOURCES.len());
+        let _: ListResourcesResult = serde_json::from_value(prompts::resources()).unwrap();
+        for s in prompts::SOURCES {
+            let p = prompts::get(s.name, &serde_json::Map::new()).unwrap();
+            let _: GetPromptResult = serde_json::from_value(p).unwrap();
+            let r = prompts::read(s.uri).unwrap();
+            let _: ReadResourceResult = serde_json::from_value(r).unwrap();
+        }
+        let config = Config {
+            gp: "gp".into(),
+            repo: ".".into(),
+            work: "work".into(),
+            home: "home".into(),
+            rom: None,
+            assets: None,
+            games: None,
+            worker_games: None,
+        };
+        let caps = Server::new(config, "0").get_info();
+        let caps = serde_json::to_value(caps).unwrap();
+        assert!(caps["capabilities"]["prompts"].is_object(), "{caps}");
+        assert!(caps["capabilities"]["resources"].is_object(), "{caps}");
+    }
 
     /// A client shows forms when it says so, in form mode or no mode, on a
     /// protocol that lets the server ask; its answer reads as the person's.
