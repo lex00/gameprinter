@@ -242,6 +242,20 @@ pub(crate) fn check(
     out
 }
 
+/// The looks of `now` that `before` hasn't as they are: what a patch to
+/// approved.toml locks anew or again. The gate measures these on the tree
+/// the patch lands on (gate.rs, `free_trial`): on 2026-11-23 the runner
+/// locked a look on a worktree taken before a landing that moved its clip
+/// (games 620441d), its approved.toml took the free lane on top of that
+/// landing (e0d6c3b), and every later gate failed on the lock
+/// (docs/gate.md, "Approved looks").
+pub(crate) fn written(before: &[Look], now: &[Look]) -> Vec<Look> {
+    now.iter()
+        .filter(|l| !before.contains(l))
+        .cloned()
+        .collect()
+}
+
 /// A row's clip as a corpus id: its own id, or clip N of a row once it is
 /// in the corpus as GAME.ROW.NNN.
 fn corpus_id(game: &str, row: &str, clip: &Value, ids: &[String]) -> Result<String> {
@@ -613,6 +627,37 @@ mod tests {
         assert!(w.contains("frame 12's background"), "{w}");
         let w = worse(&l, &[[10, 0, 0], [11, 5, 0]]).unwrap();
         assert!(w.contains("frame 12 isn't compared"), "{w}");
+    }
+
+    #[test]
+    fn a_lock_taken_after_a_landing_that_moves_its_clip_holds_only_with_the_moved_values() {
+        // As on 2026-11-23 (docs/gate.md): the build before the landing
+        // drew frames 83, 84 and 88; the tip draws 81 to 87, further apart.
+        let kept = look();
+        let lock = |apart: Vec<[u64; 3]>| Look {
+            row: "shoved".into(),
+            clip: "rooftop.ending.001".into(),
+            frames: [80, 90],
+            apart,
+            ..look()
+        };
+        let stale = lock(vec![[83, 151, 0], [84, 230, 0], [88, 101, 0]]);
+        let tip: Vec<[u64; 3]> = (81..=87).map(|f| [f, 642 - (f - 81) * 92, 0]).collect();
+        let before = vec![kept.clone()];
+        // Only the look the patch writes is measured; one already locked isn't.
+        let w = written(&before, &[kept.clone(), stale.clone()]);
+        assert_eq!(w, vec![stale.clone()]);
+        assert!(written(&before, &before).is_empty());
+        let why = worse(&w[0], &tip).expect("the stale lock fails on the tip");
+        assert!(
+            why.contains("frame 83's sprites are 458 pixels apart"),
+            "{why}"
+        );
+        // Measured again on the tip, it records the moved values and holds.
+        let moved = lock(tip.clone());
+        let again = written(&[stale], std::slice::from_ref(&moved));
+        assert_eq!(again, vec![moved.clone()]);
+        assert_eq!(worse(&moved, &tip), None);
     }
 
     #[test]

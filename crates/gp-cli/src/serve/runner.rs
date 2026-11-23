@@ -1356,12 +1356,36 @@ fn settle_saved_rows(home: &Path, games: &Path, now: u64) -> Vec<String> {
     out
 }
 
+/// How many times a lock is measured on a new tip when the tip moved under
+/// it, before it waits and is tried again later.
+const LOCK_TIP_TRIES: usize = 3;
+
 /// `gp mechanic approve GAME ROW` on a worktree of the games tip, and its
-/// approved.toml landed through the model gate.
+/// approved.toml landed through the model gate. A tip that moved while it
+/// measured (another landing, the gate's [`crate::gate::STALE_LOCK`]) has
+/// it measured again on the new tip: on 2026-11-23 a lock measured on the
+/// build before games 620441d landed on top of it, and every later gate
+/// failed on it.
 fn lock_look(ctx: &Ctx, game: &str, row: &str) -> Locked {
+    let _one = ONE.lock().unwrap_or_else(|e| e.into_inner());
+    let mut out = Locked::No("not tried".to_owned());
+    for _ in 0..LOCK_TIP_TRIES {
+        out = lock_look_once(ctx, game, row);
+        match &out {
+            Locked::No(why) if why.contains(crate::gate::STALE_LOCK) => {}
+            _ => return out,
+        }
+    }
+    match out {
+        Locked::No(why) => Locked::Wait(why),
+        o => o,
+    }
+}
+
+/// One try of [`lock_look`].
+fn lock_look_once(ctx: &Ctx, game: &str, row: &str) -> Locked {
     let home = &ctx.paths.home;
     let gp = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("gp"));
-    let _one = ONE.lock().unwrap_or_else(|e| e.into_inner());
     let locks = loop_state::loop_dir(home).join("locks");
     let wt = locks.join(format!("{game}-{row}"));
     let patch = locks.join(format!("{game}-{row}.patch"));
@@ -1394,6 +1418,7 @@ fn approve_and_gate(
     patch: &Path,
 ) -> Locked {
     let (home, games) = (&ctx.paths.home, &ctx.games);
+    let at = crate::gate::git(wt, &["rev-parse", "HEAD"]).unwrap_or_default();
     let o = Command::new(gp)
         .args(["--json", "mechanic", "approve", game, row, "--games"])
         .arg(wt)
@@ -1442,6 +1467,20 @@ fn approve_and_gate(
             n,
             landed: false,
         };
+    }
+    // The game changed on the tip while it was measured: measure it again
+    // there (lock_look) rather than land a lock of the build before.
+    let tip = crate::gate::git(games, &["rev-parse", "HEAD"]).unwrap_or_default();
+    let at = at.trim();
+    if !at.is_empty() && tip.trim() != at {
+        let range = format!("{at}..{}", tip.trim());
+        let moved = crate::gate::git(games, &["diff", "--name-only", &range, "--", &folder]);
+        if moved.is_ok_and(|m| !m.trim().is_empty()) {
+            return Locked::No(format!(
+                "{}: {game} changed on the games tip while it was measured",
+                crate::gate::STALE_LOCK
+            ));
+        }
     }
     if let Err(e) = fs::write(patch, format!("{diff}\n")) {
         return Locked::No(format!("the patch couldn't be written: {e}"));

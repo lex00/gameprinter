@@ -1436,17 +1436,31 @@ struct AtTip<'a> {
     rom: &'a [u8],
 }
 
+/// What a free patch's lock that the tree it lands on already draws worse
+/// fails with: it was measured on another build (the runner's lock retries
+/// on these words, serve/runner.rs `lock_look`).
+pub(crate) const STALE_LOCK: &str = "a look this patch locks isn't what this tip draws";
+
 /// A try of patches no score reads: applied and committed through the
-/// hook, and nothing else; the corpus keeps its rows.
+/// hook; the corpus keeps its rows. The looks they lock anew or again
+/// (crate::approved::written) are measured on the tree they leave, and one
+/// it already draws worse fails them ([`STALE_LOCK`]).
 fn free_trial(
     c: &Ctx,
     a: &GateArgs,
     items: &[Item],
     base: &State,
     set: &[usize],
+    rom: &[u8],
     lines: &mut Vec<String>,
 ) -> Result<Tried> {
     checkout(&c.repo, &c.tree, &base.commit)?;
+    let rel = c.rel.to_string_lossy().into_owned();
+    let file = format!("{rel}/{}", crate::approved::FILE);
+    let before = git(&c.tree, &["show", &format!("HEAD:{file}")])
+        .ok()
+        .and_then(|t| crate::approved::parse(&t).ok())
+        .unwrap_or_default();
     let (commits, _) = match apply_items(c, a, items, set, lines)? {
         Ok(x) => x,
         Err((i, f)) => return Ok(Tried::Item(i, f)),
@@ -1455,6 +1469,44 @@ fn free_trial(
         "{}: no score reads them; the hook passes",
         what_of(set)
     ));
+    let fail = |why: String, phase: &'static str| Ok(Tried::Fail(Failed { why, phase }));
+    let game = c.tree.join(&c.rel);
+    let now = match fs::read_to_string(c.tree.join(&file)) {
+        Ok(t) => match crate::approved::parse(&t) {
+            Ok(l) => l,
+            Err(why) => return fail(why, "approved"),
+        },
+        Err(_) => Vec::new(),
+    };
+    let written = crate::approved::written(&before, &now);
+    if !written.is_empty() {
+        let module = match module_at(c, &game, lines) {
+            Ok(m) => m,
+            Err(e) => return fail(format!("{e:#}"), "module"),
+        };
+        let assets = assets_for(c, &game, rom)?;
+        let worse = crate::approved::check(
+            &c.paths,
+            &game,
+            module.as_deref(),
+            Some(assets.as_path()),
+            &c.run,
+            &written,
+        );
+        if let Some(w) = worse.first() {
+            return fail(
+                format!(
+                    "{STALE_LOCK}, so it was measured on another build; measure it again on this tip: {w}"
+                ),
+                "approved",
+            );
+        }
+        lines.push(format!(
+            "{}: the {} looks it locks are drawn so on this tip",
+            what_of(set),
+            written.len()
+        ));
+    }
     let mut all = base.commits.clone();
     all.extend(commits);
     Ok(Tried::Pass(State {
@@ -1947,7 +1999,7 @@ fn gate_batch(c: &Ctx, a: &GateArgs, items: &[Item], rom: &[u8]) -> Result<Vec<O
             remeasured: false,
         };
         let mut free_try =
-            |b: &State, set: &[usize], l: &mut Vec<String>| free_trial(c, a, items, b, set, l);
+            |b: &State, set: &[usize], l: &mut Vec<String>| free_trial(c, a, items, b, set, rom, l);
         let mid = settle(
             &start,
             &free,

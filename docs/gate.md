@@ -63,6 +63,8 @@ apart = [
 
 The gate plays each locked clip again on every change, whatever the patch touches, and fails it (phase `approved`) when a locked frame is further apart from the original on either layer than when approved, or isn't compared any more. Closer passes. No tolerance moves a lock; the owner's yes again (`gp mechanic approve` once more, which replaces the row's lock) does, and the file is read as the patch leaves it, so a patch that edits a lock shows it in its diff. Only the game's own look is locked yet: a theme's look is refused.
 
+A patch of `approved.toml` alone scores nothing, but the looks it adds or changes are played on the tree it lands on, and one that tree already draws further apart fails it (phase `approved`, "a look this patch locks isn't what this tip draws"): it was measured on another build. On 2026-11-23 gp serve's runner locked a Tapper look on a worktree of the tip taken before a landing that moved its clip (games 620441d); its lock landed on top of that landing (e0d6c3b) and every later gate failed on it. The runner's lock now measures again on the new tip, up to three times, when the game changed on the tip while it measured or the gate says so, and otherwise waits and tries again two minutes later.
+
 ### Clips go in on their own
 
 `gp model gate GAME --import` takes the clips the mechanic sessions have that the corpus hasn't into the corpus through the gate, and needs no yes from a tool (gp_run): a clip only added changes nothing already held, and the gate fails the import if any clip scores worse. With `--replaces` or `--removes` it changes clips already there and asks, as before.
@@ -215,7 +217,7 @@ Each model gate run says how many scoring passes it made: `counts.scores` in its
 
 | The patch | Scoring passes |
 |---|---|
-| Changes only Markdown, the game's `approved.toml` or its `scoreboard.toml` | 0 |
+| Changes only Markdown, the game's `approved.toml` or its `scoreboard.toml` | 0 (the looks it locks are played, not scored) |
 | Lands after its own dry run passed on the same tip with the same kit | 0 |
 | Was made on cards not landed (`--after`), and those cards have landed since | 0 |
 | Anything else | the tip's and the patch's |
