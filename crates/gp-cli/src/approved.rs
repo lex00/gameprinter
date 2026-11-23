@@ -203,14 +203,34 @@ pub(crate) fn check(
     run: &str,
     looks: &[Look],
 ) -> Vec<String> {
-    let mut by: BTreeMap<&str, std::result::Result<Apart, String>> = BTreeMap::new();
+    // Each locked clip is measured once, the clips side by side on the
+    // helper threads (crate::pool): one after another on one core, 16 clips
+    // took four and a half minutes of every gate run, and every lock adds
+    // a clip.
+    let mut clips: Vec<&str> = looks.iter().map(|l| l.clip.as_str()).collect();
+    clips.sort_unstable();
+    clips.dedup();
+    let t = std::time::Instant::now();
+    let measured = crate::pool::map(
+        &clips,
+        || (),
+        |(), _, clip| measure(paths, game, module, assets, run, clip).map_err(|e| format!("{e:#}")),
+        &mut |_| {},
+    );
+    crate::gate_hold::step(
+        "locked looks",
+        t.elapsed().as_secs_f64(),
+        measured.iter().all(Result::is_ok),
+        serde_json::json!({"clips": clips.len(), "looks": looks.len()}),
+    );
+    let mut by: BTreeMap<&str, std::result::Result<Apart, String>> =
+        clips.iter().copied().zip(measured).collect();
     let mut out = Vec::new();
     for l in looks {
         let clip = l.clip.as_str();
-        let now = by.entry(clip).or_insert_with(|| {
-            let m = measure(paths, game, module, assets, run, clip);
-            m.map_err(|e| format!("{e:#}"))
-        });
+        let now = by
+            .entry(clip)
+            .or_insert_with(|| Err("its clip wasn't measured".to_owned()));
         let row = &l.row;
         match now {
             Ok(a) => out.extend(worse(l, a)),
