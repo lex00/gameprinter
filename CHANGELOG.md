@@ -2,6 +2,18 @@
 
 Each release of gp has a section here, `## gp VERSION` (a date may follow), and its GitHub release's notes are that section. A release is refused before it is cut when its section is missing ([docs/release.md](docs/release.md)). Add the next one in a commit to main before `just release`.
 
+## gp 0.1.4
+
+The Intel Mac archive is back. It is built on the Apple silicon runner and checked there under Rosetta, so it no longer makes the release wait on the slow Intel runner. With Homebrew, `brew install lex00/tap/gp` works on an Intel Mac again.
+
+Each release build prints how long every step took, in its log and its summary.
+
+The release's build job now fails when `gp self check` skips a step, where before it passed. `just release-check ARCHIVE` runs the same check of a built archive on your own machine, and `just release-plan` prints its plan on a workstation.
+
+A worker can't mark a row whose look you confirmed as done until the look is saved, so the page no longer says "Locked" when the save failed.
+
+Windows builds are still to come.
+
 ## gp 0.1.3
 
 Fixed: on an installed gp with no source checkout, `gp model gate` failed before any check, because `gp game kit` looked for files on the machine that built the release (issue 46). The kit is now made from the copy gp carries. `gp self check` uses what it carries (the kit, a module build, the page's files, the templates, the page's server) where it used to only count the files, and the release's own check runs it with the source moved away.

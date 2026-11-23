@@ -10,7 +10,8 @@
 # x86_64-pc-windows-msvc. The default is $GP_RELEASE_TARGET, else this
 # machine's. Building for another system needs that system's linker, so the
 # release workflow builds each on its own runner (scripts/release/
-# chant-build.sh, chant.config.ts). On Windows it runs in Git Bash (the
+# chant-build.sh, chant.config.ts); a Mac's linker makes both Mac targets,
+# so x86_64-apple-darwin is built on Apple silicon. On Windows it runs in Git Bash (the
 # shell GitHub's Windows runners have). `just release-build OUT` runs it.
 #
 # OUT gets:

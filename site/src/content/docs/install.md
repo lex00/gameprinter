@@ -50,11 +50,12 @@ A [release](https://github.com/lex00/gameprinter/releases) has an archive for ea
 | Machine | Archive |
 |---|---|
 | Mac with Apple silicon (M1 and later) | `gp-aarch64-apple-darwin.tar.gz` |
+| Mac with an Intel processor | `gp-x86_64-apple-darwin.tar.gz` |
 | Linux on an Intel or AMD 64-bit processor | `gp-x86_64-unknown-linux-gnu.tar.gz` |
 | Linux on a 64-bit ARM processor | `gp-aarch64-unknown-linux-gnu.tar.gz` |
 | Windows 10 or 11, 64-bit Intel or AMD | `gp-x86_64-pc-windows-msvc.zip` |
 
-The first two releases, from before these names, have only the Apple silicon Mac archive, named `gp-VERSION-COMMIT-aarch64-apple-darwin.tar.gz` with its own `.sha256` file; for one of those on another machine, or for any release after 0.1.2 on a Mac with an Intel processor, [build it from source](#build-it-from-source). The Linux builds are made on Ubuntu 24.04 and may not start on an older Linux (one with a glibc before 2.39). Run `uname -m` to see which Linux build you need: it prints `x86_64` or `aarch64`.
+The first two releases, from before these names, have only the Apple silicon Mac archive, named `gp-VERSION-COMMIT-aarch64-apple-darwin.tar.gz` with its own `.sha256` file; for one of those on another machine, [build it from source](#build-it-from-source). The Linux builds are made on Ubuntu 24.04 and may not start on an older Linux (one with a glibc before 2.39). Run `uname -m` to see which Linux build you need: it prints `x86_64` or `aarch64`.
 
 ### With Homebrew
 
@@ -63,11 +64,11 @@ brew install lex00/tap/gp
 gp --version
 ```
 
-Homebrew installs it on a Mac or on Linux, checks the archive's checksum for you, and puts `gp` at `/opt/homebrew/bin/gp` on an Apple silicon Mac (`/home/linuxbrew/.linuxbrew/bin/gp` on Linux), which is the path you'll give an agent below. `brew upgrade gp` gets a newer release. The rest of this section does the same install by hand.
+Homebrew installs it on a Mac or on Linux, checks the archive's checksum for you, and puts `gp` at `/opt/homebrew/bin/gp` on an Apple silicon Mac (`/usr/local/bin/gp` on an Intel one, `/home/linuxbrew/.linuxbrew/bin/gp` on Linux), which is the path you'll give an agent below. `brew upgrade gp` gets a newer release. The rest of this section does the same install by hand.
 
 ### By hand, on a Mac
 
-Download the archive, `gp-aarch64-apple-darwin.tar.gz`, and `SHA256SUMS` into the same folder, then in Terminal, in that folder:
+Download the archive, `gp-aarch64-apple-darwin.tar.gz` (`gp-x86_64-apple-darwin.tar.gz` on an Intel Mac), and `SHA256SUMS` into the same folder, then in Terminal, in that folder:
 
 ```sh
 shasum -a 256 -c --ignore-missing SHA256SUMS

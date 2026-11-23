@@ -44,10 +44,20 @@ build:
 # (scripts/release/build.sh; site/src/content/docs/install.md). PAGE is the
 # built public page to carry, default the newest that passed the release
 # check. Another system's target needs its linker, so the release workflow
-# builds each on its own runner. Publishes nothing: no tag, no upload, no push.
+# builds each on its own runner, except the Intel Mac's, which an Apple
+# silicon Mac builds too. Publishes nothing: no tag, no upload, no push.
 #   just release-build OUT [--target TARGET] [PAGE]
 release-build OUT *ARGS:
     scripts/release/build.sh {{quote(OUT)}} {{ARGS}}
+
+# The release job's check of an archive, run on this machine
+# (scripts/release/check-archive.sh): unpacked in an empty home with this
+# checkout hidden, gp --version, gp self check --as-installed and gp game
+# kit. An Intel Mac archive on an Apple silicon Mac runs under Rosetta.
+# VERSION, given, is what gp --version must say.
+#   just release-check OUT/gp-VERSION-COMMIT-TARGET.tar.gz [--version VERSION]
+release-check ARCHIVE *ARGS:
+    bash scripts/release/check-archive.sh {{quote(ARCHIVE)}} {{ARGS}}
 
 # Start a release of gp (chant.config.ts, docs/release.md): dispatch
 # .github/workflows/release.yml from main. It takes main's head once its

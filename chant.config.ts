@@ -24,9 +24,11 @@ import { existsSync } from "node:fs";
 // The Rust target each runner builds, named as the release's asset.
 const builds = [
   { name: "darwin-arm64", runner: "macos-15", target: "aarch64-apple-darwin" },
-  // No Intel Mac build for now (the owner, 2026-11-22): its runner,
-  // macos-15-intel, took 48 minutes where the others take about 20, and the
-  // release waits for every build. Build gp from source there.
+  // The Intel Mac's gp is cross-compiled on an Apple silicon runner and
+  // checked there under Rosetta (scripts/release/check-archive.sh): its own
+  // runner, macos-15-intel, took 48 minutes where the others take about 20,
+  // and the release waits for every build (issue 47).
+  { name: "darwin-amd64", runner: "macos-15", target: "x86_64-apple-darwin" },
   { name: "linux-amd64", runner: "ubuntu-24.04", target: "x86_64-unknown-linux-gnu" },
   { name: "linux-arm64", runner: "ubuntu-24.04-arm", target: "aarch64-unknown-linux-gnu" },
   // Windows waits on chant loading chant.config.ts from a Windows path
@@ -38,7 +40,12 @@ const builds = [
   build: `bash scripts/release/chant-build.sh ${target}`,
   outputs: [`dist/gp-${target}.${target.includes("windows") ? "zip" : "tar.gz"}`],
   // The runner's own rustup installs rust-toolchain.toml's Rust
-  // (chant-build.sh); Node builds the editor.
+  // (chant-build.sh); Node builds the editor. Nothing is cached between
+  // runs: chant's build jobs have no cache step and set up every toolchain
+  // with caching off ("a release build starts from the commit and the
+  // toolchain, not from a cache an earlier run could have written"), and a
+  // run step can't reach the Actions cache. chant-build.sh prints each
+  // step's time instead, so a slow step shows in the job's log.
   toolchains: [{ name: "node", version: "24.13.1" }],
 }));
 
