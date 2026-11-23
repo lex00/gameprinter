@@ -8,7 +8,7 @@
     {
       "name": "gp",
       "source": "./plugin",
-      "version": "0.1.2",
+      "version": "0.1.3",
       "description": "The gp MCP server, the skills, a porter subagent, /gp:port and the loop's hooks, the same for everyone who ports a ROM."
     }
   ]
