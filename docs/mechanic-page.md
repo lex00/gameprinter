@@ -679,3 +679,21 @@ minute later.
 | `GET /api/screen/work-clip?id=ID` | A corpus clip's play from power-on, its start and length, for the screen to follow a refine on it |
 | `GET /api/paths/SHA` | A stored path's log, for PLAY FROM HERE |
 | `POST /api/confirm` | `{mechanic}`: CONFIRM, the owner's yes to a row's look in the game's own pictures, which gp serve's runner locks |
+
+## The controls' timing
+
+The screen keeps every change of the keys and the gamepad with the time it happened (`mechanic/input-timeline.js`), and each game frame reads the buttons at its own time. Before, the page read the controls once for each game frame it stepped, at whatever moment the browser ran the step. A late browser frame steps up to four game frames at once, and all four read the same buttons, so a short press counted as four frames or a release was seen four frames late. A press and release between two steps was never seen. The gamepad, which a page can only poll, was read no oftener than the screen was drawn.
+
+A game still reads its controls once a frame, as the machine did: at 30 frames a second a pull of 150 ms is 4 frames or 5 by where it starts. That is the original's own timing and stays.
+
+CONTROLS' TIMING under the screens has three settings, kept in the browser, since controllers differ:
+
+| Setting | What it does | Default |
+|---|---|---|
+| HOLD ASSIST | How long a press is held on after you let go. A pull that fell a little short of what the game asks then counts. 0 is the original's timing | 0 ms |
+| READ AHEAD | How far past a game frame's own time its reading may look, never past now. More answers sooner | 8 ms |
+| GAMEPAD READ EVERY | How often the gamepad is polled | 4 ms |
+
+The box says how the last press was read: the ms it was held and the frames that read it. `?assist=`, `?lead=` and `?poll=` in the page's address set them for one visit. `node --test mechanic/input-timeline.test.mjs` checks the rules (cargo test runs it).
+
+Not done yet: the editor's free play (`editor/src/FreePlay.tsx`, `Scenarios.tsx`) and the public page's player (`scripts/web/page/preview.js`) still read the controls once a step.

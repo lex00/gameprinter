@@ -47,6 +47,7 @@
 // shown gives the model its draws, kept or recorded again from its replay.
 
 import { NesPlayer } from "./nesplayer.js";
+import { InputTimeline, settings as inputSettings } from "./input-timeline.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -318,6 +319,58 @@ function padNow() {
   if (LAYOUT.keys2.length) p2 |= gamepadBits(secondPad());
   return p1 | (p2 << 8);
 }
+// The controls' timing (input-timeline.js): every change of the keys and
+// the gamepad is kept with its time, and each game frame reads the buttons
+// at its own time. The settings are the person's, kept in this browser.
+const INPUT_KEY = "gp-input";
+function savedInput() {
+  let saved = null;
+  try { saved = JSON.parse(localStorage.getItem(INPUT_KEY) ?? "null"); } catch (e) { /* none kept */ }
+  const q = new URLSearchParams(location.search);
+  const over = {};
+  for (const [param, key] of [["lead", "leadMs"], ["assist", "assistMs"], ["poll", "pollMs"]]) if (q.has(param)) over[key] = q.get(param);
+  return inputSettings({ ...(saved ?? {}), ...over });
+}
+const timeline = new InputTimeline(savedInput());
+/** The controls changed, or may have: the timeline hears what they are at
+ * time `t`. */
+function noteInput(t) { timeline.set(padNow(), t); }
+let padPoll = 0;
+/** A gamepad can only be polled: this does, every pollMs. */
+function pollPads() {
+  clearInterval(padPoll);
+  padPoll = setInterval(() => noteInput(performance.now()), timeline.opts.pollMs);
+}
+/** The CONTROLS' TIMING box under the screens: the three settings, and how
+ * the last press was read. */
+function wireInput() {
+  const box = $("input-set");
+  if (!box) return;
+  const fields = { leadMs: $("input-lead"), assistMs: $("input-assist"), pollMs: $("input-poll") };
+  for (const [k, el] of Object.entries(fields)) {
+    if (!el) continue;
+    el.value = String(timeline.opts[k]);
+    el.addEventListener("change", () => {
+      timeline.opts = inputSettings({ ...timeline.opts, [k]: el.value });
+      el.value = String(timeline.opts[k]);
+      try { localStorage.setItem(INPUT_KEY, JSON.stringify(timeline.opts)); } catch (e) { /* not kept */ }
+      pollPads();
+    });
+    // A setting's box takes the keys typed in it, not the game.
+    el.addEventListener("keydown", (ev) => ev.stopPropagation());
+  }
+  pollPads();
+}
+let inputShown = "";
+/** Says how the last press was read, when it changed. */
+function showLastPress() {
+  const el = $("input-last");
+  const p = timeline.lastPress();
+  if (!el || !p) return;
+  const says = `Last press: held ${p.ms} ms, read for ${p.frames} ${p.frames === 1 ? "frame" : "frames"} (a frame is ${Math.round(1000 / FPS)} ms).`;
+  if (says !== inputShown) { inputShown = says; el.textContent = says; }
+}
+
 /** A pad as a frames file's line (app.js's framesLine). */
 function framesLine(p) {
   const hex = (b) => b.toString(16).padStart(2, "0");
@@ -2914,9 +2967,13 @@ function frame(now) {
       acc -= 1000 / FPS;
       if (mode === "live" && show.view === "solo") {
         // The model alone takes every frame; the original holds.
-        if (model.on && model.free) model.queue.push(padNow());
+        const pad = timeline.take(now - acc, performance.now());
+        if (model.on && model.free) model.queue.push(pad);
       } else if (mode === "live") {
-        const pad = padNow();
+        // The buttons at this game frame's own time, not at whatever
+        // moment the browser ran it: a late frame's catch-up steps each
+        // read their own.
+        const pad = timeline.take(now - acc, performance.now());
         if (pad) lastPlay = now;
         // The model takes the frames the original read the pad on; while
         // it starts they wait in the queue. Their draws go with them.
@@ -2945,6 +3002,7 @@ function frame(now) {
     const have = grabModel();
     drawPair(have);
     usualLine();
+    showLastPress();
     document.body.dataset.frame = String(mode === "live" ? player.frame(0) : clip?.f ?? 0);
     document.body.dataset.model = model.on ? "on" : "off";
   } catch (e) {
@@ -2993,8 +3051,10 @@ window.addEventListener("keydown", (e) => {
   if (LAYOUT.keys.flat().includes(e.code) || LAYOUT.keys2.flat().includes(e.code)) e.preventDefault();
   down.add(e.code);
 }, { capture: true });
-window.addEventListener("keyup", (e) => down.delete(e.code));
-window.addEventListener("blur", () => down.clear());
+window.addEventListener("keyup", (e) => { down.delete(e.code); noteInput(e.timeStamp); });
+window.addEventListener("blur", () => { down.clear(); noteInput(performance.now()); });
+// After the handler above has set the keys that are down, in the same turn.
+window.addEventListener("keydown", (e) => noteInput(e.timeStamp));
 
 function wire() {
   for (const b of document.querySelectorAll("#views button")) {
@@ -3075,6 +3135,7 @@ async function main() {
   $("model-frame").style.width = `${W}px`;
   $("model-frame").style.height = `${H}px`;
   $("keys").textContent = LAYOUT.footer;
+  wireInput();
   session = await api("api/session").catch(() => null);
   // The set the page plays live; a clip plays on its own (romFor).
   const sets = await api("api/rom").catch(() => null);

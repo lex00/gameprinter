@@ -2766,6 +2766,29 @@ mod tests {
         }
     }
 
+    /// The controls' timing (mechanic/input-timeline.test.mjs): a late
+    /// browser frame doesn't stretch a press, a quick tap is read once, the
+    /// same pull reads the same whatever the browser's phase. Skipped where
+    /// there is no node.
+    #[test]
+    fn the_page_reads_a_press_at_its_own_time() {
+        let test =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../mechanic/input-timeline.test.mjs");
+        match std::process::Command::new("node")
+            .arg("--test")
+            .arg(&test)
+            .output()
+        {
+            Ok(o) => assert!(
+                o.status.success(),
+                "{}{}",
+                String::from_utf8_lossy(&o.stdout),
+                String::from_utf8_lossy(&o.stderr)
+            ),
+            Err(_) => eprintln!("skipped: no node"),
+        }
+    }
+
     /// With no mechanic named, the one open last, else the first row not
     /// done.
     #[test]

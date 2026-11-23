@@ -71,6 +71,16 @@
     </div>
     <p id="line" aria-live="polite"></p>
     <p id="keys"></p>
+    <!-- The controls' timing (input-timeline.js): how the page reads the
+         keys and the gamepad, which the person can set, since controllers
+         differ, and how their last press was read. -->
+    <details id="input-set">
+      <summary>CONTROLS' TIMING</summary>
+      <p id="input-last">Press a button to see how it was read.</p>
+      <label title="How long a press is held on after you let go, in ms. A pull that fell a little short of what the game asks then counts. 0 is the original's own timing.">HOLD ASSIST <input type="number" id="input-assist" min="0" max="100" step="1"> ms</label>
+      <label title="How far past a game frame's own time its reading may look, in ms. More answers sooner; 0 reads exactly at the frame's time.">READ AHEAD <input type="number" id="input-lead" min="0" max="50" step="1"> ms</label>
+      <label title="How often the gamepad is read, in ms. A page can only poll a gamepad; a smaller number catches a quick pull sooner.">GAMEPAD READ EVERY <input type="number" id="input-poll" min="1" max="16" step="1"> ms</label>
+    </details>
     <!-- The page shows three things (owner, page-minimal): the screens; YOUR
          TURN, only what the person can act on (cards, questions, clips to
          judge), each with its clip and its button, or NOTHING NEEDS YOU on
