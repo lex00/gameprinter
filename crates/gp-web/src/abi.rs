@@ -87,11 +87,45 @@ thread_local! {
     static SESSIONS: std::cell::RefCell<crate::rt::Sessions> = std::cell::RefCell::default();
 }
 
+/// The words of the module's last panic, kept by [`keep_panics`]'s hook.
+/// A panic in the browser module aborts, which reaches the host as a bare
+/// `unreachable` trap; the host asks [`gp_panic`] for what it said.
+static PANIC: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
+
+/// Sets the hook that keeps each panic's words in [`PANIC`], once.
+fn keep_panics() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        std::panic::set_hook(Box::new(|info| {
+            if let Ok(mut p) = PANIC.lock() {
+                // `panicked at FILE:LINE:COL:` then the message on a line
+                // of its own: one line, for the page.
+                *p = info.to_string().replace('\n', " ");
+            }
+        }));
+    });
+}
+
+/// The last panic's words in the output buffer, as `panicked at FILE:LINE:COL:
+/// MESSAGE`, taken so a later trap doesn't give them again; returns their
+/// length, 0 when the module hasn't panicked since. The host calls it after
+/// a call trapped.
+#[unsafe(no_mangle)]
+pub extern "C" fn gp_panic() -> i32 {
+    let words = PANIC
+        .lock()
+        .map(|mut p| std::mem::take(&mut *p))
+        .unwrap_or_default();
+    set_out(words.as_bytes());
+    words.len() as i32
+}
+
 /// One runtime protocol call from `gp`'s host: an op number and its bytes
 /// (`gp_runtime::wire`). 0 with the answer in the output buffer, 1 with the
 /// error's words there.
 #[unsafe(no_mangle)]
 pub extern "C" fn gp_rt(op: u32, ptr: *mut u8, len: usize) -> i32 {
+    keep_panics();
     let bytes = input(ptr, len);
     let mut w = gp_runtime::wire::Writer::default();
     match SESSIONS.with(|s| s.borrow_mut().call(op, &bytes, &mut w)) {

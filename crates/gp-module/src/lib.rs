@@ -58,6 +58,9 @@ struct Host {
     out_ptr: TypedFunc<(), u32>,
     out_len: TypedFunc<(), u32>,
     rt: TypedFunc<(u32, u32, u32), i32>,
+    /// The words of the module's last panic (`gp_panic`), in a module
+    /// built from 2026-11-23 on.
+    panic: Option<TypedFunc<(), i32>>,
 }
 
 /// A game's module, compiled once: each [`ModuleCode::load`] is a fresh
@@ -136,6 +139,7 @@ impl Host {
             out_ptr: func!("gp_out_ptr"),
             out_len: func!("gp_out_len"),
             rt: func!("gp_rt"),
+            panic: instance.get_typed_func(&mut store, "gp_panic").ok(),
             memory,
             store,
         })
@@ -144,38 +148,72 @@ impl Host {
     /// `ticks` is the call's deadline. An error says what limit stopped it.
     fn call(&mut self, op: u32, input: &[u8], ticks: u64) -> Result<Vec<u8>, String> {
         self.store.set_epoch_deadline(ticks);
-        let stopped = |e: wasmtime::Error| {
-            if matches!(
-                e.downcast_ref::<wasmtime::Trap>(),
-                Some(wasmtime::Trap::Interrupt)
-            ) {
-                format!(
-                    "the game's module stopped: it ran past its deadline of {} ms",
-                    ticks * TICK_MS
-                )
-            } else {
-                format!("the game's module stopped: {e:#}")
-            }
-        };
         let len = u32::try_from(input.len()).map_err(|_| "a call of more than 4 GB")?;
-        let p = self.alloc.call(&mut self.store, len).map_err(stopped)?;
+        let p = match self.alloc.call(&mut self.store, len) {
+            Ok(p) => p,
+            Err(e) => return Err(self.stopped(&e, ticks)),
+        };
         self.memory
             .write(&mut self.store, p as usize, input)
             .map_err(|e| e.to_string())?;
-        let code = self
-            .rt
-            .call(&mut self.store, (op, p, len))
-            .map_err(stopped)?;
-        let ptr = self.out_ptr.call(&mut self.store, ()).map_err(stopped)? as usize;
-        let n = self.out_len.call(&mut self.store, ()).map_err(stopped)? as usize;
-        let mut out = vec![0; n];
-        self.memory
-            .read(&self.store, ptr, &mut out)
-            .map_err(|e| e.to_string())?;
+        let code = match self.rt.call(&mut self.store, (op, p, len)) {
+            Ok(c) => c,
+            Err(e) => return Err(self.stopped(&e, ticks)),
+        };
+        let out = match self.out() {
+            Ok(o) => o,
+            Err(e) => return Err(self.stopped(&e, ticks)),
+        };
         if code != 0 {
             return Err(String::from_utf8_lossy(&out).into_owned());
         }
         Ok(out)
+    }
+
+    /// The output buffer's bytes.
+    fn out(&mut self) -> wasmtime::Result<Vec<u8>> {
+        let ptr = self.out_ptr.call(&mut self.store, ())? as usize;
+        let n = self.out_len.call(&mut self.store, ())? as usize;
+        let mut out = vec![0; n];
+        self.memory.read(&self.store, ptr, &mut out)?;
+        Ok(out)
+    }
+
+    /// What stopped a call, its cause first: the deadline, the module's
+    /// panic in its own words (`gp_panic`), else the trap. The wasm
+    /// backtrace comes last: the page shows a message's first 160
+    /// characters, and until 2026-11-23 those were the backtrace's, of a
+    /// stripped module's unnamed functions, so the cause never showed.
+    fn stopped(&mut self, e: &wasmtime::Error, ticks: u64) -> String {
+        let trap = e.downcast_ref::<wasmtime::Trap>();
+        if matches!(trap, Some(wasmtime::Trap::Interrupt)) {
+            return format!(
+                "the game's module stopped: it ran past its deadline of {} ms",
+                ticks * TICK_MS
+            );
+        }
+        let said = self.panic_words();
+        let cause = match (&said, trap) {
+            (Some(p), _) => p.clone(),
+            (None, Some(t)) => t.to_string(),
+            (None, None) => e.root_cause().to_string(),
+        };
+        match e.downcast_ref::<wasmtime::WasmBacktrace>() {
+            Some(bt) => format!("the game's module stopped: {cause}\n{bt}"),
+            None => format!("the game's module stopped: {cause}"),
+        }
+    }
+
+    /// The module's last panic's words, when it has `gp_panic` and panicked.
+    fn panic_words(&mut self) -> Option<String> {
+        self.store.set_epoch_deadline(CALL_TICKS);
+        let f = self.panic.clone()?;
+        let n = f.call(&mut self.store, ()).ok()?;
+        if n <= 0 {
+            return None;
+        }
+        let out = self.out().ok()?;
+        Some(String::from_utf8_lossy(&out).trim().to_owned()).filter(|s| !s.is_empty())
     }
 }
 
@@ -709,6 +747,52 @@ mod tests {
         assert!(answers_query_values(gp_runtime::GAME_WIT_PACKAGE));
         assert!(!answers_query_values("game-printer:runtime@0.4.0"));
         assert!(!answers_query_values(""));
+    }
+
+    /// A trap's message starts with its cause, not the wasm backtrace: the
+    /// page shows a message's first 160 characters.
+    #[test]
+    fn a_trap_says_its_cause_first() {
+        let wasm = module("unreachable", "1");
+        let mut h = Host::open(&wasm).unwrap();
+        let e = h.call(wire::STEP, &[], CALL_TICKS).unwrap_err();
+        assert!(
+            e.starts_with("the game's module stopped: wasm trap: wasm `unreachable`"),
+            "{e}"
+        );
+    }
+
+    /// A module that panicked says so in its own words (`gp_panic`), once:
+    /// the words are taken, so a later trap gives its own cause.
+    #[test]
+    fn a_panic_gives_its_words() {
+        let words = "panicked at hooks/src/lib.rs:7:9: index out of bounds";
+        let wasm = wat::parse_str(format!(
+            r#"(module
+              (memory (export "memory") 1)
+              (data (i32.const 0) "{words}")
+              (global $len (mut i32) (i32.const 0))
+              (global $said (mut i32) (i32.const 0))
+              (func (export "gp_alloc") (param i32) (result i32) i32.const 64)
+              (func (export "gp_out_ptr") (result i32) i32.const 0)
+              (func (export "gp_out_len") (result i32) global.get $len)
+              (func (export "gp_panic") (result i32)
+                (if (global.get $said) (then (return (i32.const 0))))
+                (global.set $said (i32.const 1))
+                (global.set $len (i32.const {n}))
+                global.get $len)
+              (func (export "gp_rt") (param i32 i32 i32) (result i32) unreachable))"#,
+            n = words.len()
+        ))
+        .unwrap();
+        let mut h = Host::open(&wasm).unwrap();
+        let e = h.call(wire::STEP, &[], CALL_TICKS).unwrap_err();
+        assert!(
+            e.starts_with(&format!("the game's module stopped: {words}")),
+            "{e}"
+        );
+        let e = h.call(wire::STEP, &[], CALL_TICKS).unwrap_err();
+        assert!(e.contains("wasm trap"), "{e}");
     }
 
     #[test]

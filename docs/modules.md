@@ -49,6 +49,10 @@ A frame is 16.7 ms. Phones haven't been measured (P4).
 
 `gp interp reach`, `gp level measure` and `gp level difficulty` run a game's hooks through its module with the world held on the host: `load-state`, `step` and `canonical-state` each frame, and each spec variant loaded as edited model text. The measure's flat floor is the one spec change model text can't say, so it is `run.flat-level`, a call that puts one session's level on the flat floor after `load`. See [docs/inventory.md](inventory.md).
 
+## When a module stops
+
+A call that traps stops with its cause first: the deadline, else the module's panic in its own words, else the trap (a wasm `unreachable`, an out-of-bounds read), then the wasm backtrace. A panic in the module aborts, which the host sees only as an `unreachable` trap; the module's panic hook keeps the panic's words (`panicked at FILE:LINE:COL: MESSAGE`) and its export `gp_panic` hands them to the host, which asks after a trap. A module built before 2026-11-23 has no `gp_panic` and gives the trap alone. Until then the message started with the backtrace, a stripped module's unnamed functions, and the screen page, which shows a message's first 160 characters, showed nothing of the cause.
+
 ## Reading a frame's values
 
 A lockstep (`gp clip score`, `gp corpus score`, the mechanic page's review) reads the model's mapped values and its tracked bodies on every compared frame. `gp` calls a module through one export, `gp_rt`, with an op number and bytes (`gp_runtime::wire`). Before game-printer:game 0.2.0 each mapped path was a `query` of its own: Donkey Kong's mapping is about 160 of them a frame, and the body tracker read `entities` whole, every leaf with its path as text (about 56 KB a frame on Tapper). The first `query` of a frame also built the frame's whole view, every leaf of the state as text and a TOML tree, which took about 1 ms a frame on Tapper and 0.35 ms on Donkey Kong.
