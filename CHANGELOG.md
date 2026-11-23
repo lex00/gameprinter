@@ -2,6 +2,26 @@
 
 Each release of gp has a section here, `## gp VERSION` (a date may follow), and its GitHub release's notes are that section. A release is refused before it is cut when its section is missing ([docs/release.md](docs/release.md)). Add the next one in a commit to main before `just release`.
 
+## gp 0.1.6
+
+The controls feel like the cabinet's. The screen reads the controls at each game frame's own time, so a quick tap or a late release lands on the frame you made it. On an arcade layout the gamepad's right stick taps when pushed any way, read by how far it has travelled. Three timing settings sit under CONTROLS' TIMING for a controller that needs them, and play has a GAME SPEED.
+
+The screens page opens the game's own settings screen with SETTINGS or F1, and MODEL ONLY loads the model with the settings you kept. The scoreboard's table sits below YOUR TURN, so the screens stay at the top.
+
+High scores are kept in the browser. A game that names its high score table has it saved in the browser's local storage and loaded when the game starts, so it is still there after a refresh. A setting turns this off, and the settings screen can clear the scores. A recorded clip never loads stored scores.
+
+The gates waste less of your time. A change that passed its dry run lands before new dry runs take the gate, and among waiting runs the oldest goes first. The check of the locked looks runs its clips side by side: 16 looks went from four and a half minutes to about 20 seconds. The model gate looks at the games checkout before it starts and says first when something uncommitted is in the way. A look is locked only if the tip draws it that way, and the lock is measured again when the tip has moved.
+
+The loop keeps its workers busy and out of each other's way. Workers start while `gp serve` waits to move onto a newer build, and they and their cards run on the newest gp. A row claims only the scoreboard line its work needs, so one row no longer holds a whole game. Rows found in one clip wait for each other, and a row can be marked as taken by hand. The scoreboard measures the parts nearest a confirm row first and the locked parts last.
+
+The page asks you less. A row asks you about a card only while that card is on your page. The screens page starts the model on a clip that begins at power-on, and waits while `gp serve` moves onto a new build.
+
+For porting: `gp clip feasible` says whether a person could make a clip's presses, and the scoreboard counts how many of a game's clips a person could play. `gp picture` boxes an arcade sprite where the board draws it when it wraps at the screen's edge. A hook can set up what it derives from a loaded state before the first frame is drawn, and can leave a body's sprites out of the next frame only. `gp corpus import` writes an arcade session's clips with the arcade's own button names.
+
+Also fixed: a game's module that stops says why; `gp mechanic propose` no longer writes into the games checkout; `gp loop health` knows a published build whose files are a commit on main.
+
+Windows builds are still to come.
+
 ## gp 0.1.5
 
 The loop waits less. A change to gp itself lands once its gate passes, with no card to answer; cards are for a game's looks, which only you can judge. Set `land_tools = false` under `[runner]` in `loop.toml` to get the cards back.
