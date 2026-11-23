@@ -429,7 +429,15 @@ impl Session {
             } else {
                 let mut asked = r.clone();
                 asked["status"] = json!("asking you");
-                super::worker_ask_refused(&asked)
+                // The row's newest card (HOME/mechanics/GAME/ROW is the dir).
+                let card = match (self.dir.parent(), self.dir.parent().and_then(Path::parent)) {
+                    (Some(g), Some(m)) => m.parent().and_then(|home| {
+                        let game = g.file_name()?.to_str()?;
+                        crate::serve::runner::row_card(home, game, me, gp_mcp::asks::now_ms())
+                    }),
+                    _ => None,
+                };
+                super::worker_ask_refused(&asked, card.map(|(_, s)| s))
                     .is_none()
                     .then_some("asking you")
             };
@@ -764,8 +772,8 @@ mod tests {
 
     /// The quest log row follows whose turn it is, and a row marked done
     /// stays done. The agent's turn asks the person only with a look on the
-    /// row (a clip, or a card): an answer with nothing to see leaves the row
-    /// as it is.
+    /// row (a clip, or its card on the page): an answer with nothing to see
+    /// leaves the row as it is.
     #[test]
     fn the_quest_log_follows_the_turns() {
         let d = tempfile::tempdir().unwrap();
@@ -795,6 +803,20 @@ mod tests {
         q[0].as_object_mut().unwrap().remove("clip");
         q[0]["note"] = json!("Its card is on your page: press YES");
         write_queue(&qf, &q).unwrap();
+        // A note naming a card asks only while the row's card is on the
+        // page (trouble-rows-dont-ask-the-person-open-questions).
+        s.turn(json!({"by": "agent", "text": "the card is up"}))
+            .unwrap();
+        assert_eq!(read_queue(&qf)[0]["status"], "agent working");
+        let now = gp_mcp::asks::now_ms();
+        crate::serve::runner::test_card(
+            &p.home,
+            1,
+            now,
+            "test-hop",
+            "walk",
+            json!({"state": "open"}),
+        );
         s.turn(json!({"by": "agent", "text": "the card is up"}))
             .unwrap();
         assert_eq!(read_queue(&qf)[0]["status"], "asking you");

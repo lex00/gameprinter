@@ -2106,7 +2106,7 @@ function cardsOf(m) {
 /** What a row asks the person now, or null: the question its agent said in
  * the talk (its newest turn, waiting on the person), its status line when
  * that asks, or its note when it is asking the person. A row whose note
- * talks of a card the page no longer has asks only what is left to do. */
+ * talks of a card asks nothing: its card does. */
 function askOf(r) {
   if (!r.mechanic || r.status === "done") return null;
   const g = clipsBy.find((x) => x.mechanic === r.mechanic);
@@ -2120,14 +2120,12 @@ function askOf(r) {
   // A look to confirm never had a card: it asks in its own words, with
   // LOOK AT IT, CONFIRM and the answer box (its note may say YES).
   if (confirmable(r)) return { says: confirmSays(r), from: "confirm", clip: null };
-  if (ofCard(r.note)) {
-    const cards = cardsOf(r.mechanic);
-    // Its card is here (YOUR TURN shows it with YES and NO), or running.
-    if (cards.some((a) => a.ran?.state === "running" || (!a.ran && (a.state === "open" || a.state === "yes")))) return null;
-    // It just ran: its row follows it in a few seconds.
-    if (cards.some((a) => a.ran)) return null;
-    return { says: "Its card is no longer on your page. What should happen with it?", from: "gone", clip: null, was: r.note };
-  }
+  // A row asking about its card asks nothing of its own: the card, while
+  // it is here, has YES and NO in YOUR TURN; once it is gone, gp serve's
+  // runner moves the row as the card went (landed: done; else next), and
+  // the page asks no open question meanwhile
+  // (trouble-rows-dont-ask-the-person-open-questions).
+  if (ofCard(r.note)) return null;
   return { says: r.note || "Your agent asks you about this row.", from: "note", clip: null };
 }
 

@@ -398,6 +398,9 @@ pub(crate) fn start(ctx: Arc<Ctx>) {
                 // Rows parked on another row go on once it lands (owner,
                 // waits-wake-on-landing), before that row is archived.
                 let now = gp_mcp::asks::now_ms();
+                // A row asking the person about a card that is gone goes on
+                // (trouble-rows-dont-ask-the-person-open-questions).
+                settle_card_asks(&ctx.paths.home, now);
                 wake_waiting(&ctx.paths.home, Some(ctx.games.as_path()), now);
                 archive_finished(&ctx.paths.home, gp_mcp::asks::now_ms());
             }
@@ -663,6 +666,154 @@ pub(crate) fn ask_row(home: &Path, a: &Value) -> Option<(String, String)> {
     row_of(&w["step"])
 }
 
+/// For tests: card `ask-N`, made at `made_ms` by step `sN` (its worker
+/// record touching `row:GAME/ROW`), with `extra`'s keys (its state, ran).
+#[cfg(test)]
+pub(crate) fn test_card(home: &Path, n: u64, made_ms: u64, game: &str, row: &str, extra: Value) {
+    let step = format!("s{n:012x}");
+    fs::create_dir_all(loop_state::workers_dir(home)).unwrap();
+    fs::write(
+        file(home, &step),
+        json!({"step": {"id": step, "touches": [format!("row:{game}/{row}")]}}).to_string(),
+    )
+    .unwrap();
+    let mut a = json!({"id": format!("ask-{n}"), "made_ms": made_ms, "step": step, "game": game,
+        "command": "tool gate", "argv": ["--patch", "fix.patch", "-m", "The import keeps the arcade buttons. Expect: x"]});
+    for (k, v) in extra.as_object().unwrap() {
+        a[k] = v.clone();
+    }
+    let dir = gp_mcp::asks::dir(home);
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join(format!("ask-{n}.json")), a.to_string()).unwrap();
+}
+
+/// How a card stands for its row: "in play" while it waits for the
+/// person's answer, holds their yes or runs on it; else how it ended:
+/// landed, passed, failed, no (the person's NO) or ran out.
+pub(crate) fn card_stands(a: &Value, now: u64) -> &'static str {
+    match a["ran"]["state"].as_str() {
+        Some("landed") => "landed",
+        Some("passed") => "passed",
+        Some("failed") => "failed",
+        Some(_) => "in play",
+        None if gp_mcp::asks::is_open(a, now) || gp_mcp::asks::is_yes(a, now) => "in play",
+        None if a["state"] == json!("no") => "no",
+        None => "ran out",
+    }
+}
+
+/// The newest card of row `row` of `game` and how it stands
+/// ([`card_stands`]), or None when the row has no card on file.
+pub(crate) fn row_card(
+    home: &Path,
+    game: &str,
+    row: &str,
+    now: u64,
+) -> Option<(Value, &'static str)> {
+    gp_mcp::asks::all(home)
+        .into_iter()
+        .find(|a| ask_row(home, a).is_some_and(|(g, r)| g == game && r == row))
+        .map(|a| {
+            let s = card_stands(&a, now);
+            (a, s)
+        })
+}
+
+/// Whether row `r` asks the person about a card: asking you, with no clip
+/// to watch, and a note that talks of a card (press YES, the card is up).
+/// Such a row has nothing to ask once its card is gone.
+fn asks_of_card(r: &Value) -> bool {
+    let note = r["note"].as_str().unwrap_or("");
+    r["status"] == json!("asking you")
+        && r.get("clip").is_none()
+        && (note.to_lowercase().contains("card") || note.contains("YES"))
+}
+
+/// How long a row asking the person about a card, with no card of it on
+/// file, stays as it is before the loop takes it up again.
+const CARD_ASK_WITHOUT_CARD_MS: u64 = 10 * 60 * 1000;
+
+/// Each row asking the person about a card ([`asks_of_card`]) whose card is
+/// gone follows its newest card as settle_card_rows has it (landed: done;
+/// failed, NO, ran out: next), even when the row changed after the card
+/// ended; one with no card on file for ten minutes goes to next, so the
+/// loop takes it up again. On 2026-11-23 the fix card of
+/// trouble-the-page-showed-the-person-an-error-78288a landed while its
+/// worker still ran, the worker then set the row asking you ("a card to
+/// land a fix"), and YOUR TURN asked the owner "Its card is no longer on
+/// your page. What should happen with it?". Returns the rows it moved.
+fn settle_card_asks(home: &Path, now: u64) -> Vec<(String, String)> {
+    let mut moved = Vec::new();
+    let held: BTreeSet<String> = loop_state::workers(home)
+        .iter()
+        .filter(|w| loop_state::holds(w))
+        .flat_map(|w| w["step"]["touches"].as_array().cloned().unwrap_or_default())
+        .filter_map(|t| t.as_str().map(str::to_owned))
+        .collect();
+    let Ok(dir) = fs::read_dir(home.join("mechanics")) else {
+        return moved;
+    };
+    let mut games: Vec<String> = dir
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|g| crate::mechanic::session::name_ok(g))
+        .collect();
+    games.sort();
+    for game in games {
+        let f = home.join("mechanics").join(&game).join("queue.json");
+        let rows: Vec<String> = crate::mechanic::session::read_queue(&f)
+            .iter()
+            .filter(|r| asks_of_card(r))
+            .filter_map(|r| r["mechanic"].as_str().map(str::to_owned))
+            .filter(|m| !held.contains(&format!("row:{game}/{m}")))
+            .collect();
+        for row in rows {
+            let settled = match row_card(home, &game, &row, now) {
+                Some((_, "in play")) => continue,
+                Some((a, kind)) => {
+                    let ended = match kind {
+                        "landed" | "passed" | "failed" => a["ran"]["done_ms"].as_u64(),
+                        "no" => a["answered_ms"].as_u64(),
+                        _ => a["made_ms"].as_u64().map(|m| m + gp_mcp::asks::OPEN_FOR_MS),
+                    }
+                    .unwrap_or(0)
+                    .min(now);
+                    settle_row_by_card(home, &game, &row, kind, ended, &card_what(&a), &a)
+                }
+                None => no_card_left(&f, &row, now),
+            };
+            if let Ok(true) = settled {
+                moved.push((game.clone(), row));
+            }
+        }
+    }
+    moved
+}
+
+/// Row `row` of queue `f`, asking about a card there is none of: once it
+/// has stood so for [`CARD_ASK_WITHOUT_CARD_MS`], it goes to next.
+fn no_card_left(f: &Path, row: &str, now: u64) -> anyhow::Result<bool> {
+    let mut q = crate::mechanic::session::read_queue(f);
+    let Some(r) = q.iter_mut().find(|r| r["mechanic"] == json!(row)) else {
+        return Ok(false);
+    };
+    let since = r["changed_ms"].as_u64().unwrap_or(0);
+    if now.saturating_sub(since) < CARD_ASK_WITHOUT_CARD_MS {
+        return Ok(false);
+    }
+    let Some(o) = r.as_object_mut() else {
+        return Ok(false);
+    };
+    o.insert("status".into(), json!("next"));
+    o.insert(
+        "note".into(),
+        json!("It asked you about a card that was never on your page. The loop takes it up again."),
+    );
+    o.remove("worker");
+    crate::mechanic::session::write_queue(f, &q)?;
+    Ok(true)
+}
+
 /// How long after a card ended its row still follows it: cards that ended
 /// before rows followed them were settled by hand.
 const CARD_SETTLES_FOR_MS: u64 = 24 * 60 * 60 * 1000;
@@ -700,8 +851,8 @@ pub(crate) fn card_what(a: &Value) -> String {
 /// Once a card is gone its quest-log row follows it (owner,
 /// page-one-design): landed, the row is done with what landed; failed, it is
 /// next with why, so the loop takes it up again; the person's NO, or a card
-/// that ran out with no answer, leaves the row asking them one plain
-/// question, which they answer in YOUR TURN. A row an agent works on waits
+/// that ran out with no answer, sends it to next too, with their words. A
+/// row an agent works on waits
 /// until it doesn't; a row already done moves only when its note still
 /// talks of the card. Each card moves its row once (`row_settled`), and only
 /// the newest card of a row does.
@@ -770,7 +921,8 @@ fn settle_card_rows(home: &Path) {
 /// Ok(false) when it waits (an agent works on it), Ok(true) once it's
 /// settled. A row changed after the card ended (set by hand, or by its
 /// worker) is left as it is: the card is older than what the row says
-/// (owner, page-status-matches-log).
+/// (owner, page-status-matches-log), unless it asks the person about the
+/// card ([`asks_of_card`]).
 fn settle_row_by_card(
     home: &Path,
     game: &str,
@@ -791,7 +943,10 @@ fn settle_row_by_card(
     if r["status"] == json!("agent working") {
         return Ok(false);
     }
-    if r["changed_ms"].as_u64().is_some_and(|c| c > ended) {
+    // A row asking the person about its card once the card is gone has
+    // nothing left to ask, so it follows the card however late it was set
+    // (settle_card_asks).
+    if r["changed_ms"].as_u64().is_some_and(|c| c > ended) && !asks_of_card(r) {
         return Ok(true);
     }
     let note = r["note"].as_str().unwrap_or("");
@@ -3488,6 +3643,101 @@ mod tests {
             ask_row(home, &gp_mcp::asks::read(home, "ask-2").unwrap()),
             Some(("g".into(), "b".into()))
         );
+    }
+
+    /// The owner's case (2026-11-23, "i don't understand either card open
+    /// right now"): a trouble row's fix card landed while its worker still
+    /// ran, the worker then set the row asking you about the card, and the
+    /// page asked "What should happen with it?". A row asking about a card
+    /// that is gone follows it, however late it was set: landed, it closes
+    /// with no ask; refused, it goes to next. One whose card is still on the
+    /// page waits; one with no card at all goes to next after ten minutes.
+    #[test]
+    fn a_row_asking_about_a_card_that_is_gone_follows_it() {
+        let t = tempfile::tempdir().unwrap();
+        let home = t.path();
+        let f = home.join("mechanics/made-up/queue.json");
+        let now = gp_mcp::asks::now_ms();
+        let ask = |m: &str| json!({"mechanic": m, "status": "asking you", "note": "On your page: a card to land a fix to the clip import."});
+        let mut never = ask("never");
+        never["changed_ms"] = json!(now - CARD_ASK_WITHOUT_CARD_MS - 1);
+        crate::mechanic::session::write_queue(
+            &f,
+            &[
+                ask("trouble-landed"),
+                ask("trouble-no"),
+                ask("trouble-open"),
+                ask("just-asked"),
+                never.clone(),
+                json!({"mechanic": "looks", "status": "asking you", "note": "Does the card table look right?", "clip": {"n": 1}}),
+            ],
+        )
+        .unwrap();
+        // write_queue stamps the rows now; the one with no card stood long.
+        let mut q = crate::mechanic::session::read_queue(&f);
+        q[4] = never;
+        fs::write(&f, serde_json::to_string(&q).unwrap()).unwrap();
+        let landed = json!({"state": "used", "row_settled": true,
+            "ran": {"state": "landed", "done_ms": now - 60_000, "lines": ["PASS: landed a697061b on main"]}});
+        test_card(home, 1, now - 120_000, "made-up", "trouble-landed", landed);
+        test_card(
+            home,
+            2,
+            now - 120_000,
+            "made-up",
+            "trouble-no",
+            json!({"state": "no", "answered_ms": now - 60_000, "row_settled": true}),
+        );
+        test_card(
+            home,
+            3,
+            now - 1000,
+            "made-up",
+            "trouble-open",
+            json!({"state": "open"}),
+        );
+        assert_eq!(
+            card_stands(&gp_mcp::asks::read(home, "ask-3").unwrap(), now),
+            "in play"
+        );
+        // Settled before the row asked (it changed later): left as it was.
+        settle_card_rows(home);
+        let row = |m: &str| -> Value {
+            crate::mechanic::session::read_queue(&f)
+                .into_iter()
+                .find(|r| r["mechanic"] == json!(m))
+                .unwrap()
+        };
+        assert_eq!(row("trouble-landed")["status"], "asking you");
+        let moved = settle_card_asks(home, now);
+        assert_eq!(
+            moved,
+            [
+                ("made-up".to_owned(), "trouble-landed".to_owned()),
+                ("made-up".to_owned(), "trouble-no".to_owned()),
+                ("made-up".to_owned(), "never".to_owned()),
+            ]
+        );
+        let l = row("trouble-landed");
+        assert_eq!(l["status"], "done");
+        assert_eq!(
+            l["note"],
+            "Landed on your YES: The import keeps the arcade buttons."
+        );
+        assert_eq!(row("trouble-no")["status"], "next");
+        assert_eq!(row("trouble-open")["status"], "asking you");
+        assert_eq!(row("just-asked")["status"], "asking you");
+        assert_eq!(row("never")["status"], "next");
+        assert!(
+            row("never")["note"]
+                .as_str()
+                .unwrap()
+                .contains("takes it up again")
+        );
+        // A row asking about a look it has a clip for stays the person's.
+        assert_eq!(row("looks")["status"], "asking you");
+        // Nothing left to move.
+        assert!(settle_card_asks(home, now).is_empty());
     }
 
     /// The owner's case (2026-11-22): refusing a duplicate card sent its row

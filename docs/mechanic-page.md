@@ -589,10 +589,23 @@ each card its row (`row`, GAME/ROW, from its step's worker record). Once
 the card is gone the row follows it (the runner's `settle_card_rows`, for
 cards that ended in the last day): landed, the row is done (Landed on your
 YES: what); failed, it is next with why, so the loop takes it up again;
-the person's NO, or a card that ran out unanswered, leaves the row asking
-one plain question to answer. A row an agent works on waits; a done row
-moves only when its note still talks of the card; only a row's newest card
-moves it, once (`row_settled` on the card).
+the person's NO, or a card that ran out unanswered, sends it to next too,
+with their words. A row an agent works on waits; a done row moves only
+when its note still talks of the card; only a row's newest card moves it,
+once (`row_settled` on the card).
+
+A row asking the person about a card, with no clip, asks nothing of its
+own: YOUR TURN shows its card while the card is there and never an open
+question once it is gone. `gp mechanic queue` under a loop step refuses
+such an ask unless the row's newest card is still in play (open, holding
+the person's yes, or running on it): with no card it says to raise the
+card first, with a card that already landed to set the row done. Once a
+minute the runner's `settle_card_asks` moves each row still asking about a
+card that is gone as `settle_card_rows` would, even when the row was set
+after the card ended (a card that landed while its worker still ran);
+one with no card on file for ten minutes goes to next. On 2026-11-23 a
+trouble row whose fix had landed asked the owner "What should happen with
+it?".
 
 A row that asks the person to judge something they can see carries the
 clip that shows it: `gp mechanic queue GAME ROW --status "asking you"

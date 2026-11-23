@@ -1556,16 +1556,32 @@ fn say_keeps_status(paths: &Paths, game: &str, mechanic: &str, in_step: bool) ->
 /// look asks the owner (a clip on the row for them to watch, or a card for
 /// their YES, which the page shows on its own). A question about tools,
 /// routing or how to do the work is the worker's to decide (owner,
-/// ask-only-about-looks).
-pub(crate) fn worker_ask_refused(r: &Value) -> Option<String> {
+/// ask-only-about-looks). `card` is how the row's newest card stands
+/// (serve::runner::card_stands), None with no card: a row with no clip asks
+/// only while its card is in play, since the page shows that card with YES
+/// and NO and nothing else to answer. On 2026-11-23 a worker set
+/// trouble-the-page-showed-the-person-an-error-78288a asking you after its
+/// fix card had landed, and YOUR TURN asked the owner "What should happen
+/// with it?" (trouble-rows-dont-ask-the-person-open-questions).
+pub(crate) fn worker_ask_refused(r: &Value, card: Option<&str>) -> Option<String> {
     if r["status"] != json!("asking you") || r.get("clip").is_some() {
         return None;
     }
-    let note = r["note"].as_str().unwrap_or("");
-    if note.to_lowercase().contains("card") || note.contains("YES") {
-        return None;
-    }
-    Some("a worker asks the person only about a look: give the row the clip that shows it (--clip N --frames A-B --look THEME), or put the change on a card and say so in --note. A question about the tools, the routing or how to do the work is yours: pick, say why in --note, and go on (--status next, or carry on in this step)".to_owned())
+    Some(match card {
+        Some("in play") => return None,
+        Some(k @ ("landed" | "passed")) => format!(
+            "its card already {k} on the person's YES, so there is nothing left to ask them: set the row done (--status done --note WHAT LANDED), or \"in line\" when its target closes it"
+        ),
+        Some(k) => format!(
+            "its newest card is gone from the person's page ({}): there is nothing on the page for them to answer. Make the change again and raise a new card first, or set the row next with why",
+            match k {
+                "no" => "they said NO",
+                "failed" => "it failed on their YES",
+                _ => "it ran out unanswered",
+            }
+        ),
+        None => "a worker asks the person only about a look: give the row the clip that shows it (--clip N --frames A-B --look THEME), or raise the change's card first (its gate without dry_run) and then set the row asking you. A question about the tools, the routing or how to do the work is yours: pick, say why in --note, and go on (--status next, or carry on in this step)".to_owned(),
+    })
 }
 
 /// Why a worker may not set row `r` of `game` done, or None: it has a look
@@ -1869,8 +1885,12 @@ fn queue(paths: &Paths, game: &str, mechanic: Option<&str>, c: &RowChange) -> Re
             .iter()
             .find(|r| r["mechanic"] == json!(m))
             .expect("just changed");
+        let card = (c.under_step && r["status"] == json!("asking you") && r.get("clip").is_none())
+            .then(|| crate::serve::runner::row_card(&paths.home, game, m, gp_mcp::asks::now_ms()))
+            .flatten()
+            .map(|(_, s)| s);
         if c.under_step
-            && let Some(why) = worker_ask_refused(r)
+            && let Some(why) = worker_ask_refused(r, card)
         {
             bail!("{m}: {why}");
         }
@@ -2121,7 +2141,20 @@ mod tests {
         )
         .unwrap();
         assert_eq!(read_queue(&f)[0]["status"], "next");
-        // The plain turn, a step's, still asks: the note names a card.
+        // The plain turn, a step's, asks only with the row's card on the
+        // page: its note naming a card isn't enough.
+        s.turn(json!({"by": "agent", "text": "the card is up"}))
+            .unwrap();
+        assert_eq!(read_queue(&f)[0]["status"], "next");
+        let now = gp_mcp::asks::now_ms();
+        crate::serve::runner::test_card(
+            &p.home,
+            1,
+            now,
+            "test-hop",
+            "head",
+            json!({"state": "open"}),
+        );
         s.turn(json!({"by": "agent", "text": "the card is up"}))
             .unwrap();
         assert_eq!(read_queue(&f)[0]["status"], "asking you");
@@ -2739,20 +2772,64 @@ mod tests {
         );
         // Under a step, only a look asks the person: a clip or a card.
         let tools_q = json!({"status": "asking you", "note": "Should this row move to the tool's quest log?"});
-        assert!(worker_ask_refused(&tools_q).is_some());
+        assert!(worker_ask_refused(&tools_q, None).is_some());
         for ok in [
             json!({"status": "asking you", "note": "Does the mug look right?", "clip": {"n": 1}}),
-            json!({"status": "asking you", "note": "Its card is on your page: press YES"}),
             json!({"status": "next", "note": "Picked the tool's log?"}),
         ] {
-            assert_eq!(worker_ask_refused(&ok), None, "{ok}");
+            assert_eq!(worker_ask_refused(&ok, None), None, "{ok}");
         }
+        let card_q = json!({"status": "asking you", "note": "Its card is on your page: press YES"});
+        assert_eq!(worker_ask_refused(&card_q, Some("in play")), None);
         let by_worker = RowChange {
             note: Some("Should this row move to the tool's quest log?"),
             under_step: true,
             ..asking
         };
         assert!(queue(&p, "test-hop", Some("tool-q"), &by_worker).is_err());
+        // A worker's ask about a card holds only while the row's card is
+        // on the page (trouble-rows-dont-ask-the-person-open-questions):
+        // with no card, or one that already landed, it is refused.
+        let of_card = RowChange {
+            note: Some("A card to land the fix is on your page: press YES."),
+            under_step: true,
+            ..asking
+        };
+        let refused = |c: &RowChange| match queue(&p, "test-hop", Some("fix"), c) {
+            Ok(_) => panic!("an ask with no card in play is refused"),
+            Err(e) => format!("{e}"),
+        };
+        let e = refused(&of_card);
+        assert!(e.contains("raise the change's card first"), "{e}");
+        let now = gp_mcp::asks::now_ms();
+        crate::serve::runner::test_card(
+            &p.home,
+            1,
+            now - 1000,
+            "test-hop",
+            "fix",
+            json!({"state": "used", "ran": {"state": "landed", "done_ms": now - 500}}),
+        );
+        let e = refused(&of_card);
+        assert!(e.contains("already landed"), "{e}");
+        assert!(e.contains("--status done"), "{e}");
+        crate::serve::runner::test_card(
+            &p.home,
+            2,
+            now,
+            "test-hop",
+            "fix",
+            json!({"state": "open"}),
+        );
+        let o = queue(&p, "test-hop", Some("fix"), &of_card).unwrap();
+        let fix = o.json["queue"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["mechanic"] == "fix")
+            .cloned()
+            .unwrap();
+        assert_eq!(fix["status"], "asking you");
         let cl = row_clip("1", Some("10-20"), Some("game")).unwrap();
         let with_clip = RowChange {
             clip: Some(&cl),
