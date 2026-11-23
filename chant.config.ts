@@ -24,8 +24,9 @@ import { existsSync } from "node:fs";
 // The Rust target each runner builds, named as the release's asset.
 const builds = [
   { name: "darwin-arm64", runner: "macos-15", target: "aarch64-apple-darwin" },
-  // macos-13 is retired; macos-15-intel is GitHub's Intel Mac now.
-  { name: "darwin-amd64", runner: "macos-15-intel", target: "x86_64-apple-darwin" },
+  // No Intel Mac build for now (the owner, 2026-11-22): its runner,
+  // macos-15-intel, took 48 minutes where the others take about 20, and the
+  // release waits for every build. Build gp from source there.
   { name: "linux-amd64", runner: "ubuntu-24.04", target: "x86_64-unknown-linux-gnu" },
   { name: "linux-arm64", runner: "ubuntu-24.04-arm", target: "aarch64-unknown-linux-gnu" },
   // Windows waits on chant loading chant.config.ts from a Windows path

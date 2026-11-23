@@ -16,7 +16,7 @@ Faster and less repeated work: a change is checked once, not three times; worker
 
 Also fixed: `gp picture` could return an empty measure with no error; a reopened row kept its old target; the page could show changes that hadn't landed. A gate run that lost its caller could hang and hold the tools lock, with every other landing waiting behind it; it now fails and frees the lock. `gp self check` works on a gp built from source, and `gp self check --as-installed` checks it the way a release is checked. A module can be built from the module kit as it is.
 
-Windows builds are still to come.
+This release has no Intel Mac build: 0.1.2 is the last one with it, and you can build gp from source there. Windows builds are still to come.
 
 ## gp 0.1.2
 

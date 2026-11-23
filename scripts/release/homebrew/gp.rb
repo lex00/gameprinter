@@ -9,10 +9,8 @@ class Gp < Formula
       url "{{url:gp-aarch64-apple-darwin.tar.gz}}"
       sha256 "{{sha256:gp-aarch64-apple-darwin.tar.gz}}"
     end
-    on_intel do
-      url "{{url:gp-x86_64-apple-darwin.tar.gz}}"
-      sha256 "{{sha256:gp-x86_64-apple-darwin.tar.gz}}"
-    end
+    # No Intel Mac build for now: build gp from source there.
+    depends_on arch: :arm64
   end
 
   on_linux do
