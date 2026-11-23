@@ -35,6 +35,7 @@ gp-explore = { version = "0.1.0", path = "../gp-explore" }
 gp-gaps = { version = "0.1.0", path = "../gp-gaps" }
 # schema/image-config.json (gp self schemas); tests/mcp.rs reads its sheets.
 gp-imagefmt = { version = "0.1.0", path = "../gp-imagefmt" }
+gp-kit = { version = "0.1.0", path = "../gp-kit" }
 gp-host = { version = "0.1.0", path = "../gp-host" }
 gp-track = { version = "0.1.0", path = "../gp-track" }
 gp-validate = { version = "0.1.0", path = "../gp-validate" }

@@ -1216,6 +1216,7 @@ dependencies = [
  "gp-host",
  "gp-imagefmt",
  "gp-interp",
+ "gp-kit",
  "gp-look",
  "gp-mcp",
  "gp-metrics",
@@ -1425,6 +1426,16 @@ dependencies = [
  "serde_json",
  "tempfile",
  "thiserror",
+ "toml",
+]
+
+[[package]]
+name = "gp-kit"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "blake3",
+ "tempfile",
  "toml",
 ]
 

@@ -22,7 +22,7 @@
 #     target/play-web/           the two players, built here with build-play.sh
 #     templates/, baselines/     the templates gp mcp forks
 #     page/                      the public page, a bundle that passed the release check
-#     module-kit.zip             the module kit (gp game kit), for gp game build
+#     module-kit.zip             the module kit (gp-kit, as gp game kit makes it), for gp game build
 #   gp-VERSION-COMMIT-TARGET/    gp (gp.exe on Windows), LICENSE, THIRD-PARTY.md, README.txt
 #   gp-VERSION-COMMIT-TARGET.tar.gz   the archive (.zip for a Windows target)
 #   gp-VERSION-COMMIT-TARGET.tar.gz.sha256
@@ -148,10 +148,14 @@ zip_here() {
   fi
 }
 
-# The module kit, made by a gp built from this checkout for this machine.
-cargo build -q --locked --profile fastdev -p gp-cli
+# The module kit, made from this checkout by gp-kit (crates/gp-kit), what
+# `gp game kit` runs in a source build. gp-kit is three crates, so a fresh
+# runner builds it in seconds; a gp to run `gp game kit` with was a second
+# whole build of gp, 743 s of gp 0.1.4's 2053 s Apple silicon job (issue 47).
+# It vendors --offline, from what `cargo fetch --locked` put in cargo's cache.
+cargo build -q --locked --profile fastdev -p gp-kit
 kit="$out/kit"
-"${CARGO_TARGET_DIR:-$repo/target}/fastdev/gp$host_exe" game kit --out "$kit" > /dev/null
+"${CARGO_TARGET_DIR:-$repo/target}/fastdev/gp-kit$host_exe" "$repo" "$kit" > /dev/null
 (cd "$kit" && zip_here "$stage/module-kit.zip" .)
 lap "make the module kit"
 

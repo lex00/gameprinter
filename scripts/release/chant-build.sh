@@ -100,9 +100,9 @@ fi
 (cd editor && npm ci --silent --no-audit --no-fund && npm run --silent build)
 lap "build the editor"
 
-# Every crate Cargo.lock names, for every target: the module kit (gp game
-# kit) vendors them --offline, and a fresh runner's cargo cache holds only
-# what the gp build itself fetched.
+# Every crate Cargo.lock names, for every target: the module kit (gp-kit,
+# in build.sh) vendors them --offline, and a fresh runner's cargo cache
+# holds only what the gp build itself fetched.
 cargo fetch --locked
 lap "fetch the crates"
 

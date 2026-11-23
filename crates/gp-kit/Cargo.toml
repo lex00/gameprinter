@@ -1,0 +1,26 @@
+[package]
+name = "gp-kit"
+description = "The module kit (gp game kit) made from the tool's source, with a binary of its own for the release build"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+# scripts/release/build.sh makes the kit with this binary before it builds
+# gp: a fresh runner compiles these three crates in seconds, where a gp to
+# run `gp game kit` with was a second whole build of gp (issue 47).
+[[bin]]
+name = "gp-kit"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1.0.104"
+blake3 = "1.8.7"
+toml = "1.1.8"
+
+[dev-dependencies]
+tempfile = "3.27.0"
+
+[lints]
+workspace = true

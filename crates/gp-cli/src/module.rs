@@ -9,26 +9,25 @@
 //! The kit lives inside each tool release. A build needs its toolchain and
 //! nothing else: same kit, same package and same lock make the same bytes.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{Context, Result, anyhow, bail};
+pub(crate) use gp_kit::tree_hash;
+use gp_kit::{TARGET, TOP, has_kit_crates, read_all, read_table, run, write_tree};
 use serde_json::json;
 
 use crate::Outcome;
 use crate::bundle::Carried;
 
-/// The crate that exports the page's calls, and what the closure starts from.
-const TOP: &str = "gp-web";
 /// The placeholder a game's hook crate replaces.
 const SLOT: &str = "gp-ext-game";
 /// A hook crate may depend on these and nothing else.
 const ALLOWED_DEPS: [&str; 2] = ["gp-sim", "gp-cycles"];
 /// The largest memory a module may declare: 256 MB (the loader's limit too).
 const MAX_MEMORY: u64 = 256 * 1024 * 1024;
-const TARGET: &str = "wasm32-unknown-unknown";
 /// Stands in front of rustc for a build, so nothing of the machine reaches the
 /// output. Cargo mixes the host and the flags into each crate's identity,
 /// which sets symbol names and type ids, so the wrapper names a crate by its
@@ -51,115 +50,6 @@ done
 exec "$rustc" "--remap-path-prefix=$GP_MODULE_SRC=/gp-module" "--remap-path-prefix=$GP_MODULE_TARGET=/gp-target" "$@"
 "#;
 
-fn run(cmd: &mut Command, what: &str) -> Result<()> {
-    let out = cmd.output().with_context(|| format!("starting {what}"))?;
-    if !out.status.success() {
-        bail!(
-            "{what} failed:\n{}{}",
-            String::from_utf8_lossy(&out.stdout),
-            String::from_utf8_lossy(&out.stderr)
-        );
-    }
-    Ok(())
-}
-
-fn table(text: &str, file: &Path) -> Result<toml::Table> {
-    text.parse()
-        .with_context(|| format!("parsing {}", file.display()))
-}
-
-fn read_table(file: &Path) -> Result<toml::Table> {
-    let text = fs::read_to_string(file).with_context(|| format!("reading {}", file.display()))?;
-    table(&text, file)
-}
-
-/// Every file under `dir` by relative path, skipping build output and links.
-fn walk(dir: &Path) -> Result<BTreeMap<String, PathBuf>> {
-    let mut out = BTreeMap::new();
-    let mut stack = vec![dir.to_owned()];
-    while let Some(d) = stack.pop() {
-        for e in fs::read_dir(&d).with_context(|| d.display().to_string())? {
-            let e = e?;
-            let name = e.file_name().to_string_lossy().into_owned();
-            // A crate's build output; a folder of source can be named target too.
-            let output = name == "target" && (d == dir || d.join("Cargo.toml").exists());
-            if output || matches!(name.as_str(), ".git" | ".DS_Store" | "node_modules") {
-                continue;
-            }
-            let (p, t) = (e.path(), e.file_type()?);
-            if t.is_dir() {
-                stack.push(p);
-            } else if t.is_file() {
-                let rel = p.strip_prefix(dir)?.to_string_lossy().replace('\\', "/");
-                out.insert(rel, p);
-            }
-        }
-    }
-    Ok(out)
-}
-
-/// Writes only what differs and removes what isn't wanted, so cargo sees
-/// unchanged files as unchanged.
-fn write_tree(files: &BTreeMap<String, Vec<u8>>, to: &Path) -> Result<()> {
-    fs::create_dir_all(to)?;
-    let old = walk(to)?;
-    for (rel, p) in &old {
-        if !files.contains_key(rel) {
-            fs::remove_file(p)?;
-        }
-    }
-    for (rel, bytes) in files {
-        let p = to.join(rel);
-        if old.contains_key(rel) && fs::read(&p)? == *bytes {
-            continue;
-        }
-        fs::create_dir_all(p.parent().context("a file has a folder")?)?;
-        fs::write(&p, bytes)?;
-    }
-    Ok(())
-}
-
-fn read_all(dir: &Path) -> Result<BTreeMap<String, Vec<u8>>> {
-    walk(dir)?
-        .into_iter()
-        .map(|(rel, p)| Ok((rel, fs::read(&p)?)))
-        .collect()
-}
-
-fn path_deps(crates: &Path, name: &str) -> Result<Vec<String>> {
-    let m = read_table(&crates.join(name).join("Cargo.toml"))?;
-    let mut out = Vec::new();
-    for key in ["dependencies", "build-dependencies"] {
-        for (dep, v) in m
-            .get(key)
-            .and_then(toml::Value::as_table)
-            .into_iter()
-            .flatten()
-        {
-            if v.get("path").is_some() {
-                out.push(dep.clone());
-            }
-        }
-    }
-    Ok(out)
-}
-
-/// A kit crate's manifest with everything a browser build doesn't use taken
-/// out, so the kit needs neither those crates nor what they depend on.
-fn browser_manifest(file: &Path) -> Result<String> {
-    let mut m = read_table(file)?;
-    for key in ["dev-dependencies", "bin", "test", "bench", "example"] {
-        m.remove(key);
-    }
-    if let Some(t) = m.get_mut("target").and_then(toml::Value::as_table_mut) {
-        t.retain(|k, _| !k.contains("not(target_arch"));
-    }
-    if let Some(p) = m.get_mut("package").and_then(toml::Value::as_table_mut) {
-        p.insert("autobins".into(), false.into());
-    }
-    Ok(toml::to_string(&m)?)
-}
-
 /// The tool's source folder to make the kit from: GP_TOOL_SRC when it is
 /// set, else the checkout this gp was built from when its crates are
 /// still there (a source build). None for an installed gp away from its
@@ -172,11 +62,6 @@ fn tool_src() -> Option<PathBuf> {
         return Some(PathBuf::from(s));
     }
     crate::repo::built().filter(|b| has_kit_crates(b))
-}
-
-/// Whether `src` holds the kit's top crate.
-fn has_kit_crates(src: &Path) -> bool {
-    src.join("crates").join(TOP).join("Cargo.toml").is_file()
 }
 
 /// `gp game kit -o OUT`: the module kit in `out`, made from the tool's
@@ -227,103 +112,19 @@ pub(crate) fn kit_with(out: &Path, carried: Carried<'_>) -> Result<Outcome> {
     })
 }
 
-/// The module kit in `out`, made from the tool's source in `src`.
+/// The module kit in `out`, made from the tool's source in `src`
+/// (gp_kit::make, which the release build runs as its own binary).
 pub(crate) fn kit_from_source(src: &Path, out: &Path) -> Result<Outcome> {
-    let crates = src.join("crates");
-    let mut seen = BTreeSet::new();
-    let mut todo = vec![TOP.to_owned()];
-    while let Some(c) = todo.pop() {
-        if seen.insert(c.clone()) {
-            todo.extend(path_deps(&crates, &c)?);
-        }
-    }
-    let mut files: BTreeMap<String, Vec<u8>> = BTreeMap::new();
-    for c in &seen {
-        let dir = crates.join(c);
-        for (rel, p) in walk(&dir)? {
-            if rel.starts_with("src/bin/")
-                || rel.starts_with("tests/")
-                || rel.starts_with("benches/")
-            {
-                continue;
-            }
-            let bytes = if rel == "Cargo.toml" {
-                browser_manifest(&p)?.into_bytes()
-            } else {
-                fs::read(&p)?
-            };
-            files.insert(format!("crates/{c}/{rel}"), bytes);
-        }
-    }
-    let mut root = read_table(&src.join("Cargo.toml"))?;
-    let members: Vec<toml::Value> = seen.iter().map(|c| format!("crates/{c}").into()).collect();
-    root.get_mut("workspace")
-        .and_then(toml::Value::as_table_mut)
-        .context("the tool's Cargo.toml has no [workspace]")?
-        .insert("members".into(), members.into());
-    files.insert("Cargo.toml".into(), toml::to_string(&root)?.into_bytes());
-    files.insert("Cargo.lock".into(), fs::read(src.join("Cargo.lock"))?);
-    let channel = read_table(&src.join("rust-toolchain.toml"))?
-        .get("toolchain")
-        .and_then(|t| t.get("channel"))
-        .and_then(toml::Value::as_str)
-        .context("rust-toolchain.toml has no channel")?
-        .to_owned();
-    files.insert(
-        "rust-toolchain.toml".into(),
-        format!("[toolchain]\nchannel = \"{channel}\"\ntargets = [\"{TARGET}\"]\n").into_bytes(),
-    );
-    write_tree(&files, out)?;
-    let out = out.canonicalize()?;
-    // Drops the lock's entries the kit doesn't use, keeping every version.
-    run(
-        Command::new("cargo")
-            .args(["metadata", "--format-version", "1", "--offline"])
-            .current_dir(&out),
-        "cargo metadata",
-    )?;
-    let vendored = Command::new("cargo")
-        .args([
-            "vendor",
-            "--locked",
-            "--offline",
-            "--versioned-dirs",
-            "vendor",
-        ])
-        .current_dir(&out)
-        .output()
-        .context("starting cargo vendor")?;
-    if !vendored.status.success() {
-        bail!(
-            "cargo vendor failed:\n{}",
-            String::from_utf8_lossy(&vendored.stderr)
-        );
-    }
-    fs::create_dir_all(out.join(".cargo"))?;
-    fs::write(
-        out.join(".cargo/config.toml"),
-        "[source.crates-io]\nreplace-with = \"vendored-sources\"\n\n[source.vendored-sources]\ndirectory = \"vendor\"\n",
-    )?;
-    let hash = tree_hash(&out)?;
+    let gp_kit::Made { kit, hash, crates } = gp_kit::make(src, out)?;
     Ok(Outcome {
-        json: json!({ "kit": out, "hash": hash, "crates": seen.len(), "from": "source", "source": src }),
+        json: json!({ "kit": kit, "hash": hash, "crates": crates, "from": "source", "source": src }),
         text: format!(
-            "module kit in {} from {}: {} crates, hash {hash}",
-            out.display(),
+            "module kit in {} from {}: {crates} crates, hash {hash}",
+            kit.display(),
             src.display(),
-            seen.len()
         ),
         exit: 0,
     })
-}
-
-/// A hash of a folder's paths and contents.
-pub(crate) fn tree_hash(dir: &Path) -> Result<String> {
-    let mut h = blake3::Hasher::new();
-    for (rel, bytes) in read_all(dir)? {
-        h.update(format!("{} {} {rel}\n", blake3::hash(&bytes).to_hex(), bytes.len()).as_bytes());
-    }
-    Ok(h.finalize().to_hex().to_string())
 }
 
 /// The rules a hook crate is held to: its code is only what it ships, and it
@@ -1019,6 +820,7 @@ pub fn data_parts(wasm: &[u8]) -> Result<Vec<(String, &[u8])>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gp_kit::browser_manifest;
 
     /// gp-exts' build script's reader, which every module build runs.
     #[allow(dead_code)]
