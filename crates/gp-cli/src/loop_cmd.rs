@@ -691,22 +691,52 @@ fn published_against(
     if tip.starts_with(&short) {
         return Some(Ok(format!("The published gp {short} is {branch}'s tip")));
     }
+    // The commit on the branch the published build is of: its own, or one
+    // with the very same files (a commit published and then landed again as
+    // another, as a squash or a rebase onto the same tree does), whose page
+    // is the published one.
+    let mut base = short.clone();
+    let mut is = format!("is on {branch},");
     if git(&["merge-base", "--is-ancestor", &short, &tip]).is_none() {
-        return Some(Err(format!(
-            "The published gp {short} is of a commit {branch} doesn't hold (a history rebased under it?), so gp serve serves a page {branch} ({at}) may no longer have. The tool gate's next landing on {branch} moves the link; to move it now, run `just publish` in a clean checkout of {branch}."
-        )));
+        let Some(same) = same_files_on(repo, &short, &tip) else {
+            return Some(Err(format!(
+                "The published gp {short} is of a commit {branch} doesn't hold (a history rebased under it?), so gp serve serves a page {branch} ({at}) may no longer have. The tool gate's next landing on {branch} moves the link; to move it now, run `just publish` in a clean checkout of {branch}."
+            )));
+        };
+        let landed = &same[..12];
+        if same == tip {
+            return Some(Ok(format!(
+                "The published gp {short} has the files of {branch}'s tip {at}, which landed them as a commit of its own"
+            )));
+        }
+        is = format!(
+            "has the files of {branch}'s {landed}, which landed them as a commit of its own, and is"
+        );
+        base = same;
     }
-    let n = git(&["rev-list", "--count", &format!("{short}..{tip}")])?;
-    let files = git(&["diff", "--name-only", &short, &tip])?;
+    let n = git(&["rev-list", "--count", &format!("{base}..{tip}")])?;
+    let files = git(&["diff", "--name-only", &base, &tip])?;
     Some(Ok(if crate::tool_gate::docs_only(&files) {
         format!(
-            "The published gp {short} is on {branch}, {n} commit(s) behind its tip {at} by words alone (a words-only landing publishes nothing)"
+            "The published gp {short} {is} {n} commit(s) behind its tip {at} by words alone (a words-only landing publishes nothing)"
         )
     } else {
         format!(
-            "The published gp {short} is on {branch}, {n} commit(s) behind its tip {at}, which change more than words (landed by hand, or a release's version): the tool gate's next landing publishes them, or `just publish` in a clean checkout of {branch}"
+            "The published gp {short} {is} {n} commit(s) behind its tip {at}, which change more than words (landed by hand, or a release's version): the tool gate's next landing publishes them, or `just publish` in a clean checkout of {branch}"
         )
     }))
+}
+
+/// The newest of the last 500 commits up to `tip` whose files (git's tree)
+/// are `commit`'s, in full; None when there is none or git can't say.
+fn same_files_on(repo: &std::path::Path, commit: &str, tip: &str) -> Option<String> {
+    let git = |args: &[&str]| crate::gate::git(repo, args).ok();
+    let tree = git(&["rev-parse", &format!("{commit}^{{tree}}")])?;
+    let log = git(&["log", "-n", "500", "--format=%H %T", tip])?;
+    log.lines().find_map(|l| {
+        let (c, t) = l.split_once(' ')?;
+        (t == tree).then(|| c.to_owned())
+    })
 }
 
 fn checks(paths: &gp_evidence::Paths, games_dir: Option<&std::path::Path>) -> Value {
@@ -1154,6 +1184,28 @@ mod tests {
             .unwrap()
             .unwrap_err();
         assert!(said.contains("main doesn't hold"), "{said}");
+
+        // A wip commit published, then landed on main as another commit
+        // with the same files: the published page is main's.
+        run(&["checkout", "-q", "-b", "wip"]);
+        std::fs::write(repo.join("main.rs"), "landed code").unwrap();
+        run(&["add", "main.rs"]);
+        run(&["commit", "-q", "-m", "wip"]);
+        let wip = run(&["rev-parse", "HEAD"]);
+        publish(&wip);
+        run(&["checkout", "-q", "main"]);
+        run(&["checkout", "-q", "wip", "--", "main.rs"]);
+        run(&["commit", "-q", "-m", "the landing"]);
+        let said = published_against(&link, &repo, "main").unwrap().unwrap();
+        assert!(said.contains("files of main's tip"), "{said}");
+        std::fs::write(repo.join("main.rs"), "comment fixed").unwrap();
+        run(&["commit", "-q", "-am", "after"]);
+        let said = published_against(&link, &repo, "main").unwrap().unwrap();
+        assert!(
+            said.contains("which landed them as a commit of its own, and is 1 commit(s) behind")
+                && said.contains("more than words"),
+            "{said}"
+        );
     }
 
     /// --hold adds games (all holds every one), --go-on lifts them, and a
