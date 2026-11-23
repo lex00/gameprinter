@@ -63,6 +63,8 @@ A match counts only when it is unlikely by chance. Its chance is the expected nu
 | Too regular to count | fewer than 3 distinct values, one step repeated (a ramp, with or without gaps), or distinct values that are a block of consecutive values in any order (a metatile's tile numbers) |
 | Reordered and scaled look in | PRG only: CHR is pictures, whose regular rows line up with anything reordered or scaled, and a picture typed out is found exactly |
 
+Some numbers are a run's measures, not typed, and aren't read: in the game's `approved.toml` as `gp mechanic approve` writes it, the frame numbers; in a score record under `evidence/` (a JSON in-toto Statement with the score record's predicate type, as `gp corpus score --write` writes it), the JSON numbers under the record's own keys (`frames`, `lag`, `permille`, `same`, `total` and the rest of `SCORE_RECORD_MEASURES` in `scan.rs`). A big corpus's record holds thousands, and on 2026-11-23 ten of tapper's `lag` frames were a ROM table times ten by chance, which refused the gate's own commit. A number in a string, or under any other key, is still read.
+
 Each match's report gives its chance, so a reader can tell a near miss from a certain copy. Lines of 24 characters or more of the lifted files found in a package file are needs rewrite too (`template::shared_lines`, as `gp template served` uses).
 
 ### Transcriptions

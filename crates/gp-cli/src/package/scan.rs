@@ -892,6 +892,134 @@ fn approved_measures(text: &str, nums: Vec<Num>) -> Vec<Num> {
         .collect()
 }
 
+/// The keys under which `gp corpus score --write` puts a number in a score
+/// record: frame counts and frame numbers of the run (`lag` is a list of
+/// the original's frames), permille and counts of clips. Each is measured
+/// by playing the clips, not typed.
+const SCORE_RECORD_MEASURES: &[&str] = &[
+    "clips",
+    "exact",
+    "errors",
+    "fidelity_permille",
+    "held",
+    "met",
+    "clips_same",
+    "frames_same",
+    "frames",
+    "permille",
+    "score",
+    "frames_together",
+    "frame",
+    "original_frame",
+    "start",
+    "model",
+    "original",
+    "offset",
+    "lag",
+    "last_offset",
+    "together",
+    "play",
+    "split_events",
+    "whole",
+    "open_end",
+    "longest",
+    "longest_any",
+    "median",
+    "p10",
+    "shortest",
+    "at_least_5s",
+    "at_least_10s",
+    "at_least_30s",
+    "same",
+    "total",
+];
+
+/// The numbers of a score record (`evidence/MODEL/CORPUS.json`) worth
+/// comparing: a record's measures are counts and frame numbers of a run,
+/// and with thousands of them in a big corpus a run of ten can be a ROM
+/// table times ten by chance (docs/package-scan.md, a game's `lag` frames
+/// on 2026-11-23). Only a
+/// file that is a score record as gp writes it (an in-toto Statement with
+/// the score record's predicate type and its clips) loses them, and only
+/// the JSON numbers under the record's own keys: a number in a string, or
+/// under any other key, is still compared. Any other text keeps all.
+fn score_record_measures(text: &str, nums: Vec<Num>) -> Vec<Num> {
+    let Ok(v) = serde_json::from_str::<Value>(text) else {
+        return nums;
+    };
+    if v["_type"] != "https://in-toto.io/Statement/v1"
+        || v["predicateType"] != crate::corpus_score::PREDICATE
+        || !v["predicate"]["clips"].is_array()
+    {
+        return nums;
+    }
+    let drop = json_numbers_under(text, SCORE_RECORD_MEASURES);
+    nums.into_iter()
+        .filter(|n| {
+            let i = drop.partition_point(|&(s, _)| s <= n.start);
+            !(i > 0 && n.end <= drop[i - 1].1)
+        })
+        .collect()
+}
+
+/// The byte spans of a JSON text's numbers whose key is one of `keys`: an
+/// object's field, or an element of an array that is that field's value.
+/// In order.
+fn json_numbers_under(text: &str, keys: &[&str]) -> Vec<(usize, usize)> {
+    let b = text.as_bytes();
+    // Each open object or array: whether an object, and the key its values
+    // are under (an object's field now, the key an array is the value of).
+    let mut stack: Vec<(bool, Option<&str>)> = Vec::new();
+    let mut want_key = false;
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < b.len() {
+        match b[i] {
+            b'"' => {
+                let s = i + 1;
+                i += 1;
+                while i < b.len() && b[i] != b'"' {
+                    i += if b[i] == b'\\' { 2 } else { 1 };
+                }
+                if want_key && let Some(top) = stack.last_mut() {
+                    top.1 = text.get(s..i.min(b.len()));
+                }
+                want_key = false;
+            }
+            b'{' => {
+                stack.push((true, None));
+                want_key = true;
+            }
+            b'[' => {
+                let under = stack.last().and_then(|t| t.1);
+                stack.push((false, under));
+            }
+            b'}' | b']' => {
+                stack.pop();
+            }
+            b',' => want_key = stack.last().is_some_and(|t| t.0),
+            b'-' | b'0'..=b'9' => {
+                let s = i;
+                while i < b.len() && matches!(b[i], b'0'..=b'9' | b'.' | b'e' | b'E' | b'+' | b'-')
+                {
+                    i += 1;
+                }
+                if stack
+                    .last()
+                    .and_then(|t| t.1)
+                    .is_some_and(|k| keys.contains(&k))
+                {
+                    out.push((s, i));
+                }
+                continue;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    out
+}
+
 /// Groups of numbers by byte span: every span's numbers in order.
 fn groups_of(nums: &[Num], spans: &[(usize, usize)]) -> Vec<rom_match::Group> {
     spans
@@ -1147,6 +1275,8 @@ fn scan_part(pkg: &Package, part: &Part, found: &BTreeMap<String, Rom>) -> Resul
             let mut nums = rom_match::numbers(&text);
             if rel == crate::approved::FILE {
                 nums = approved_measures(&text, nums);
+            } else if role == Role::Whole("score") && rel.ends_with(".json") {
+                nums = score_record_measures(&text, nums);
             }
             let toml = rel.ends_with(".toml") || role == Role::Recipe;
             let lexed = toml.then(|| fields::lex(&text));

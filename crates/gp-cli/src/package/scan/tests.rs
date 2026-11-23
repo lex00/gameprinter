@@ -473,6 +473,49 @@ fn a_routine_in_no_image_has_no_operands() {
     assert!(transcribe::routine_operands(&[], 0x8000).is_empty());
 }
 
+/// A score record as `gp corpus score --write` writes it: its measures (a
+/// clip's `lag` frames, its counts) are a run's, not typed, so ten lag
+/// frames that are a ROM table times ten aren't a copy. A number under a
+/// key the record doesn't have, or in a string, is still compared, and a
+/// JSON that isn't a score record keeps every number.
+#[test]
+fn a_score_records_measures_are_not_compared() {
+    let lag: Vec<u64> = (0..10).map(|k| 400 + 10 * k * k).collect();
+    let record = serde_json::json!({
+        "_type": "https://in-toto.io/Statement/v1",
+        "predicateType": crate::corpus_score::PREDICATE,
+        "predicate": {
+            "results": {"clips": 1, "exact": 0, "fidelity_permille": 912},
+            "clips": [{
+                "id": "game.level.003",
+                "frames": 900, "frames_together": 820, "permille": 911, "score": 3,
+                "first": {"frame": 77, "original_frame": 171, "path": "s 12 = 3"},
+                "pairing": {"model": 51, "original": 145, "offset": -94, "lag": lag, "last_offset": 104},
+                "screen": {"sprites": {"same": 880, "total": 900}},
+                "table": [17, 34, 51, 68],
+            }],
+        },
+    });
+    let text = serde_json::to_string_pretty(&record).unwrap();
+    let mut kept: Vec<i64> = super::score_record_measures(&text, rom_match::numbers(&text))
+        .iter()
+        .map(|n| n.value)
+        .collect();
+    kept.sort_unstable();
+    // The table under a key of its own, and the numbers of strings: the
+    // path's 12 and 3, the predicate type's 0.
+    assert_eq!(kept, [0, 3, 12, 17, 34, 51, 68], "{text}");
+
+    let mut other = record.clone();
+    other["predicateType"] = "urn:example:other".into();
+    let text = serde_json::to_string_pretty(&other).unwrap();
+    let all = rom_match::numbers(&text).len();
+    assert_eq!(
+        super::score_record_measures(&text, rom_match::numbers(&text)).len(),
+        all
+    );
+}
+
 /// An approved.toml as `gp mechanic approve` writes it: its frame numbers
 /// count the clip's frames, so a lock on consecutive frames isn't a ROM
 /// run; its pixel counts are still compared. A file that isn't approved
