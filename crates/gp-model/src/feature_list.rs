@@ -457,6 +457,12 @@ pub const FEATURES: &[Feature] = &[
         &["entities.*.board_sprite.hidden"],
     ),
     core(
+        "sprite.board.gone_next",
+        "",
+        "A body whose arcade board sprites are left out of the next frame's picture after the frames a bit or byte of its words says, but still drawn on a frame drawn from its own bodies, such as a clip's first",
+        &["entities.*.board_sprite.gone_next"],
+    ),
+    core(
         "level.board",
         "",
         "A level drawn as an arcade board draws its picture: its background tile layer from a whole screen, in the board's colours",

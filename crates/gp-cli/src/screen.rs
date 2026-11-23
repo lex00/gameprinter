@@ -459,8 +459,8 @@ impl Art {
         w: &gp_sim::World,
         lag: &mut gp_look::board::SpriteLag,
     ) -> Option<gp_sim::World> {
-        self.board_art.as_ref()?;
-        lag.lagged(w, &[]).map(|(w, _)| w)
+        let ba = self.board_art.as_ref()?;
+        lag.lagged(ba, w, &[]).map(|(w, _)| w)
     }
 
     /// The boxes of the bodies' other board sprites (`board_sprite.extra`)

@@ -539,6 +539,17 @@
           "description": "Mirrored left to right, on top of the flags' flip, while the body\nfaces left.",
           "type": "boolean"
         },
+        "gone_next": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BoardHidden"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Feature `sprite.board.gone_next`: the frames after which the game\nempties the object, so the board's picture of the next frame, drawn\nfrom this frame's copy (its sprites a frame late), has none of its\nsprites, while this frame's own picture still has them. Read as\n`hidden` is on a frame drawn from the frame before's bodies; a\nframe drawn from its own (a clip's frame 0, a loaded state, a jump)\nignores it, its sprite RAM having been copied before the game\nemptied anything. One arcade game's last frame before a bonus round\nor the game over ($5F31 empties every object)."
+        },
         "hidden": {
           "anyOf": [
             {

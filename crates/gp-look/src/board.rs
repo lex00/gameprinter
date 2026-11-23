@@ -173,6 +173,11 @@ struct KindSprite {
     /// The frames none of them is drawn (`board_sprite.hidden`): a byte
     /// of the body's words, and the bit of it that hides them (None: any).
     hidden: Option<(Byte, Option<u32>)>,
+    /// The frames after which the game empties the object
+    /// (`board_sprite.gone_next`): read as `hidden` on a frame drawn from
+    /// the frame before's bodies, ignored on one drawn from its own
+    /// ([`BoardArt::own_frame`]). As `hidden`, (word, byte) and its bit.
+    gone_next: Option<(usize, u32, Option<u32>)>,
 }
 
 /// One of a body's other sprites: its place from the body's, its picture
@@ -188,10 +193,29 @@ struct ExtraSprite {
 impl KindSprite {
     /// Whether the board leaves the body's sprites out this frame.
     fn hides(&self, body: &gp_sim::world::Body) -> bool {
-        self.hidden.is_some_and(|(byte, bit)| {
+        let set = |byte: Byte, bit: Option<u32>| {
             let v = byte.read(body);
             bit.map_or(v != 0, |k| v >> k.min(7) & 1 == 1)
-        })
+        };
+        self.hidden.is_some_and(|(byte, bit)| set(byte, bit))
+            || self
+                .gone_next
+                .is_some_and(|(w, k, bit)| set(Byte::Word(w, k), bit))
+    }
+
+    /// The body with its `gone_next` cleared: as a frame drawn from its own
+    /// bodies shows it. A byte with no bit is cleared whole.
+    fn clear_gone_next(&self, body: &mut gp_sim::world::Body) -> bool {
+        let Some((w, k, bit)) = self.gone_next else {
+            return false;
+        };
+        let Some(v) = body.ext.get_mut(w) else {
+            return false;
+        };
+        let mask = bit.map_or(0xff, |b| 1 << b.min(7)) << (8 * k.min(7));
+        let had = *v & mask != 0;
+        *v &= !mask;
+        had
     }
 
     /// The entry's position bytes for a body at (x, y) in its own units.
@@ -851,6 +875,10 @@ impl BoardArt {
                         .hidden
                         .as_ref()
                         .map(|h| (Byte::Word(h.word as usize, h.byte), h.bit)),
+                    gone_next: b
+                        .gone_next
+                        .as_ref()
+                        .map(|h| (h.word as usize, h.byte, h.bit)),
                 }))
             })
             .collect::<Result<Vec<_>, String>>()?;
@@ -904,6 +932,26 @@ impl BoardArt {
     /// Whether bodies of kind `kind` are the board's sprites.
     pub fn draws_kind(&self, kind: usize) -> bool {
         self.kinds.get(kind).is_some_and(Option::is_some)
+    }
+
+    /// The world a frame drawn from its own bodies (no frame before: a
+    /// clip's frame 0, a loaded state, a jump) is drawn with: its bodies'
+    /// `board_sprite.gone_next` cleared, as the board's sprite RAM for that
+    /// frame was copied before the game emptied them. None when no body has
+    /// it set, to draw `w` as it is.
+    #[must_use]
+    pub fn own_frame(&self, w: &World) -> Option<World> {
+        let mut out: Option<World> = None;
+        for (i, b) in w.bodies.iter().enumerate() {
+            let Some(Some(k)) = self.kinds.get(b.kind) else {
+                continue;
+            };
+            let mut nb = *b;
+            if k.clear_gone_next(&mut nb) {
+                out.get_or_insert_with(|| w.clone()).bodies[i] = nb;
+            }
+        }
+        out
     }
 
     /// The board's picture of the world's frame, or None when its level
@@ -1300,7 +1348,11 @@ pub struct Companion {
 /// world's `frame`: the next frame moves the lag on, the same frame again
 /// draws the same (a page drawing a frame both bare and in a theme), and
 /// any other (a jump, a loaded state, the first frame) draws the frame's
-/// own bodies, there being no frame before.
+/// own bodies, there being no frame before, with their
+/// `board_sprite.gone_next` cleared ([`BoardArt::own_frame`]): so a hook
+/// that sets it on a loaded state shows the objects on that frame and
+/// hides them on the next, as the board does when the game empties them
+/// as the loaded frame ends.
 #[derive(Debug, Default)]
 pub struct SpriteLag {
     /// The last frame seen, its bodies and which of them it showed.
@@ -1310,10 +1362,16 @@ pub struct SpriteLag {
 }
 
 impl SpriteLag {
-    /// The world and shown bodies to draw `w`'s frame with: `w` with the
-    /// frame before's bodies and their `shown`, or None to draw `w` and
-    /// `shown` as they are (no frame before).
-    pub fn lagged(&mut self, w: &World, shown: &[bool]) -> Option<(World, Vec<bool>)> {
+    /// The world and shown bodies to draw `w`'s frame with on `art`: `w`
+    /// with the frame before's bodies and their `shown`; with no frame
+    /// before, `w` as [`BoardArt::own_frame`] gives it; None to draw `w`
+    /// and `shown` as they are.
+    pub fn lagged(
+        &mut self,
+        art: &BoardArt,
+        w: &World,
+        shown: &[bool],
+    ) -> Option<(World, Vec<bool>)> {
         let seen = self.now.as_ref().map(|n| n.0);
         if seen != Some(w.frame) {
             self.before = if seen.is_some_and(|f| f + 1 == w.frame) {
@@ -1323,7 +1381,9 @@ impl SpriteLag {
             };
             self.now = Some((w.frame, w.bodies.clone(), shown.to_vec()));
         }
-        let (_, bodies, shown) = self.before.as_ref()?;
+        let Some((_, bodies, shown)) = self.before.as_ref() else {
+            return art.own_frame(w).map(|w| (w, shown.to_vec()));
+        };
         let mut l = w.clone();
         l.bodies.clone_from(bodies);
         Some((l, shown.clone()))
@@ -1356,7 +1416,9 @@ impl Companion {
             .lag
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        Ok(lag.lagged(&w, shown).unwrap_or_else(|| (w, shown.to_vec())))
+        Ok(lag
+            .lagged(&self.art, &w, shown)
+            .unwrap_or_else(|| (w, shown.to_vec())))
     }
 
     /// The board's picture of the frame whose canonical state is `state`
@@ -2238,8 +2300,8 @@ y = 191
         assert_eq!(got.drawn, own(&f40).drawn);
         // A body the game didn't show a frame before isn't drawn now.
         let mut lag = SpriteLag::default();
-        assert!(lag.lagged(&f10, &[false]).is_none());
-        let (lw, shown) = lag.lagged(&f11, &[true]).unwrap();
+        assert!(lag.lagged(&art, &f10, &[false]).is_none());
+        let (lw, shown) = lag.lagged(&art, &f11, &[true]).unwrap();
         assert_eq!((lw.bodies[0].x, shown), (f10.bodies[0].x, vec![false]));
     }
 
@@ -2667,6 +2729,94 @@ asset = "stage2"
             gp_model::validate::validate(&bad)
                 .iter()
                 .any(|p| p.message == "`bit` is 0 to 7")
+        );
+    }
+
+    /// A body whose `gone_next` bit is set is left out of the next frame's
+    /// picture, drawn from this frame's bodies, but still drawn on a frame
+    /// drawn from its own: a loaded state whose hook sets it shows the
+    /// body on the loaded frame and none of it on the next (a clip
+    /// starting on the game's last frame before it empties its objects).
+    /// `hidden` beside it still hides the loaded frame.
+    #[test]
+    fn a_body_gone_next_shows_on_the_loaded_frame_and_not_the_next() {
+        let dir = tempfile::tempdir().unwrap();
+        lift(dir.path());
+        let text = MODEL.replace(
+            "flags = { word = 1 }\n",
+            "flags = { word = 1 }\nhidden = { word = 3, byte = 4, bit = 0 }\ngone_next = { word = 3, byte = 7, bit = 6 }\n",
+        );
+        let model = Model::parse(&text).unwrap();
+        let errs: Vec<_> = gp_model::validate::validate(&model)
+            .into_iter()
+            .filter(|p| p.message != "no evidence covers this fact")
+            .collect();
+        assert!(errs.is_empty(), "{errs:?}");
+        assert!(model.features_used().contains("sprite.board.gone_next"));
+        let lifted = gp_interp::Lifted::read_dir(dir.path(), &model).unwrap();
+        let spec = gp_interp::compile::compile(&model, &lifted).unwrap();
+        let art = BoardArt::load(&model, &spec, dir.path()).unwrap().unwrap();
+        const GONE: i64 = 1 << 62;
+        const HIDDEN: i64 = 1 << 32;
+        let at = |frame: u64, ext3: i64| World {
+            frame,
+            bodies: vec![gp_sim::world::Body {
+                x: gp_sim::Fx::from_int(53),
+                y: gp_sim::Fx::from_int(191),
+                alive: true,
+                ext: [0, 0x0203, 0, ext3],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        // Frames drawn in turn, as a lockstep draws them: how many sprites
+        // each one's picture has.
+        let run = |frames: &[World]| {
+            let mut lag = SpriteLag::default();
+            frames
+                .iter()
+                .map(|w| {
+                    let (dw, shown) = lag
+                        .lagged(&art, w, &[true])
+                        .unwrap_or_else(|| (w.clone(), vec![true]));
+                    art.draw(&dw, &shown, &[u32::MAX]).unwrap().drawn.len()
+                })
+                .collect::<Vec<_>>()
+        };
+        // Loaded on frame 10 with gone_next set (the hook's loaded), the
+        // step of 11 clearing it: shown on 10, gone on 11, back on 12.
+        assert_eq!(run(&[at(10, GONE), at(11, 0), at(12, 0)]), [1, 0, 1]);
+        // In play the same: set on 11, gone on 12.
+        assert_eq!(run(&[at(10, 0), at(11, GONE), at(12, 0)]), [1, 1, 0]);
+        // A jump is drawn from its own bodies too.
+        assert_eq!(run(&[at(10, 0), at(40, GONE), at(41, 0)]), [1, 1, 0]);
+        // `hidden` on the loaded frame hides it there and on the next.
+        assert_eq!(run(&[at(10, HIDDEN), at(11, HIDDEN), at(12, 0)]), [0, 0, 0]);
+        assert_eq!(run(&[at(10, HIDDEN), at(11, 0), at(12, 0)]), [0, 0, 1]);
+        // Drawn alone, a frame with gone_next set is hidden: own_frame is
+        // what clears it, and leaves a world with none set as it is.
+        assert_eq!(
+            art.draw(&at(10, GONE), &[true], &[u32::MAX])
+                .unwrap()
+                .drawn
+                .len(),
+            0
+        );
+        assert!(art.own_frame(&at(10, HIDDEN)).is_none());
+        assert_eq!(
+            art.own_frame(&at(10, GONE | HIDDEN)).unwrap().bodies[0].ext[3],
+            HIDDEN
+        );
+        // A byte past 7 is refused.
+        let bad = Model::parse(&text.replace(
+            "gone_next = { word = 3, byte = 7, bit = 6 }",
+            "gone_next = { word = 3, byte = 8 }",
+        ))
+        .unwrap();
+        assert!(
+            gp_model::validate::validate(&bad)
+                .iter()
+                .any(|p| p.message == "`byte` is 0 to 7" && p.path.ends_with("gone_next"))
         );
     }
 

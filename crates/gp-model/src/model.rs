@@ -1013,6 +1013,17 @@ pub struct BoardSprite {
     /// leaves its player out of sprite RAM for a frame.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hidden: Option<BoardHidden>,
+    /// Feature `sprite.board.gone_next`: the frames after which the game
+    /// empties the object, so the board's picture of the next frame, drawn
+    /// from this frame's copy (its sprites a frame late), has none of its
+    /// sprites, while this frame's own picture still has them. Read as
+    /// `hidden` is on a frame drawn from the frame before's bodies; a
+    /// frame drawn from its own (a clip's frame 0, a loaded state, a jump)
+    /// ignores it, its sprite RAM having been copied before the game
+    /// emptied anything. One arcade game's last frame before a bonus round
+    /// or the game over ($5F31 empties every object).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gone_next: Option<BoardHidden>,
 }
 
 /// When a body's board sprites are left out (feature

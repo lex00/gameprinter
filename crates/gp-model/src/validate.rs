@@ -735,9 +735,12 @@ pub fn validate(model: &Model) -> Vec<Problem> {
                     _ => {}
                 }
             }
-            // Feature `sprite.board.hidden`.
-            if let Some(h) = &b.hidden {
-                let here = format!("{bat}.hidden");
+            // Features `sprite.board.hidden` and `sprite.board.gone_next`.
+            for (name, h) in [("hidden", &b.hidden), ("gone_next", &b.gone_next)] {
+                let Some(h) = h else {
+                    continue;
+                };
+                let here = format!("{bat}.{name}");
                 if h.word > 3 {
                     c.add(here, "`word` is 0 to 3");
                 } else if h.byte > 7 {
