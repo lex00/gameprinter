@@ -46,6 +46,10 @@ if [ "${RUNNER_OS:-}" = Linux ]; then
   # bubblewrap: gp self check --strict builds a module from the kit in
   # gp game build's sandbox below.
   sudo apt-get -o Acquire::Retries=5 install -y -qq zip bubblewrap
+  # Ubuntu 24.04 keeps unprivileged user namespaces from programs with no
+  # AppArmor profile, bwrap among them: allow them on this runner, or the
+  # sandboxed module build fails at "setting up uid map".
+  sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
 fi
 
 (cd editor && npm ci --silent --no-audit --no-fund && npm run --silent build)
@@ -86,6 +90,10 @@ else
   gp="$(ls -d "$tmp"/unpacked/gp-*/)gp"
 fi
 cd "$tmp"
+# The empty home hides nothing the check needs: rustup and cargo keep their
+# own homes (by default under HOME, which moves below), or gp self check
+# finds no Rust, skips the module build and --strict fails.
+export RUSTUP_HOME="${RUSTUP_HOME:-$HOME/.rustup}" CARGO_HOME="${CARGO_HOME:-$HOME/.cargo}"
 export HOME="$tmp/empty-home" GP_HOME="$tmp/empty-home/.gameprinter"
 
 # What a person's machine has: the archive, and not the checkout gp was
