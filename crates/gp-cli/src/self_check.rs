@@ -308,45 +308,7 @@ fn checks(paths: &Paths) -> Vec<Item> {
         needed_by: vec![],
     });
 
-    let ch = channel();
-    let rustup = on_path("rustup");
-    let (rust_ok, rust_found, rust_fix) = match &rustup {
-        None => (
-            false,
-            "rustup not on PATH".to_owned(),
-            format!(
-                "install rustup from https://rustup.rs, then: rustup toolchain install {ch} --target {MODULE_TARGET}"
-            ),
-        ),
-        Some(r) => {
-            let cargo = first_line(r, &["which", "--toolchain", &ch, "cargo"]);
-            let targets = Command::new(r)
-                .args(["target", "list", "--installed", "--toolchain", &ch])
-                .stdin(Stdio::null())
-                .output()
-                .ok()
-                .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
-                .unwrap_or_default();
-            let has_target = targets.lines().any(|l| l.trim() == MODULE_TARGET);
-            match (cargo, has_target) {
-                (Some(_), true) => (
-                    true,
-                    format!("Rust {ch} with {MODULE_TARGET}"),
-                    String::new(),
-                ),
-                (Some(_), false) => (
-                    false,
-                    format!("Rust {ch} without the {MODULE_TARGET} target"),
-                    format!("rustup target add {MODULE_TARGET} --toolchain {ch}"),
-                ),
-                (None, _) => (
-                    false,
-                    format!("rustup is here, Rust {ch} isn't"),
-                    format!("rustup toolchain install {ch} --target {MODULE_TARGET}"),
-                ),
-            }
-        }
-    };
+    let (rust_ok, rust_found, rust_fix) = rust_here();
     items.push(Item {
         what: "Rust",
         ok: rust_ok,
@@ -356,32 +318,7 @@ fn checks(paths: &Paths) -> Vec<Item> {
         needed_by: vec![Port],
     });
 
-    let (sandbox_ok, sandbox_found, sandbox_fix) = if cfg!(target_os = "macos") {
-        let p = Path::new("/usr/bin/sandbox-exec");
-        (
-            p.is_file(),
-            if p.is_file() {
-                "sandbox-exec (part of macOS)".into()
-            } else {
-                "no /usr/bin/sandbox-exec".into()
-            },
-            "it is part of macOS; nothing to install".to_owned(),
-        )
-    } else if cfg!(target_os = "linux") {
-        let b = on_path("bwrap");
-        (
-            b.is_some(),
-            b.map_or_else(|| "bwrap not on PATH".into(), |p| p.display().to_string()),
-            "apt install bubblewrap (or your system's package of it)".to_owned(),
-        )
-    } else {
-        (
-            false,
-            "no build sandbox gp knows on this system".into(),
-            "build game code on macOS or Linux; gp game build has no sandbox for Windows yet"
-                .to_owned(),
-        )
-    };
+    let (sandbox_ok, sandbox_found, sandbox_fix) = sandbox_here();
     items.push(Item {
         what: "the build sandbox",
         ok: sandbox_ok,
@@ -453,6 +390,91 @@ fn checks(paths: &Paths) -> Vec<Item> {
     });
 
     items
+}
+
+/// Why this machine can't build a module from the kit, so self check
+/// skips 'a module built from the kit': no Rust with the module's target,
+/// or no build sandbox. None when it can.
+pub(crate) fn why_no_module_build() -> Option<String> {
+    let (rust, rust_found, _) = rust_here();
+    let (sandbox, sandbox_found, _) = sandbox_here();
+    match (rust, sandbox) {
+        (true, true) => None,
+        (false, _) => Some(format!("no toolchain ({rust_found})")),
+        (true, false) => Some(format!("no build sandbox ({sandbox_found})")),
+    }
+}
+
+/// Whether Rust is here with the toolchain file's channel and the
+/// module's target: whether, what was found, and how to get it.
+fn rust_here() -> (bool, String, String) {
+    let ch = channel();
+    let Some(r) = on_path("rustup") else {
+        return (
+            false,
+            "rustup not on PATH".to_owned(),
+            format!(
+                "install rustup from https://rustup.rs, then: rustup toolchain install {ch} --target {MODULE_TARGET}"
+            ),
+        );
+    };
+    let cargo = first_line(&r, &["which", "--toolchain", &ch, "cargo"]);
+    let targets = Command::new(&r)
+        .args(["target", "list", "--installed", "--toolchain", &ch])
+        .stdin(Stdio::null())
+        .output()
+        .ok()
+        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+        .unwrap_or_default();
+    let has_target = targets.lines().any(|l| l.trim() == MODULE_TARGET);
+    match (cargo, has_target) {
+        (Some(_), true) => (
+            true,
+            format!("Rust {ch} with {MODULE_TARGET}"),
+            String::new(),
+        ),
+        (Some(_), false) => (
+            false,
+            format!("Rust {ch} without the {MODULE_TARGET} target"),
+            format!("rustup target add {MODULE_TARGET} --toolchain {ch}"),
+        ),
+        (None, _) => (
+            false,
+            format!("rustup is here, Rust {ch} isn't"),
+            format!("rustup toolchain install {ch} --target {MODULE_TARGET}"),
+        ),
+    }
+}
+
+/// Whether gp game build's sandbox is here: whether, what was found, and
+/// how to get it.
+fn sandbox_here() -> (bool, String, String) {
+    if cfg!(target_os = "macos") {
+        let p = Path::new("/usr/bin/sandbox-exec");
+        (
+            p.is_file(),
+            if p.is_file() {
+                "sandbox-exec (part of macOS)".into()
+            } else {
+                "no /usr/bin/sandbox-exec".into()
+            },
+            "it is part of macOS; nothing to install".to_owned(),
+        )
+    } else if cfg!(target_os = "linux") {
+        let b = on_path("bwrap");
+        (
+            b.is_some(),
+            b.map_or_else(|| "bwrap not on PATH".into(), |p| p.display().to_string()),
+            "apt install bubblewrap (or your system's package of it)".to_owned(),
+        )
+    } else {
+        (
+            false,
+            "no build sandbox gp knows on this system".into(),
+            "build game code on macOS or Linux; gp game build has no sandbox for Windows yet"
+                .to_owned(),
+        )
+    }
 }
 
 /// What came of using one thing this gp carries.
@@ -743,12 +765,38 @@ fn checkout_to_check(as_installed: bool) -> Option<PathBuf> {
 /// `gp self check`: on a gp built from source, against the checkout it
 /// was built from; else (or `as_installed`) from the bundle alone, with
 /// that checkout hidden for the whole run (crate::repo::hide_built).
-pub(crate) fn run(paths: &Paths, as_installed: bool) -> Result<Outcome> {
-    if let Some(dir) = checkout_to_check(as_installed) {
-        return report(paths, Source::Checkout(&dir));
+/// With `strict`, a skipped use fails it (the release job's check).
+pub(crate) fn run(paths: &Paths, as_installed: bool, strict: bool) -> Result<Outcome> {
+    let o = if let Some(dir) = checkout_to_check(as_installed) {
+        report(paths, Source::Checkout(&dir))?
+    } else {
+        let _hidden = crate::repo::hide_built();
+        report(paths, Source::Bundle(Carried::own()))?
+    };
+    Ok(if strict { strictly(o) } else { o })
+}
+
+/// `o` with each use it skipped counted as failed: a line saying so and
+/// exit 1 when there is one.
+fn strictly(mut o: Outcome) -> Outcome {
+    let skipped: Vec<String> = o.json["skipped"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(str::to_owned))
+                .collect()
+        })
+        .unwrap_or_default();
+    o.json["strict"] = true.into();
+    if !skipped.is_empty() {
+        let _ = write!(
+            o.text,
+            "\n--strict: a use skipped is a use not checked, so this check fails: {} skipped",
+            skipped.join(", ")
+        );
+        o.exit = 1;
     }
-    let _hidden = crate::repo::hide_built();
-    report(paths, Source::Bundle(Carried::own()))
+    o
 }
 
 fn item<'a>(items: &'a [Item], what: &str) -> Option<&'a Item> {
@@ -864,6 +912,18 @@ fn report(paths: &Paths, src: Source<'_>) -> Result<Outcome> {
             failed.join(", ")
         );
     }
+    let skipped: Vec<&str> = tried
+        .iter()
+        .filter(|u| u.did == Did::NotChecked)
+        .map(|u| u.what)
+        .collect();
+    if !skipped.is_empty() {
+        let _ = write!(
+            text,
+            "\nNot checked on this machine: {} (skipped, see above)",
+            skipped.join(", ")
+        );
+    }
     Ok(Outcome {
         json: json!({
             "version": env!("CARGO_PKG_VERSION"),
@@ -884,6 +944,7 @@ fn report(paths: &Paths, src: Source<'_>) -> Result<Outcome> {
             "checks": list,
             "uses": tried_list,
             "failed": failed,
+            "skipped": skipped,
             "ready": ready,
         }),
         text: text.trim_end().to_owned(),
@@ -921,7 +982,7 @@ mod tests {
             Some(home.path().join("roms")),
         )
         .unwrap();
-        let o = run(&paths, true).unwrap();
+        let o = run(&paths, true, false).unwrap();
         // Checked as installed, a gp built from source carries nothing, so
         // it fails every use of the carried files, though its checkout is
         // right here.
@@ -942,7 +1003,7 @@ mod tests {
         let start = json!({"clientInfo": {"name": "claude-code", "version": "2.1.0"}});
         let now = gp_mcp::asks::now_ms();
         gp_mcp::clients::record(&paths.home, &start, "0.1.2", now).unwrap();
-        let o = run(&paths, true).unwrap();
+        let o = run(&paths, true, false).unwrap();
         let one = "ok      an agent: claude-code 2.1.0 connected just now (gp 0.1.2)";
         assert!(o.text.contains(one), "{}", o.text);
         // No ROM folder: every kind of work says it needs your ROMs.
@@ -1023,7 +1084,41 @@ mod tests {
             says(&o, line);
         }
         assert_eq!(o.json["failed"], json!(["the module kit"]));
-        assert!(o.text.ends_with("the module kit failed"), "{}", o.text);
+        says(&o, "the module kit failed\n");
+        assert_eq!(o.json["skipped"], json!(["a module built from the kit"]));
+        assert!(
+            o.text.ends_with(
+                "Not checked on this machine: a module built from the kit (skipped, see above)"
+            ),
+            "{}",
+            o.text
+        );
+    }
+
+    /// docs/release.md: the release job's check passes
+    /// --strict, so a use skipped there (a module built from the kit, on
+    /// a runner without Rust or the sandbox) fails it in place of passing
+    /// unchecked; without it a skip alone exits 0.
+    #[test]
+    fn strict_fails_a_check_that_skipped_a_use() {
+        let skipping = || Outcome {
+            json: json!({"failed": [], "skipped": ["a module built from the kit"]}),
+            text: "Not checked on this machine: a module built from the kit".into(),
+            exit: 0,
+        };
+        let o = strictly(skipping());
+        assert_eq!(o.exit, 1, "{}", o.text);
+        says(
+            &o,
+            "--strict: a use skipped is a use not checked, so this check fails: a module built from the kit skipped",
+        );
+        let clean = strictly(Outcome {
+            json: json!({"failed": [], "skipped": []}),
+            text: String::new(),
+            exit: 0,
+        });
+        assert_eq!(clean.exit, 0);
+        assert_eq!(clean.json["strict"], true);
     }
 
     /// With the kit in the bundle, `gp game kit`'s path takes it from

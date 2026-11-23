@@ -589,6 +589,22 @@ fn lane_log(c: &Cx, name: &str) -> PathBuf {
         .join(name.replace(['/', ' '], "_"))
 }
 
+/// What the gate says when this machine can't build a module from the
+/// kit (`why`, crate::self_check::why_no_module_build): no check here
+/// builds one, and gp self check skips its own, so a change that breaks
+/// the kit's module build passes here unseen (0.1.3's build script
+/// panicked on the kit's manifests, and no worker's shell ever ran that
+/// step; docs/release.md). The release
+/// job's `gp self check --as-installed --strict` builds one and fails
+/// without it.
+fn module_build_note(why: Option<String>) -> Option<String> {
+    why.map(|why| {
+        format!(
+            "not checked here: a module built from the kit (gp self check skips it on this machine: {why}); the release job's gp self check --strict builds one"
+        )
+    })
+}
+
 /// The lane `just check`, from the tree, in the gate's profile, told
 /// (GP_GATE_RUNS_TESTS=1) to leave its own test run to the tests lane.
 /// GP_GATE_RUN names this gate's process: `just check` honours
@@ -1012,6 +1028,10 @@ fn trial(
             Ok(l) => lines.extend(l),
             Err(f) => return Ok(Err(f)),
         }
+    }
+    if let Some(msg) = module_build_note(crate::self_check::why_no_module_build()) {
+        c.steps.note(&msg);
+        lines.push(msg);
     }
     // The editor the landing publishes beside the build (crate::publish):
     // `just check` doesn't build it, and this tree's own is kept between
@@ -1560,6 +1580,22 @@ mod tests {
             "{}",
             f.why
         );
+    }
+
+    /// On a machine that can't build a
+    /// module from the kit, the gate says it didn't check one, and why;
+    /// on one that can, it says nothing.
+    #[test]
+    fn a_gate_that_cant_build_a_module_says_so() {
+        let why = "no toolchain (rustup not on PATH)".to_owned();
+        let note = module_build_note(Some(why)).unwrap();
+        assert!(
+            note.starts_with("not checked here: a module built from the kit"),
+            "{note}"
+        );
+        assert!(note.contains("no toolchain (rustup not on PATH)"), "{note}");
+        assert!(note.contains("gp self check --strict"), "{note}");
+        assert_eq!(module_build_note(None), None);
     }
 
     fn script(path: &Path, body: &str) {

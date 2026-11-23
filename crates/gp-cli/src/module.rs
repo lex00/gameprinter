@@ -1020,6 +1020,33 @@ pub fn data_parts(wasm: &[u8]) -> Result<Vec<(String, &[u8])>> {
 mod tests {
     use super::*;
 
+    /// gp-exts' build script's reader, which every module build runs.
+    #[allow(dead_code)]
+    mod hashing {
+        include!("../../gp-exts/src/hashing.rs");
+    }
+
+    /// docs/release.md, the check of the built archive: the kit's manifests are written back
+    /// by the `toml` crate, which turns `version.workspace = true` into a
+    /// `[package.version]` table, and gp-exts' build script panicked on
+    /// it, so no module built from the kit. The hook crate's manifest and
+    /// the workspace's, as the kit writes them, give the workspace's
+    /// version to the script's reader. It needs no toolchain, so it runs
+    /// where gp self check skips its module build.
+    #[test]
+    fn the_kits_manifests_give_the_hook_crate_its_version() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let ext = browser_manifest(&root.join("crates/gp-ext-game/Cargo.toml")).unwrap();
+        assert!(ext.contains("[package.version]"), "{ext}");
+        let root_toml = read_table(&root.join("Cargo.toml")).unwrap();
+        let version = root_toml["workspace"]["package"]["version"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let ws = toml::to_string(&root_toml).unwrap();
+        assert_eq!(hashing::package_version(&ext, &ws), version);
+    }
+
     fn wasm_with(data: &[u8]) -> Vec<u8> {
         let mut w = b"\0asm\x01\0\0\0".to_vec();
         // A custom section named "n" holding `abc`, then one active segment.

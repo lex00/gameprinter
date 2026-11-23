@@ -43,7 +43,9 @@ rustup target add wasm32-unknown-unknown "$target"
 cargo install --locked cargo-about --version 0.9.2
 if [ "${RUNNER_OS:-}" = Linux ]; then
   sudo apt-get -o Acquire::Retries=5 update -qq
-  sudo apt-get -o Acquire::Retries=5 install -y -qq zip
+  # bubblewrap: gp self check --strict builds a module from the kit in
+  # gp game build's sandbox below.
+  sudo apt-get -o Acquire::Retries=5 install -y -qq zip bubblewrap
 fi
 
 (cd editor && npm ci --silent --no-audit --no-fund && npm run --silent build)
@@ -94,7 +96,19 @@ export HOME="$tmp/empty-home" GP_HOME="$tmp/empty-home/.gameprinter"
 # opens the page's files and the templates, makes the module kit and
 # builds a module from it, and asks the page's server for its first page,
 # each from the bundle alone; gp game kit is then the command gp model
-# gate runs first.
+# gate runs first. --strict fails the check when self check skips a use
+# (0.1.3's module build from the kit was never tried in a shell without
+# Rust, and failed on every archive; docs/release.md), so
+# this runner must have Rust with wasm32 (above) and the sandbox. Windows
+# has no sandbox gp game build knows, so there the module build is skipped
+# and named, and the check is the rest.
+self_check() {
+  if [ -n "$windows" ]; then
+    "$gp" self check --as-installed
+  else
+    "$gp" self check --as-installed --strict
+  fi
+}
 check() {
   local said
   said="$("$gp" --version)" || return 1
@@ -103,7 +117,7 @@ check() {
     "gp $version"*) ;;
     *) echo "chant-build: the built gp says '$said', not gp $version" >&2; return 1 ;;
   esac
-  "$gp" self check --as-installed || return 1
+  self_check || return 1
   "$gp" game kit -o "$tmp/kit" || return 1
 }
 status=0

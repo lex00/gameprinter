@@ -78,21 +78,30 @@ pub enum SelfCmd {
     /// whether this machine is ready to make a theme, make a game, or port
     /// one. A gp built from source carries no bundle: it uses the checkout
     /// it was built from in its place, says so on its first line, and fails
-    /// when that checkout is gone. Writes only under $GP_HOME. Exits 1 when
-    /// gp can't write its home folder or a use failed. Example: gp self
-    /// check
+    /// when that checkout is gone. A use it skipped is named on a line of
+    /// its own at the end. Writes only under $GP_HOME. Exits 1 when gp
+    /// can't write its home folder or a use failed (or, with --strict, was
+    /// skipped). Example: gp self check
     Check {
         /// Check this gp as a released one, from its bundle alone with the
         /// checkout it was built from hidden, even when it was built from
         /// source (the release's own check of its archive).
         #[arg(long)]
         as_installed: bool,
+        /// Count a use it skipped (a module built from the kit, on a
+        /// machine without Rust or the sandbox) as failed, and exit 1 for
+        /// it: the release job's check, where every use must run.
+        #[arg(long)]
+        strict: bool,
     },
 }
 
 pub(crate) fn run(cmd: &SelfCmd, paths: &Paths) -> Result<Outcome> {
     match cmd {
-        SelfCmd::Check { as_installed } => crate::self_check::run(paths, *as_installed),
+        SelfCmd::Check {
+            as_installed,
+            strict,
+        } => crate::self_check::run(paths, *as_installed, *strict),
         SelfCmd::Path => self_path(paths),
         SelfCmd::Publish => self_publish(paths),
         SelfCmd::Docs { file, check } => crate::cli_doc::run(file, *check),
