@@ -417,9 +417,12 @@ impl Runtime for Interp {
 
     /// The canonical state is the interpreter's snapshot, so it loads in
     /// full: no notes. One of another model, or another state version, is
-    /// refused.
+    /// refused. The hooks' [`gp_sim::Ext::loaded`] then run on it once, so
+    /// the loaded frame (a clip's frame 0) is drawn with what they derive
+    /// from it; `restore`, a snapshot's own, runs none.
     fn load_state(&mut self, state: &[u8]) -> Result<Vec<gp_runtime::LoadNote>, String> {
         self.restore(state)?;
+        gp_sim::systems::loaded_hooks(&self.spec, &mut self.world, &self.exts);
         // The first loaded state is the start a lockstep's `from` names,
         // the script's `base`, whatever the model ran before it; a later
         // one is a resync, from which the script goes on.

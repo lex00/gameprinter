@@ -1070,6 +1070,68 @@ impl gp_sim::Ext for Drift {
     }
 }
 
+/// A hook that derives the player's ext word 1 from word 0 on a loaded
+/// state only, as a game's screen may be looked up from its stage.
+struct Derives;
+
+impl gp_sim::Ext for Derives {
+    fn step(&self, _cx: &mut gp_sim::ExtCx<'_>) {}
+
+    fn loaded(&self, cx: &mut gp_sim::ExtCx<'_>) {
+        cx.me.ext[1] = cx.me.ext[0] + 7;
+    }
+}
+
+/// A loaded state (a clip's start) has what the hooks derive from it
+/// before its frame is drawn or any frame steps; a snapshot restored
+/// doesn't run them, and a state loaded twice is the same world.
+#[test]
+fn a_loaded_state_runs_the_hooks_loaded_before_its_first_frame() {
+    let mut rt = load();
+    rt.edit_spec(|s| {
+        let p = s
+            .kinds
+            .iter_mut()
+            .find(|k| k.role == gp_sim::spec::Role::Player)
+            .unwrap();
+        p.ext = Some("derives".into());
+        Ok(())
+    })
+    .unwrap();
+    let mut exts = gp_sim::Exts::new();
+    exts.insert("derives".into(), Box::new(Derives));
+    let mut rt = rt.with_exts(std::sync::Arc::new(exts));
+    let player = |rt: &Interp| {
+        *rt.world()
+            .bodies
+            .iter()
+            .find(|b| rt.spec().kinds[b.kind].role == gp_sim::spec::Role::Player)
+            .unwrap()
+    };
+    let mut w = rt.world().clone();
+    let at = w
+        .bodies
+        .iter()
+        .position(|b| rt.spec().kinds[b.kind].role == gp_sim::spec::Role::Player)
+        .unwrap();
+    w.bodies[at].ext[0] = 3;
+    let state = w.canonical();
+    rt.restore(&state).unwrap();
+    assert_eq!(player(&rt).ext[1], 0, "a restore runs no hook");
+    rt.load_state(&state).unwrap();
+    assert_eq!(player(&rt).ext[1], 10, "the load derived word 1");
+    assert_eq!(rt.frame(), w.frame, "no frame is counted");
+    let once = rt.canonical_state();
+    rt.load_state(&once).unwrap();
+    assert_eq!(
+        rt.canonical_state(),
+        once,
+        "loading it again changes nothing"
+    );
+    rt.step(&pads(0, 2)).unwrap();
+    assert_eq!(player(&rt).ext[1], 10, "a step doesn't run it");
+}
+
 /// Each slot life gets one body of its entity, placed where the slot is
 /// on its first frame and stepped on the original's clock ticks while it
 /// moves its objects; both sides' speed and period come out alike.

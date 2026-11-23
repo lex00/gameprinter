@@ -309,6 +309,28 @@ fn frame_start_hooks(spec: &Spec, w: &mut World, f: &mut Frame, exts: &Exts) {
     }
 }
 
+/// Runs every active hooked body's [`crate::Ext::loaded`] once on a world
+/// just loaded, in body order, with its requests applied as a step's are:
+/// no frame is counted, no input taken and no system run, so the loaded
+/// frame is drawn with what the hooks derive from it. The events the hooks
+/// fire are dropped, as nothing steps to handle them.
+pub fn loaded_hooks(spec: &Spec, w: &mut World, exts: &Exts) {
+    if exts.is_empty() {
+        return;
+    }
+    let mut f = Frame {
+        out: vec![false; w.bodies.len()],
+        fresh_bodies: vec![false; w.bodies.len()],
+        fresh_rules: vec![false; spec.machines.len()],
+        pad: w.held,
+        ..Frame::default()
+    };
+    // A hook's spawn adds a body after the loop's end; it isn't run.
+    for i in 0..w.bodies.len() {
+        run_hook(spec, w, &mut f, i, exts, Phase::Loaded);
+    }
+}
+
 /// Counts down the counter changes waiting for their `after` (core
 /// 0.4.13), every frame, frozen or not: one with none left is made now,
 /// in the order the events fired.
@@ -3115,6 +3137,7 @@ enum Phase {
     Step,
     Appear,
     FrameStart,
+    Loaded,
 }
 
 fn run_hook(spec: &Spec, w: &mut World, f: &mut Frame, i: usize, exts: &Exts, phase: Phase) {
@@ -3159,6 +3182,7 @@ fn run_hook(spec: &Spec, w: &mut World, f: &mut Frame, i: usize, exts: &Exts, ph
             Phase::Step => hook.step(&mut cx),
             Phase::Appear => hook.appear(&mut cx),
             Phase::FrameStart => hook.frame_start(&mut cx),
+            Phase::Loaded => hook.loaded(&mut cx),
         }
         f.cycles = cx.cycles;
         cx.requests
@@ -7500,6 +7524,42 @@ mod tests {
         let (steps, starts) = run(&s);
         assert_eq!(steps, 0, "the freeze still stops the step");
         assert!(starts >= 9, "the frame start runs on every frozen frame");
+    }
+
+    /// A hook's `loaded`, on a made-up hook that sets a counter from its
+    /// body's word 0 and bumps word 2: [`loaded_hooks`] runs it once per
+    /// active hooked body, counting no frame and running no `step`.
+    struct Loads;
+
+    impl crate::ext::Ext for Loads {
+        fn step(&self, cx: &mut crate::ext::ExtCx<'_>) {
+            cx.me.ext[0] += 100;
+        }
+
+        fn loaded(&self, cx: &mut crate::ext::ExtCx<'_>) {
+            cx.me.ext[2] += 1;
+            cx.me.ext[1] = cx.me.ext[0] * 2;
+        }
+    }
+
+    #[test]
+    fn a_loaded_hook_runs_once_on_the_loaded_world() {
+        let mut s = quiet(spec());
+        s.kinds[1].ext = Some("loads".into());
+        let mut exts = crate::ext::Exts::new();
+        exts.insert("loads".into(), Box::new(Loads));
+        let mut w = World::power_on(&s);
+        let at = w.bodies.iter().position(|b| b.kind == 1).unwrap();
+        w.bodies[at].ext[0] = 4;
+        w.bodies[at].alive = true;
+        w.bodies[at].waiting = false;
+        let frame = w.frame;
+        loaded_hooks(&s, &mut w, &exts);
+        let b = w.bodies[at];
+        assert_eq!((b.ext[0], b.ext[1], b.ext[2]), (4, 8, 1), "{b:?}");
+        assert_eq!(w.frame, frame, "no frame is counted");
+        loaded_hooks(&s, &mut w, &crate::ext::Exts::new());
+        assert_eq!(w.bodies[at].ext[2], 1, "no hooks, nothing runs");
     }
 
     /// Core `entity.hook_first` and `ExtCx::hold`, on a made-up hook that

@@ -38,6 +38,17 @@ pub trait Ext: Send + Sync {
     /// last frame made. The default does nothing.
     fn frame_start(&self, _cx: &mut ExtCx<'_>) {}
 
+    /// Runs once on a state loaded into the model (a clip's start, a
+    /// resync, a saved state), for each active hooked instance in body
+    /// order, before the loaded frame is drawn and before any frame steps
+    /// ([`crate::systems::loaded_hooks`]): a hook sets up what it derives
+    /// from loaded values and nothing loads, such as a presentation counter
+    /// it looks up from a loaded counter in a lifted table, so the first
+    /// frame shows it. It should only derive: a state loaded twice gives
+    /// the same world. `cx.frame` is the loaded frame. The default does
+    /// nothing.
+    fn loaded(&self, _cx: &mut ExtCx<'_>) {}
+
     /// The mechanics this hook is, as records (crate::mechanic), so the
     /// hook isn't opaque to `gp model mechanics`, composition and the
     /// clean-room check. Usually one; a hook that is several mechanics
