@@ -1,6 +1,6 @@
 # Editing sprites with an agent
 
-Brought from game-printer's docs/sprite-editing.md. On an arcade game's lift (Tapper's) the external editor trip is the board's own sprites, and it stops before the proposal ([Arcade boards](#arcade-boards)).
+Brought from game-printer's docs/sprite-editing.md. On an arcade game's lift (Tapper's) the external editor trip is the board's own sprites, and a save comes back as a proposal on the person's page as an NES tile's does ([Arcade boards](#arcade-boards), [On the page](#on-the-page)).
 
 A person tells their agent what to change about a sprite ("give him a red cap", "a bolder outline", "make the slug face the other way"), and Game Printer does it. The agent turns the request into deterministic operations, and Game Printer checks the result against the model and draws it into the recorded frames where the sprite is seen. The person sees the before and after pictures on their page and accepts or rejects it there (or with `gp assets proposal` in their terminal); the agent can't answer for them. There are no painting tools in Game Printer yet. A person who wants to draw by hand uses an external editor, starting with Pixelorama (phase 3, below).
 

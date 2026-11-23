@@ -18,7 +18,7 @@ Four steps take you from nothing to porting a game from a ROM you own.
    gp --version
    ```
 
-   With no Homebrew, or on Windows, [download a release](#download-it) instead.
+   With no Homebrew, [download a release](#download-it) instead. No release has a Windows build yet; on Windows, [build it from source](#build-it-from-source).
 
 2. Add Game Printer's plugin to [Claude Code](https://claude.com/claude-code) by typing these two lines into a Claude Code session:
 
@@ -53,7 +53,8 @@ A [release](https://github.com/lex00/gameprinter/releases) has an archive for ea
 | Mac with an Intel processor | `gp-x86_64-apple-darwin.tar.gz` |
 | Linux on an Intel or AMD 64-bit processor | `gp-x86_64-unknown-linux-gnu.tar.gz` |
 | Linux on a 64-bit ARM processor | `gp-aarch64-unknown-linux-gnu.tar.gz` |
-| Windows 10 or 11, 64-bit Intel or AMD | `gp-x86_64-pc-windows-msvc.zip` |
+
+Windows has no archive yet. Releases since 0.1.2 leave it out, because the release tool can't yet read its settings from a Windows path; when it can, `gp-x86_64-pc-windows-msvc.zip` joins the table.
 
 The first two releases, from before these names, have only the Apple silicon Mac archive, named `gp-VERSION-COMMIT-aarch64-apple-darwin.tar.gz` with its own `.sha256` file; for one of those on another machine, [build it from source](#build-it-from-source). The Linux builds are made on Ubuntu 24.04 and may not start on an older Linux (one with a glibc before 2.39). Run `uname -m` to see which Linux build you need: it prints `x86_64` or `aarch64`.
 
@@ -122,7 +123,7 @@ gp --version
 
 ### On Windows
 
-Download `gp-x86_64-pc-windows-msvc.zip` and `SHA256SUMS` into one folder, such as Downloads. Open PowerShell there. Print the archive's checksum and the line of `SHA256SUMS` for it:
+These steps wait on the first release with a zip ([Download it](#download-it) says why). Download `gp-x86_64-pc-windows-msvc.zip` and `SHA256SUMS` into one folder, such as Downloads. Open PowerShell there. Print the archive's checksum and the line of `SHA256SUMS` for it:
 
 ```powershell
 (Get-FileHash .\gp-x86_64-pc-windows-msvc.zip -Algorithm SHA256).Hash
@@ -144,7 +145,7 @@ Any PowerShell window you open after this finds `gp`; try `gp --version`. An age
 
 This `gp.exe` isn't signed either. The first time it runs, Windows may show a blue "Windows protected your PC" window (SmartScreen). If the checksum matched, choose More info, then Run anyway.
 
-The Windows build is new. The release workflow builds it and runs `gp self check` on it, but nobody has made a theme with it yet. It should handle what a theme needs (fetching a game, `gp theme look check`, `gp theme look play` in your browser), `gp mcp` for an agent, and `gp self check`. Fetching uses the `curl.exe` that comes with Windows 10 and 11. Building a game's own code (`gp game build`) doesn't work yet, because gp has no build sandbox for Windows, and `gp self check` tells you so. Commands that run the repo's build scripts, such as building the public page yourself or `gp game share` for a game with its own pictures, need a checkout and Git Bash. Your home folder is `C:\Users\YOU\.gameprinter`, and `GP_HOME` and `GP_ROM_DIR` work as on the other systems.
+Nobody has made a theme with a Windows gp yet. It should handle what a theme needs (fetching a game, `gp theme look check`, `gp theme look play` in your browser), `gp mcp` for an agent, and `gp self check`. Fetching uses the `curl.exe` that comes with Windows 10 and 11. Building a game's own code (`gp game build`) doesn't work yet, because gp has no build sandbox for Windows, and `gp self check` tells you so. Commands that run the repo's build scripts, such as building the public page yourself or `gp game share` for a game with its own pictures, need a checkout and Git Bash. Your home folder is `C:\Users\YOU\.gameprinter`, and `GP_HOME` and `GP_ROM_DIR` work as on the other systems.
 
 ## Check what works
 
@@ -254,7 +255,7 @@ gp --help
 
 `just setup` turns on the hook that refuses any commit holding ROM data. `just publish` builds an optimized `gp` and puts it in `~/.gameprinter/bin`; add the `export` line to your shell's startup file to keep it on your PATH. A `gp` built this way reads the page's files from the checkout. `just release-build OUT` builds one with them built in, like a download. Releases are made by the release workflow, which only the owner starts ([docs/release.md](https://github.com/lex00/gameprinter/blob/main/docs/release.md)).
 
-Day-to-day work happens on a Mac, where it's built and tested. It also compiles for Linux and Windows, and the release workflow builds and checks it on both. On Windows, run the repo's recipes from Git Bash. `gp game build` refuses there, since it has no sandbox.
+Day-to-day work happens on a Mac, where it's built and tested. It also compiles for Linux and Windows, and the release workflow builds and checks the Linux ones. On Windows, run the repo's recipes from Git Bash. `gp game build` refuses there, since it has no sandbox.
 
 ## Where your files go
 
