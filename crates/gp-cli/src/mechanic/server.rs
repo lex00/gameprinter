@@ -2794,6 +2794,28 @@ mod tests {
         }
     }
 
+    /// The model's start (mechanic/reach.test.mjs): a request that can't
+    /// reach the server, which moves onto a new build in place, is sent
+    /// again once it is back, and a build it lost is asked for again.
+    /// Skipped where there is no node.
+    #[test]
+    fn the_page_waits_for_a_server_moving_onto_a_new_build() {
+        let test = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../mechanic/reach.test.mjs");
+        match std::process::Command::new("node")
+            .arg("--test")
+            .arg(&test)
+            .output()
+        {
+            Ok(o) => assert!(
+                o.status.success(),
+                "{}{}",
+                String::from_utf8_lossy(&o.stdout),
+                String::from_utf8_lossy(&o.stderr)
+            ),
+            Err(_) => eprintln!("skipped: no node"),
+        }
+    }
+
     /// With no mechanic named, the one open last, else the first row not
     /// done.
     #[test]

@@ -431,7 +431,13 @@ original read the pad, kept in the start cache beside the original's
 snapshot: a model that counts its own frames, such as a boot that waits
 so many of them, goes on with the original wherever it joins. A clip
 that starts at frame 0 (a whole power-on) starts the model as it opens,
-with no frame of the original before it.
+with no frame of the original before it. The server moves itself onto
+a new build in place, and a request sent in that moment can't reach it:
+while the model builds and starts, the screen page sends such a request
+again every second for up to a minute, saying it waits for the server,
+and asks for the build again if the server came back having lost it
+(neither built nor building); it says the model couldn't start only
+when the server stays away or answers with an error.
 
 On the loop's page, the quest log is grouped by state, each group a heading
 in words with its count: NEEDS YOU (triage asks the person, or the row is

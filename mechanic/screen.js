@@ -273,6 +273,64 @@ async function api(path, body) {
   return r.json();
 }
 
+// The model's start through a server that moves onto a new build: run on
+// its own by mechanic/reach.test.mjs, between the markers.
+// <reach>
+/** Whether an error is the browser failing to reach the page's server
+ * (fetch's TypeError: "Failed to fetch" in Chrome, "Load failed" in
+ * Safari), not an answer from it. */
+function unreached(e) {
+  return e instanceof TypeError;
+}
+
+/** fn() again while the page's server can't be reached: gp serve moves
+ * itself onto a new build in place (mechanic/server.rs restart), and a
+ * request made in that moment fails to fetch. Tries every `every` ms for
+ * `within` ms, telling `away` how long it has waited; then throws. Only
+ * for requests that may be sent twice. */
+async function reach(fn, { away = () => {}, within = 60000, every = 1000, sleep = (ms) => new Promise((r) => setTimeout(r, ms)) } = {}) {
+  let waited = 0;
+  for (;;) {
+    try {
+      return await fn();
+    } catch (e) {
+      if (!unreached(e) || waited >= within) throw e;
+      away(waited);
+      await sleep(every);
+      waited += every;
+    }
+  }
+}
+
+/** The rebuild (card `ask`'s look, or main's) built once at least: builds
+ * it first when it isn't, telling `say` each status while it builds. A
+ * server that moved onto a new build meanwhile forgot the build it ran
+ * (its thread went with it): once it answers again neither built nor
+ * building, the build is asked for again. Returns the status. */
+async function buildModel(api, ask, { say = () => {}, away = () => {}, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), every = 2000 } = {}) {
+  const q = ask ? `?ask=${encodeURIComponent(ask)}` : "";
+  let lost = false;
+  const call = (path, body) => reach(() => api(path, body), { away: (w) => { lost = true; away(w); }, sleep });
+  const build = async () => { await call("api/rebuild/build", ask ? { ask } : {}); lost = false; };
+  let st = await call(`api/rebuild/status${q}`);
+  if (st.built) return st;
+  if (!st.model) throw new Error("this game has no model yet");
+  await build();
+  for (;;) {
+    st = await call(`api/rebuild/status${q}`);
+    if (st.building == null) {
+      if (lost && !st.built && !st.error) { lost = false; await build(); continue; }
+      break;
+    }
+    lost = false;
+    say(st);
+    await sleep(every);
+  }
+  if (st.error || !st.built) throw new Error(st.error ?? "the build didn't finish");
+  return st;
+}
+// </reach>
+
 // Controls -------------------------------------------------------------
 
 function firstPad() {
@@ -547,20 +605,15 @@ function lookParam() {
  * how long it has taken. With `ask`, a gate card's look: the model as the
  * card's patch would leave it (ask_look.rs). */
 async function ensureBuilt(ask = model.ask) {
-  const q = ask ? `?ask=${encodeURIComponent(ask)}` : "";
-  let st = await api(`api/rebuild/status${q}`);
-  if (st.built) return st;
-  if (!st.model) throw new Error("this game has no model yet");
-  await api("api/rebuild/build", ask ? { ask } : {});
-  while ((st = await api(`api/rebuild/status${q}`)).building !== null) {
-    model.say = ask ? "BUILDING THE MODEL AFTER THIS CHANGE" : "BUILDING THE MODEL";
-    line(ask
-      ? `Building the model as this change leaves it: ${Math.round(st.building)} s. Its module builds first, which takes a few minutes.`
-      : `Building the playable model: ${Math.round(st.building)} s. The first build takes a few minutes. Play on meanwhile.`);
-    await new Promise((r) => setTimeout(r, 2000));
-  }
-  if (st.error || !st.built) throw new Error(st.error ?? "the build didn't finish");
-  return st;
+  return buildModel(api, ask, {
+    say: (st) => {
+      model.say = ask ? "BUILDING THE MODEL AFTER THIS CHANGE" : "BUILDING THE MODEL";
+      line(ask
+        ? `Building the model as this change leaves it: ${Math.round(st.building)} s. Its module builds first, which takes a few minutes.`
+        : `Building the playable model: ${Math.round(st.building)} s. The first build takes a few minutes. Play on meanwhile.`);
+    },
+    away: (w) => line(`The page's server is away, moving onto a new build most likely: waiting for it (${Math.round(w / 1000)} s).`),
+  });
 }
 
 /** Where the model's page is served: main's build, or a card's look's. */
@@ -691,8 +744,9 @@ async function startModelAtClip(mine) {
   const c = clip;
   if (!c) return;
   try {
-    c.path ??= await sendPath(c.log);
-    const r = await api("api/rebuild/start", { path: c.path, frame: c.start, ...(model.ask ? { ask: model.ask } : {}) });
+    // Both may be sent twice: through a server moving onto a new build.
+    c.path ??= await reach(() => sendPath(c.log));
+    const r = await reach(() => api("api/rebuild/start", { path: c.path, frame: c.start, ...(model.ask ? { ask: model.ask } : {}) }));
     if (mine !== model.token || clip !== c) return;
     const text = "gp-frames 1\n" + c.polled.map(framesLine).join("\n") + "\n";
     let given;
