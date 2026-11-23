@@ -651,7 +651,7 @@ fn published_pages_problem(link: &std::path::Path) -> Option<String> {
         return None;
     }
     Some(format!(
-        "The published gp {name} has no {} in {}, so gp serve on it has no page of its own (no editor at /). The tool gate's next landing publishes them; to publish them now, run `just publish` in a clean checkout of main.",
+        "The published gp {name} has no {} in {}, so gp serve on it has no page of its own (no editor at /). The tool gate's next landing that changes more than words builds the editor and publishes them (a words-only landing publishes nothing); to publish them now, run `just publish` in a clean checkout of main.",
         missing.join(" and "),
         dir.display()
     ))
@@ -938,6 +938,30 @@ fn checks(paths: &gp_evidence::Paths, games_dir: Option<&std::path::Path>) -> Va
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A published build whose .pages lacks the built editor is a problem
+    /// naming it, and saying a words-only landing won't publish it; with
+    /// mechanic/ and editor/dist/index.html beside it, none.
+    #[cfg(unix)]
+    #[test]
+    fn a_published_gp_with_no_editor_dist_is_a_problem_until_its_pages_are_whole() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bin = tmp.path().join("bin");
+        let pages = bin.join("gp-abc123def456.pages");
+        std::fs::create_dir_all(pages.join("mechanic")).unwrap();
+        std::fs::write(bin.join("gp-abc123def456"), "gp").unwrap();
+        let link = bin.join("gp");
+        std::os::unix::fs::symlink("gp-abc123def456", &link).unwrap();
+        let said = published_pages_problem(&link).unwrap();
+        assert!(said.contains("has no editor/dist"), "{said}");
+        assert!(
+            said.contains("words-only landing publishes nothing"),
+            "{said}"
+        );
+        std::fs::create_dir_all(pages.join("editor/dist")).unwrap();
+        std::fs::write(pages.join("editor/dist/index.html"), "editor").unwrap();
+        assert_eq!(published_pages_problem(&link), None);
+    }
 
     /// --hold adds games (all holds every one), --go-on lifts them, and a
     /// game can't be lifted alone out of every game's hold.
