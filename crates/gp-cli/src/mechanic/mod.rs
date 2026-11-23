@@ -1085,7 +1085,12 @@ pub(crate) fn run(cmd: &MechanicCmd, paths: &Paths) -> Result<Outcome> {
             if choices.len() == 1 || choices.len() > 4 {
                 bail!("give 2 to 4 choices, or none");
             }
-            let s = Session::open(paths, game, mechanic)?;
+            // A quest-log row with no session yet gets one from its note,
+            // as busy and log make it, so the person's words reach a
+            // queued row as a turn (on 2026-11-22 say refused
+            // fill-speed-when-played and the session rewrote its note with
+            // queue --status next, which filed a trouble row).
+            let s = Session::open_or_make(paths, game, mechanic)?;
             for c in show.iter().chain(against) {
                 if !s.dir.join(format!("clips/{c:03}.toml")).is_file() {
                     bail!("no clip {c} in this session");
@@ -1209,13 +1214,12 @@ pub(crate) fn run(cmd: &MechanicCmd, paths: &Paths) -> Result<Outcome> {
             // A deliberate park, and a parked row set next, aren't.
             if let (Some(m), Some(st)) = (mechanic.as_deref(), status.as_deref()) {
                 let parks = st == "in line" && (parked.is_some() || waits_on.is_some());
-                let unparks = st == "next"
-                    && queue_file(paths, game).is_ok_and(|f| {
-                        read_queue(&f)
-                            .iter()
-                            .any(|r| r["mechanic"] == json!(m) && is_parked(r))
-                    });
-                if !parks && !unparks {
+                let rows = queue_file(paths, game)
+                    .map(|f| read_queue(&f))
+                    .unwrap_or_default();
+                let row = rows.iter().find(|r| r["mechanic"] == json!(m));
+                let unparks = st == "next" && row.is_some_and(is_parked);
+                if !parks && !unparks && !row.is_some_and(|r| status_kept(r, st)) {
                     crate::trouble::status_by_hand(paths, game, m, st);
                 }
             }
@@ -1513,6 +1517,16 @@ pub(crate) fn is_parked(r: &Value) -> bool {
         && (r.get("parked").is_some()
             || r.get("waits_on").is_some()
             || r["note"].as_str().is_some_and(|n| n.starts_with("Parked:")))
+}
+
+/// Whether `gp mechanic queue GAME ROW --status S` leaves row `r`'s status
+/// as it was (S is its status now): a note or plain words changed beside
+/// the same status move nothing in the loop, so it isn't a hand fix
+/// (crate::trouble::status_by_hand). On 2026-11-22 the session added the
+/// owner's words to fill-speed-when-played, already next, with --status
+/// next and a note, and a trouble row was filed for it.
+fn status_kept(r: &Value, status: &str) -> bool {
+    r["status"].as_str() == Some(status)
 }
 
 /// Whether `gp mechanic say` on row `mechanic` of `game` leaves the row's
@@ -2108,6 +2122,48 @@ mod tests {
         s.turn(json!({"by": "agent", "text": "the card is up"}))
             .unwrap();
         assert_eq!(read_queue(&f)[0]["status"], "asking you");
+    }
+
+    /// The session's say on a queued row with no session yet makes the
+    /// session from the row's note and adds the words as a turn, where it
+    /// refused before; and setting a row to the status it already has (a
+    /// note added with --status next on a next row) is no status set by
+    /// hand, so no trouble row is filed for it.
+    #[test]
+    fn a_say_on_a_row_with_no_session_makes_it() {
+        let d = tempfile::tempdir().unwrap();
+        let p = paths(d.path());
+        std::fs::create_dir_all(p.home.join("mechanics").join("test-hop")).unwrap();
+        let f = queue_file(&p, "test-hop").unwrap();
+        let row =
+            json!({"mechanic": "fill", "status": "next", "note": "Proposed by the loop: fill"});
+        write_queue(&f, std::slice::from_ref(&row)).unwrap();
+        assert!(!Session::exists(&p, "test-hop", "fill").unwrap());
+        let say = |m: &str| MechanicCmd::Say {
+            game: "test-hop".into(),
+            mechanic: m.into(),
+            text: "The owner: research write-ups too".into(),
+            choices: vec![],
+            show: None,
+            frame: None,
+            against: None,
+            judge: false,
+            measure: false,
+            decide: String::new(),
+            games: None,
+            facts: vec![],
+        };
+        run(&say("fill"), &p).unwrap();
+        let v = Session::open(&p, "test-hop", "fill")
+            .unwrap()
+            .state()
+            .unwrap();
+        assert_eq!(v["prompt"], "Proposed by the loop: fill");
+        assert_eq!(v["talk"][0]["text"], "The owner: research write-ups too");
+        // A name that is neither a row nor a session is still refused.
+        assert!(run(&say("nothing"), &p).is_err());
+        assert!(status_kept(&row, "next"));
+        assert!(!status_kept(&row, "in line"));
     }
 
     /// A quest-log row with no session shows its note and writes nothing;
