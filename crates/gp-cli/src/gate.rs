@@ -2214,7 +2214,11 @@ pub(crate) fn run(a: &GateArgs, paths: &Paths) -> Result<Outcome> {
                 game.display()
             );
         }
-        lock.lock()?;
+        if a.dry_run {
+            crate::gate_queue::lock_after_landings(&lock, &lane.queue_home(&home))?;
+        } else {
+            lock.lock()?;
+        }
         let hold =
             crate::gate_hold::Hold::take(&home, lane, what, Some(&steps_file(&home)), a.dry_run);
         match crate::gate_copy::open(&game, &home, &gp, a.message.as_deref())? {
@@ -2279,7 +2283,11 @@ pub(crate) fn run(a: &GateArgs, paths: &Paths) -> Result<Outcome> {
                 &file,
             )?);
         }
-        lock.lock()?;
+        if a.dry_run {
+            crate::gate_queue::lock_after_landings(&lock, &lane.queue_home(&home))?;
+        } else {
+            lock.lock()?;
+        }
         if let Some(t) = &ticket
             && let Some(o) = t.result()
         {

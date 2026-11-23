@@ -1215,7 +1215,13 @@ pub(crate) fn run(a: &ToolGateArgs, paths: &Paths) -> Result<Outcome> {
         return Ok(fail_before_the_lock(a, phase, &why));
     }
     let waited = lock.try_lock().is_err();
-    if waited {
+    if a.dry_run {
+        // A dry run goes after every landing waiting (gate_queue).
+        if !waited {
+            lock.unlock()?;
+        }
+        crate::gate_queue::lock_after_landings(&lock, &lane.queue_home(&home))?;
+    } else if waited {
         lock.lock()?;
     }
     if let Some(o) = ticket.as_ref().and_then(|t| t.result()) {

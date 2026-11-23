@@ -13,6 +13,7 @@
 //! gates its patch itself. A ticket whose process is gone is cleared.
 
 use std::fs;
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
@@ -180,10 +181,7 @@ impl Ticket {
                     .write(true)
                     .create_new(true)
                     .open(side(&self.queue, &n, "claim"))
-                    .and_then(|mut f| {
-                        use std::io::Write as _;
-                        write!(f, "{}", std::process::id())
-                    })
+                    .and_then(|mut f| write!(f, "{}", std::process::id()))
                     .is_ok()
             {
                 out.push((n, r));
@@ -202,6 +200,53 @@ impl Ticket {
     pub(crate) fn answer(&self, name: &str, o: &Outcome) {
         let v = json!({"json": o.json, "text": o.text, "exit": o.exit});
         let _ = write_new(&side(&self.queue, name, "result"), v.to_string().as_bytes());
+    }
+}
+
+/// How many of a dry run's turns a ticket may hold it back: a landing
+/// blocked on the lock takes it in the dry run's first pause, so a ticket
+/// still there after this many is not waiting for the lock (a process that
+/// reused its pid, a gate stopped by hand) and the dry run goes on.
+const YIELDS_MAX: u32 = 30;
+
+/// Takes `lock` for a gate with no ticket (a dry run), after every landing
+/// waiting in `queue_home`'s queue (docs/gate.md, "Batches"). The lock
+/// itself is first come first served: on 2026-11-23 two landings whose dry
+/// runs had passed waited behind three fresh dry runs of 8 minutes each.
+/// A dry run that gets the lock while a landing's ticket waits gives it
+/// back and pauses (`GP_GATE_YIELD_MS`, 2 s), so the landing blocked on it
+/// goes first. Returns how many times it gave the lock back.
+pub(crate) fn lock_after_landings(lock: &fs::File, queue_home: &Path) -> std::io::Result<u32> {
+    let pause = std::env::var("GP_GATE_YIELD_MS")
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .unwrap_or(if cfg!(test) { 20 } else { 2000 });
+    let queue = queue_home.join("queue");
+    let mut seen: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
+    let mut yields = 0;
+    loop {
+        lock.lock()?;
+        let waiting: Vec<String> = tickets(&queue)
+            .into_iter()
+            .filter(|n| {
+                let k = seen.entry(n.clone()).or_default();
+                *k += 1;
+                *k <= YIELDS_MAX
+            })
+            .collect();
+        if waiting.is_empty() {
+            return Ok(yields);
+        }
+        lock.unlock()?;
+        if yields == 0 {
+            let _ = writeln!(
+                std::io::stderr(),
+                "gate: {} landing(s) wait for the lock: this dry run goes after them",
+                waiting.len()
+            );
+        }
+        yields += 1;
+        std::thread::sleep(std::time::Duration::from_millis(pause));
     }
 }
 
@@ -228,6 +273,69 @@ mod tests {
             run: run.into(),
             removes: Vec::new(),
             replaces: Vec::new(),
+        }
+    }
+
+    /// Who gets the lock when the gate holding it lets go: every landing
+    /// waiting (a ticket) before any dry run, whichever came first. A
+    /// ticket that never takes the lock holds a dry run back only for
+    /// YIELDS_MAX of its turns.
+    #[test]
+    fn landings_take_the_lock_before_waiting_dry_runs() {
+        // Each row: the gates in the order they came to the held lock
+        // ('d' a dry run, 'l' a landing, 's' a ticket whose gate never
+        // takes the lock), and the order they ran in.
+        let table = [
+            ("dl", "ld"),
+            ("ddl", "ldd"),
+            ("dddll", "llddd"),
+            ("ld", "ld"),
+            ("dd", "dd"),
+            ("sd", "d"),
+            ("dsl", "ld"),
+        ];
+        for (came, want) in table {
+            let t = tempfile::tempdir().unwrap();
+            let home = t.path().to_owned();
+            let patch = home.join("p.patch");
+            fs::write(&patch, "diff").unwrap();
+            let held = crate::gate_hold::open_lock(&home, crate::gate_hold::Lane::Model).unwrap();
+            held.lock().unwrap();
+            let ran = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+            let mut kept = Vec::new();
+            let mut gates = Vec::new();
+            for g in came.chars() {
+                let (home, ran) = (home.clone(), ran.clone());
+                let lock =
+                    crate::gate_hold::open_lock(&home, crate::gate_hold::Lane::Model).unwrap();
+                // A landing's ticket is in the queue before it waits.
+                let ticket = (g != 'd').then(|| {
+                    Ticket::enter(&home, req(&home, "mosshop", "main", "gate"), &patch).unwrap()
+                });
+                if g == 's' {
+                    kept.push(ticket);
+                    std::thread::sleep(std::time::Duration::from_millis(30));
+                    continue;
+                }
+                gates.push(std::thread::spawn(move || {
+                    if ticket.is_some() {
+                        lock.lock().unwrap();
+                    } else {
+                        lock_after_landings(&lock, &home).unwrap();
+                    }
+                    ran.lock().unwrap().push(g);
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                    drop(ticket);
+                    drop(lock);
+                }));
+                // Each gate is waiting on the lock before the next comes.
+                std::thread::sleep(std::time::Duration::from_millis(30));
+            }
+            held.unlock().unwrap();
+            for g in gates {
+                g.join().unwrap();
+            }
+            assert_eq!(*ran.lock().unwrap(), want, "came {came}");
         }
     }
 
