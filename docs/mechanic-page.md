@@ -429,7 +429,9 @@ Esc goes back to live play. Either way the model starts at the frame a
 lockstep from power-on would have it at, one step for each frame the
 original read the pad, kept in the start cache beside the original's
 snapshot: a model that counts its own frames, such as a boot that waits
-so many of them, goes on with the original wherever it joins.
+so many of them, goes on with the original wherever it joins. A clip
+that starts at frame 0 (a whole power-on) starts the model as it opens,
+with no frame of the original before it.
 
 On the loop's page, the quest log is grouped by state, each group a heading
 in words with its count: NEEDS YOU (triage asks the person, or the row is

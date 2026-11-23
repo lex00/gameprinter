@@ -351,7 +351,8 @@ pub(crate) fn profiles(paths: &Paths, game: &str, rb: &Rebuild) -> Result<Value>
 /// preview: the original stands one frame before and takes that frame's
 /// presses, so the start is the frame itself when the game reads the pad
 /// on it. Until the game is in play (a title screen) the mapping's start
-/// doesn't hold and this says so; the page tries again.
+/// doesn't hold and this says so; the page tries again. Frame 0 is
+/// power-on ([`at_power_on`]).
 ///
 /// The model stands at the frame a lockstep from power-on would have it
 /// at, one step for each frame the original read the pad (the start
@@ -368,14 +369,14 @@ pub(crate) fn start(
     frame: u64,
 ) -> Result<Value> {
     use gp_interp::lockstep::{Mode, Options};
-    if frame == 0 {
-        bail!("the game hasn't started");
-    }
     if !has_model(rb) {
         bail!("there is no model of this game to start");
     }
     let opened = opened(paths, rb, rom)?;
     let (source, mapping) = (&opened.0, &opened.1);
+    if frame == 0 {
+        return at_power_on(source, mapping);
+    }
     let mut log = super::paths::read_path(&paths.home, path)?;
     let at = usize::try_from(frame)?;
     if at > log.frames.len() {
@@ -414,6 +415,24 @@ pub(crate) fn start(
         "state": base64::engine::general_purpose::STANDARD.encode(&s.state),
         "missing": s.notes.iter().filter(|n| n.how.name() == "missing").count(),
         "notes": s.notes.len(),
+        "draw_sites": draw_sites(mapping),
+    }))
+}
+
+/// [`start`] at frame 0, power-on: no frame of the original stands before
+/// it, so the model stands there as it opens, as a lockstep from power-on
+/// has it, and takes the clip's presses from its first frame. Until
+/// 2026-11-23 frame 0 said "the game hasn't started", so LOOK AT IT on a
+/// clip of the whole power-on showed no model.
+fn at_power_on(source: &crate::hosted::Source, mapping: &Mapping) -> Result<Value> {
+    let model = source.open()?;
+    let state = gp_runtime::Runtime::canonical_state(&model);
+    Ok(json!({
+        "original_frame": 0,
+        "frame": 0,
+        "state": base64::engine::general_purpose::STANDARD.encode(state),
+        "missing": 0,
+        "notes": 0,
         "draw_sites": draw_sites(mapping),
     }))
 }
@@ -705,5 +724,50 @@ mod tests {
             file(&p, &repo, "mosshop", "module.wasm").unwrap().status,
             404
         );
+    }
+
+    /// A clip that starts at power-on (frame 0) starts the model as it
+    /// opens, with no original frame before it, and the state loads back
+    /// into a new run of the model as the one it opens at.
+    #[test]
+    fn a_clip_from_power_on_starts_the_model_as_it_opens() {
+        use base64::Engine as _;
+        use gp_runtime::Runtime as _;
+        let text = "[model]\nschema = \"0.4\"\nname = \"cab\"\ntitle = \"Cab\"\n\
+                    description = \"A made-up game\"\nview = \"side\"\nframe_rate = \"30\"\n\
+                    systems = [\"rules\", \"entity_states\", \"counters\", \"spawn\", \"platformer.player\", \"platformer.enemies\", \"platformer.contact\", \"exits\", \"camera\"]\n\
+                    start_level = \"main\"\n\n[model.extensions]\nplatformer = \"0.4\"\n\n\
+                    [entities.player]\nrole = \"player\"\nsize = [16, 16]\n\
+                    hitbox = { x = 0, y = 0, w = 16, h = 16 }\n\n\
+                    [levels.main]\nempty = true\nsize = [32, 30]\ntile_size = 16\n";
+        let m = gp_model::Model::parse(text).unwrap();
+        let mut lifted = gp_interp::Lifted::default();
+        lifted.files.insert(
+            "assets.toml".into(),
+            "schema = 1\nplatform = \"arcade\"\nsource = \"cab\"\nsets = [\"cab\"]\n\n\
+             [[asset]]\nname = \"tiles\"\nformat = \"mcr-tiles\"\nregion = \"gfx1\"\ncount = 1\nper_row = 1\n"
+                .into(),
+        );
+        let bundle = gp_interp::Bundle::new(&m, lifted);
+        let source = crate::hosted::Source::new(bundle, None).unwrap();
+        let mapping = Mapping::parse(&format!(
+            "schema = {}\nmodel = \"cab\"\nsource = \"cab\"\nalign = \"polled\"\n\
+             [[field]]\npath = \"entities.player[0].x\"\nram = [0x40]\n",
+            gp_interp::mapping::SCHEMA
+        ))
+        .unwrap();
+        let r = at_power_on(&source, &mapping).unwrap();
+        assert_eq!(r["original_frame"], json!(0));
+        assert_eq!(r["frame"], json!(0));
+        assert_eq!(r["missing"], json!(0));
+        assert_eq!(r["draw_sites"], Value::Null);
+        let state = base64::engine::general_purpose::STANDARD
+            .decode(r["state"].as_str().unwrap())
+            .unwrap();
+        let opened = source.open().unwrap();
+        assert_eq!(state, opened.canonical_state());
+        let mut again = source.open().unwrap();
+        again.load_state(&state).unwrap();
+        assert_eq!(again.state_hash(), opened.state_hash());
     }
 }
