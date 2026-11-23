@@ -138,17 +138,114 @@ pub(crate) const ROW_CLI: &str = "gp mechanic show GAME ROW, gp mechanic start G
 /// What a row of the tool's work runs besides: the gate it lands through.
 pub(crate) const TOOL_ROW_CLI: &str = ", gp tool gate --patch FILE";
 
-/// What a game's quest-log row claims besides itself: the scoreboard line
-/// its target names (`line:GAME/LINE`, the line lower case, as targets are
-/// read), else the whole game (`game:GAME`).
-pub(crate) fn claim_of(game: &str, row: &Value) -> String {
-    match row["target"]
+/// The game's scoreboard lines as a row's claim reads them: each line's
+/// name, lower case as targets are read, and the corpus clip it measures.
+pub(crate) fn board_lines(game_dir: &Path) -> Vec<(String, String)> {
+    crate::scoreboard::lines(game_dir)
+        .and_then(Result::ok)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|l| (l.name.to_lowercase(), l.clip))
+        .collect()
+}
+
+/// The files whose change is the whole game's: a row whose note or where
+/// it came from names one of them claims the game.
+const WHOLE_GAME: [&str; 3] = ["model.toml", "mapping.toml", "ext/"];
+
+/// What a game's quest-log row claims besides itself, the narrowest thing
+/// that holds its work: the scoreboard line its target names
+/// (`line:GAME/LINE`, the line lower case, as targets are read); else the
+/// line of the clip it was filed with (its `clip`, a corpus clip one of
+/// `lines` measures) or of the gap it was found on (`line`, from `gp
+/// picture --propose --line`); else, for a row whose note or from names
+/// model.toml, mapping.toml or ext/, the whole game (`game:GAME`); else
+/// nothing but the row.
+pub(crate) fn claim_of(game: &str, row: &Value, lines: &[(String, String)]) -> Option<String> {
+    let line = |l: &str| format!("line:{game}/{}", l.trim().to_lowercase());
+    if let Some(t) = row["target"]
         .as_str()
         .and_then(|t| crate::scoreboard::parse_target(t).ok())
     {
-        Some(t) => format!("line:{game}/{}", t.line),
-        None => format!("game:{game}"),
+        return Some(line(&t.line));
     }
+    if let Some(id) = row["clip"]["id"].as_str()
+        && let Some((name, _)) = lines.iter().find(|(_, c)| c == id)
+    {
+        return Some(line(name));
+    }
+    if let Some(l) = row["line"].as_str().filter(|l| !l.trim().is_empty()) {
+        return Some(line(l));
+    }
+    let said = format!(
+        "{} {}",
+        row["note"].as_str().unwrap_or(""),
+        row["from"].as_str().unwrap_or("")
+    );
+    WHOLE_GAME
+        .iter()
+        .any(|f| said.contains(f))
+        .then(|| format!("game:{game}"))
+}
+
+/// Whether a step claims a whole game (`game:GAME`).
+pub(crate) fn claims_game(step: &Value) -> bool {
+    step["touches"].as_array().is_some_and(|t| {
+        t.iter()
+            .any(|t| t.as_str().is_some_and(|t| t.starts_with("game:")))
+    })
+}
+
+/// Why open step `s` waits for a live worker's step (`held`), in words:
+/// the first of them whose claim clashes with one of `s`'s, as "waits for
+/// ROW, which holds the game" (or "the line LINE", or "the row"). None
+/// when nothing live holds what it claims.
+pub(crate) fn waits_for(s: &Value, held: &[Value]) -> Option<String> {
+    let mine: Vec<&str> = s["touches"]
+        .as_array()?
+        .iter()
+        .filter_map(Value::as_str)
+        .collect();
+    for h in held {
+        if h["id"].is_string() && h["id"] == s["id"] {
+            continue;
+        }
+        let theirs: BTreeSet<String> = h["touches"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|t| t.as_str().map(str::to_owned))
+            .collect();
+        // The row's own worker, on a step of its row from before its
+        // status changed, is the row at work, not a wait.
+        if mine
+            .iter()
+            .any(|t| t.starts_with("row:") && theirs.contains(*t))
+        {
+            continue;
+        }
+        // What it holds that this step claims: the game, a line, the row.
+        let Some(x) = theirs.iter().find(|x| {
+            mine.iter()
+                .any(|t| clashes(&BTreeSet::from([(*x).clone()]), t))
+        }) else {
+            continue;
+        };
+        let row = theirs
+            .iter()
+            .find_map(|t| t.strip_prefix("row:"))
+            .map(|r| r.split_once('/').map_or(r, |(_, r)| r).to_owned())
+            .unwrap_or_else(|| h["id"].as_str().unwrap_or("another step").to_owned());
+        let what = if x.starts_with("game:") {
+            "the game".to_owned()
+        } else if let Some((_, l)) = x.strip_prefix("line:").and_then(|l| l.split_once('/')) {
+            format!("the line {l}")
+        } else {
+            "the row".to_owned()
+        };
+        return Some(format!("Waits for {row}, which holds {what}."));
+    }
+    None
 }
 
 /// Whether claim `t` clashes with one in `taken`: the same claim, or a
@@ -185,6 +282,7 @@ pub(crate) fn row_steps(paths: &gp_evidence::Paths, games: Option<&Path>) -> Vec
         let Ok(f) = crate::mechanic::session::queue_file(paths, g) else {
             continue;
         };
+        let mut lines: Option<Vec<(String, String)>> = None;
         for r in crate::mechanic::session::read_queue(&f) {
             let Some(row) = r["mechanic"].as_str() else {
                 continue;
@@ -256,18 +354,24 @@ pub(crate) fn row_steps(paths: &gp_evidence::Paths, games: Option<&Path>) -> Vec
             // gameprinter worktree of its own, and the tool gate merges each
             // patch onto the tip (a conflict sends the row back to be redone
             // there), so tool rows run side by side up to the runner's limit.
-            // A game's row with a target holds the scoreboard line it names
+            // A game's row holds the narrowest thing its work needs
+            // ([`claim_of`]): the scoreboard line its target or clip is on
             // (`line:GAME/LINE`), so rows of other lines of the game run
-            // beside it: each worker's tree has the game's pending patches
-            // (serve/runner.rs, pending_patches) and the gate's order settles
-            // their patches. A game's row with no target holds the whole
-            // game, which every line of it clashes with ([`clashes`]).
+            // beside it; the whole game only for a row that names
+            // model.toml, mapping.toml or ext/, which every line of it
+            // clashes with ([`clashes`]); else only itself. Each worker's
+            // tree has the game's pending patches (serve/runner.rs,
+            // pending_patches) and the gate's order settles their patches.
             let tools = r["repo"] == json!("tools");
-            let touches = if tools {
-                vec![format!("row:{g}/{row}")]
-            } else {
-                vec![format!("row:{g}/{row}"), claim_of(g, &r)]
-            };
+            let mut touches = vec![format!("row:{g}/{row}")];
+            if !tools {
+                let lines = lines.get_or_insert_with(|| {
+                    dir.as_deref()
+                        .map(|d| board_lines(&d.join(g)))
+                        .unwrap_or_default()
+                });
+                touches.extend(claim_of(g, &r, lines));
+            }
             // A tool row lands through the tool gate.
             let cli = if r["repo"] == json!("tools") {
                 format!("{cli}{TOOL_ROW_CLI}")

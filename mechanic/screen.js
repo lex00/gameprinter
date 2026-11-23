@@ -2777,7 +2777,7 @@ async function refreshSteps() {
   drawNowWork();
   drawYourTurn();
   drawProgress();
-  const key = JSON.stringify([v.halted?.id ?? null, (v.open ?? []).map((s) => s.id)]);
+  const key = JSON.stringify([v.halted?.id ?? null, (v.open ?? []).map((s) => [s.id, s.waits ?? null])]);
   if (key === stepsDrawn || agentsHeld()) return;
   stepsDrawn = key;
   const halt = $("halt");
@@ -2809,6 +2809,8 @@ async function refreshSteps() {
     const lead = `Work on ${row ?? ""}`;
     const rest = row && says.startsWith(lead) ? says.slice(lead.length).replace(/^[.:]\s*/, "") : says;
     li.append(el("div", "ssays", cardLine(rest || "Work on it.")));
+    // A row a live worker holds back says which, and what it holds.
+    if (s.waits) li.append(el("div", "swaits", s.waits));
     const more = el("div", "smore");
     more.append(el("div", "sfull", says), el("div", "sid", `step ${s.id}`));
     const acts = el("div", "sacts");

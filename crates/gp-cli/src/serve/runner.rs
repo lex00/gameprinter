@@ -238,8 +238,16 @@ pub(crate) fn plan(
         .filter_map(|t| t.as_str().map(str::to_owned))
         .collect();
     let mut n = workers.iter().filter(is_live).count();
-    let mut out = Vec::new();
-    for s in open {
+    let mut out: Vec<(usize, Value)> = Vec::new();
+    // A row that claims a whole game is looked at after the rest: it holds
+    // every line of its game, so it starts only once the narrower rows have
+    // had the free slots (crate::steps::claim_of). The steps start in the
+    // order they are open.
+    let (narrow, whole): (Vec<_>, Vec<_>) = open
+        .iter()
+        .enumerate()
+        .partition(|(_, s)| !crate::steps::claims_game(s));
+    for (i, s) in narrow.into_iter().chain(whole) {
         if n >= max {
             break;
         }
@@ -260,17 +268,18 @@ pub(crate) fn plan(
             .flatten()
             .filter_map(|t| t.as_str().map(str::to_owned))
             .collect();
-        // A game's row with a target claims its scoreboard line, and runs
-        // beside the game's rows of other lines; one with none claims the
-        // whole game (crate::steps::clashes).
+        // A game's row claims its scoreboard line, and runs beside the
+        // game's rows of other lines; one that names the game's model,
+        // mapping or hooks claims the whole game (crate::steps::clashes).
         if touches.iter().any(|t| crate::steps::clashes(&taken, t)) {
             continue;
         }
         taken.extend(touches);
         n += 1;
-        out.push(s.clone());
+        out.push((i, s.clone()));
     }
-    out
+    out.sort_by_key(|(i, _)| *i);
+    out.into_iter().map(|(_, s)| s).collect()
 }
 
 /// The runner in words, for the page.
@@ -4410,15 +4419,147 @@ mod tests {
         }
     }
 
-    /// A row of game g's quest log as a step, its claim made from its
-    /// target as row_steps makes it.
+    /// Game g's scoreboard lines as row_steps reads them: level 1 on
+    /// clip g.l1.001, level 2 on g.l2.001.
+    fn g_lines() -> Vec<(String, String)> {
+        vec![
+            ("level 1".into(), "g.l1.001".into()),
+            ("level 2".into(), "g.l2.001".into()),
+        ]
+    }
+
+    /// A row of game g's quest log (`r`, its mechanic `row`) as a step,
+    /// its claim made as row_steps makes it.
+    fn row_step_of(id: &str, row: &str, mut r: Value) -> Value {
+        r["mechanic"] = json!(row);
+        let mut touches = vec![format!("row:g/{row}")];
+        touches.extend(crate::steps::claim_of("g", &r, &g_lines()));
+        let t: Vec<&str> = touches.iter().map(String::as_str).collect();
+        s(id, "agent", &t)
+    }
+
+    /// A row of game g's quest log with target `target`, or with a note
+    /// that names model.toml, so it claims the whole game.
     fn row_step(id: &str, row: &str, target: Option<&str>) -> Value {
-        let r = match target {
-            Some(t) => json!({"mechanic": row, "target": t}),
-            None => json!({"mechanic": row}),
+        match target {
+            Some(t) => row_step_of(id, row, json!({"target": t})),
+            None => row_step_of(id, row, json!({"note": "the bar's speed in model.toml"})),
+        }
+    }
+
+    /// What each kind of row claims besides itself: the narrowest thing
+    /// its work needs.
+    #[test]
+    fn a_row_claims_its_line_the_game_only_for_the_games_files_else_itself() {
+        let claim = |r: Value| crate::steps::claim_of("g", &r, &g_lines());
+        let line = |l: &str| Some(format!("line:g/{l}"));
+        let table = [
+            // A target names its line, whatever else the row says.
+            (
+                json!({"target": "Level 2 sprites at least 10", "note": "model.toml"}),
+                line("level 2"),
+            ),
+            // Filed with a corpus clip a line measures: that line.
+            (
+                json!({"clip": {"id": "g.l1.001", "from": 3, "to": 9}}),
+                line("level 1"),
+            ),
+            // Found on a line (gp picture --propose --line) with no target.
+            (json!({"line": "Level 2"}), line("level 2")),
+            // A clip no line measures and nothing else: only the row.
+            (json!({"clip": {"id": "g.other.001"}}), None),
+            // The game's own files: the whole game.
+            (
+                json!({"note": "the timer in model.toml is a frame short"}),
+                Some("game:g".into()),
+            ),
+            (
+                json!({"from": "mapping.toml:12 sprite.slot"}),
+                Some("game:g".into()),
+            ),
+            (
+                json!({"note": "a hook in ext/ draws it"}),
+                Some("game:g".into()),
+            ),
+            // The owner's words with no clip, target or file: only the row.
+            (
+                json!({"note": "the fourth bar's background is wrong"}),
+                None,
+            ),
+            (json!({}), None),
+        ];
+        for (r, want) in table {
+            assert_eq!(claim(r.clone()), want, "{r}");
+        }
+        // What clashes with what: the same claim, and the game with its
+        // lines; rows and other games' claims don't.
+        let taken =
+            |t: &[&str]| -> BTreeSet<String> { t.iter().map(|x| (*x).to_owned()).collect() };
+        let clashes = [
+            (&["game:g"][..], "line:g/level 1", true),
+            (&["line:g/level 1"][..], "game:g", true),
+            (&["line:g/level 1"][..], "line:g/level 1", true),
+            (&["line:g/level 1"][..], "line:g/level 2", false),
+            (&["game:h"][..], "line:g/level 1", false),
+            (&["game:g"][..], "row:g/x", false),
+            (&["row:g/x"][..], "row:g/x", true),
+            (&["row:g/x"][..], "row:g/y", false),
+        ];
+        for (t, c, want) in clashes {
+            assert_eq!(crate::steps::clashes(&taken(t), c), want, "{t:?} {c}");
+        }
+    }
+
+    /// Rows with no target and no file of the game's run side by side; a
+    /// whole-game row waits while the narrower rows fill the slots, and the
+    /// page says what it waits for.
+    #[test]
+    fn a_whole_game_row_starts_after_the_rows_that_claim_less() {
+        let ids = |v: Vec<Value>| -> Vec<String> {
+            v.iter()
+                .map(|x| x["id"].as_str().unwrap().to_owned())
+                .collect()
         };
-        let claim = crate::steps::claim_of("g", &r);
-        s(id, "agent", &[&format!("row:g/{row}"), &claim])
+        let none = BTreeSet::new();
+        let whole = row_step("s000000000021", "w", None);
+        let words = row_step_of("s000000000022", "x", json!({"note": "the owner's words"}));
+        let words2 = row_step_of("s000000000023", "y", json!({}));
+        let l1 = row_step_of("s000000000024", "z", json!({"clip": {"id": "g.l1.001"}}));
+        assert_eq!(words["touches"].as_array().unwrap().len(), 1);
+        let open = [whole.clone(), words.clone(), words2.clone(), l1.clone()];
+        // Three slots: the three rows that claim less, in their order.
+        assert_eq!(
+            ids(plan(&open, &[], &none, 3, 0)),
+            ["s000000000022", "s000000000023", "s000000000024"]
+        );
+        // A slot to spare: the whole-game row can't run beside the line's.
+        assert_eq!(
+            ids(plan(&open, &[], &none, 5, 0)),
+            ["s000000000022", "s000000000023", "s000000000024"]
+        );
+        // With no line row it runs beside the rows that claim only
+        // themselves, after them in the plan but in its place in the list.
+        let open = [whole.clone(), words.clone(), words2.clone()];
+        assert_eq!(
+            ids(plan(&open, &[], &none, 5, 0)),
+            ["s000000000021", "s000000000022", "s000000000023"]
+        );
+        assert_eq!(
+            ids(plan(&open, &[], &none, 2, 0)),
+            ["s000000000022", "s000000000023"]
+        );
+        // The page's words for a row that waits for a live one.
+        let held = [whole.clone()];
+        assert_eq!(
+            crate::steps::waits_for(&l1, &held).as_deref(),
+            Some("Waits for w, which holds the game.")
+        );
+        assert_eq!(
+            crate::steps::waits_for(&whole, std::slice::from_ref(&l1)).as_deref(),
+            Some("Waits for z, which holds the line level 1.")
+        );
+        assert_eq!(crate::steps::waits_for(&words, &held), None);
+        assert_eq!(crate::steps::waits_for(&whole, &held), None);
     }
 
     #[test]
@@ -4444,16 +4585,19 @@ mod tests {
         assert_eq!(whole["touches"][1], json!("game:g"));
         let none = BTreeSet::new();
         // Rows of two lines of one game run side by side; a second row of
-        // the same line waits, and so does a row with no target, which
-        // claims the whole game.
+        // the same line waits, and so does a row that claims the whole
+        // game.
         let open = [l1.clone(), l1b.clone(), l2.clone(), whole.clone()];
         assert_eq!(
             ids(plan(&open, &[], &none, 5, 0)),
             ["s000000000011", "s000000000013"]
         );
-        // A row with no target first holds every line of the game.
+        // A whole-game row first in the list still waits for the lines'.
         let open = [whole.clone(), l1.clone(), l2.clone()];
-        assert_eq!(ids(plan(&open, &[], &none, 5, 0)), ["s000000000014"]);
+        assert_eq!(
+            ids(plan(&open, &[], &none, 5, 0)),
+            ["s000000000011", "s000000000013"]
+        );
         // A live worker on a line holds that line and the whole game, not
         // the other lines; max_workers still caps them.
         let workers = [json!({"step": l1.clone(), "state": "working"})];

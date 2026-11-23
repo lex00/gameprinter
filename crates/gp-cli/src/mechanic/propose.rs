@@ -38,7 +38,9 @@ pub(crate) struct Proposal<'a> {
     pub clips: &'a [String],
     /// The scoreboard line the gap was found on (`gp picture --line`). A
     /// row whose target is on another line can't measure this gap: the gap
-    /// becomes a row of its own, ROW-LINE.
+    /// becomes a row of its own, ROW-LINE. A new row and a reopened one
+    /// keep it as their `line`, the line they claim in the loop's plan
+    /// with no target (crate::steps::claim_of).
     pub line: Option<&'a str>,
     /// The clip and frames that show the gap, from its start: a new row
     /// and a reopened one take them as the row's clip.
@@ -208,6 +210,7 @@ fn reopen(r: &mut Value, p: &Proposal, list: &str) -> String {
             "awaiting_measure",
             "measure_needed",
             "clip",
+            "line",
             "worker",
             "waits_on",
             "waits_since",
@@ -223,11 +226,21 @@ fn reopen(r: &mut Value, p: &Proposal, list: &str) -> String {
                 json!(format!("gp picture no longer finds it on {list}: {what}")),
             ),
         };
+        if let Some(l) = line_of(p) {
+            o.insert("line".into(), json!(l));
+        }
         if let Some(c) = shows(p) {
             o.insert("clip".into(), c);
         }
     }
     before
+}
+
+/// The scoreboard line the gap was found on, for the row's `line`: what
+/// the row claims in the loop's plan when it has no target
+/// (crate::steps::claim_of).
+fn line_of<'a>(p: &Proposal<'a>) -> Option<&'a str> {
+    p.line.map(str::trim).filter(|l| !l.is_empty())
 }
 
 /// The row's clip for the proposal's `shows`: a corpus clip and frames.
@@ -407,6 +420,9 @@ pub(crate) fn propose(paths: &Paths, game_dir: Option<&Path>, p: &Proposal) -> R
             }
             if let Some(t) = p.target {
                 r["target"] = json!(t.trim());
+            }
+            if let Some(l) = line_of(p) {
+                r["line"] = json!(l);
             }
             if let Some(c) = shows(p) {
                 r["clip"] = c;

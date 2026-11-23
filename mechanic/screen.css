@@ -103,6 +103,7 @@ body.loop-page #input-set { display: none; }
 #queue .qhead, #steps .shead { display: flex; gap: 8px; align-items: baseline; min-width: 0; }
 #queue .qhead .qname, #steps .shead .srow { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 #queue .qline, #steps .scard .ssays { margin-top: 2px; color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#steps .scard .swaits { margin-top: 2px; color: var(--muted); font-size: 11px; font-style: italic; }
 #queue .qacts, #steps .sacts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
 #queue .qmore, #steps .smore { display: none; margin-top: 4px; padding-top: 4px; border-top: 1px solid var(--line); }
 #queue li.expanded .qmore, #steps li.expanded .smore { display: block; }

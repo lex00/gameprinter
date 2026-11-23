@@ -4,7 +4,7 @@
 //!
 //! | Endpoint | What |
 //! |---|---|
-//! | `GET /api/steps` | `{open, halted, workers, settings, runner}`: the open steps as `gp loop steps` gives them, the halt, the runner's workers, the home's loop settings and the runner in words |
+//! | `GET /api/steps` | `{open, halted, workers, settings, runner}`: the open steps as `gp loop steps` gives them (a row that waits for a live worker with `waits`, "Waits for ROW, which holds the game"), the halt, the runner's workers, the home's loop settings and the runner in words |
 //! | `POST /api/steps/{id}/wrong` | `{why}`: marks open step `id` wrong; the loop halts until a landed change names the objection |
 //! | `GET /api/scoreboard/{game}` | `{game, lines, held_out, error, done_ms}`: the game's scoreboard as kept (crate::scoreboard), each line with its owner's lock (`locked`) and its confirm row, or `lines: []` when the game has none; `done_ms`, when each row finished in the last day |
 
@@ -71,6 +71,25 @@ fn done_since(home: &std::path::Path, game: &str, since: u64) -> Vec<u64> {
 
 fn list(ctx: &Ctx, _req: &Request, _params: &Params) -> Result<Response, Fail> {
     let mut v = crate::loop_cmd::steps_json(&ctx.paths, Some(&ctx.games));
+    // Each open row that waits for a live worker says for which, and what
+    // that one holds (crate::steps::waits_for).
+    let held: Vec<Value> = v["workers"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|w| gp_mcp::steps::holds(w))
+        .map(|w| w["step"].clone())
+        .collect();
+    if let Some(open) = v["open"].as_array_mut() {
+        for s in open
+            .iter_mut()
+            .filter(|s| s["journey"] == json!("quest log"))
+        {
+            if let Some(w) = crate::steps::waits_for(s, &held) {
+                s["waits"] = json!(w);
+            }
+        }
+    }
     v["settings"] = json!(gp_mcp::steps::settings(&ctx.paths.home));
     v["runner"] = super::runner::status(ctx);
     Ok(Response::json(&v))
