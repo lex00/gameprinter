@@ -308,22 +308,87 @@ fn a_one_line_model_patch_to_moss_hop_passes_the_model_gate_from_a_fresh_home() 
         Some(0),
         "a scoreboard line alone was scored: {free:#}"
     );
-    assert_ne!(r.git(&["rev-parse", "main"]), after_one, "it didn't land");
+    let after_two = r.git(&["rev-parse", "main"]);
+    assert_ne!(after_two, after_one, "it didn't land");
+
+    // The next model patch, on the tip those two landings made: the tip's
+    // score is the one the landings kept, read with no scoring, so only the
+    // patch is scored (docs/gate.md, "The tip's score, kept": the first gate
+    // after a landing scored every clip of the new tip).
+    r.git(&["checkout", "-q", "main", "--", "mosshop"]);
+    let text = std::fs::read_to_string(&model).unwrap();
+    assert!(
+        text.contains(now),
+        "the landing's model isn't on main:\n{text}"
+    );
+    let next = "description = \"The player, Moss Hop's hero, still not measured\"";
+    std::fs::write(&model, text.replace(now, next)).unwrap();
+    let mut c = Command::new("git");
+    r.env(&mut c);
+    let diff2 = String::from_utf8(ok(c.arg("diff").output().unwrap(), "git diff").stdout).unwrap();
+    let patch2 = root.join("next-line.patch");
+    std::fs::write(&patch2, &diff2).unwrap();
+    r.git(&["checkout", "--", "mosshop/model.toml"]);
+    let o = r.gp(&[
+        "--json",
+        "model",
+        "gate",
+        g,
+        "--patch",
+        patch2.to_str().unwrap(),
+        "--onto",
+        "main",
+        "-m",
+        "mosshop: the player's description again",
+        "--dry-run",
+    ]);
+    let again: serde_json::Value = serde_json::from_slice(&o.stdout)
+        .unwrap_or_else(|e| panic!("{e}: the gate gave no JSON: {}", said(&o)));
+    assert_eq!(again["verdict"], "PASS", "{}", said(&o));
+    assert_eq!(
+        scores(&again),
+        Some(1),
+        "the tip a landing scored was scored again: {again:#}"
+    );
+    let read = format!(
+        "tip {}: 2 clips, the score an earlier gate kept",
+        &after_two[..8]
+    );
+    assert!(
+        again["lines"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|l| l.as_str().is_some_and(|l| l.starts_with(&read))),
+        "{again:#}"
+    );
+    assert_eq!(
+        r.git(&["rev-parse", "main"]),
+        after_two,
+        "a dry run moved main"
+    );
 
     // And the steps file has a line for each run with the same count, which
     // gp loop health and the gate's watch read.
     let steps = std::fs::read_to_string(r.gate.join("steps.jsonl")).unwrap();
-    let runs: Vec<serde_json::Value> = steps
+    let lines: Vec<serde_json::Value> = steps
         .lines()
         .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
-        .filter(|l| l["step"] == "gate")
         .collect();
-    assert_eq!(runs.len(), 3, "one gate line per run: {steps}");
+    let runs: Vec<&serde_json::Value> = lines.iter().filter(|l| l["step"] == "gate").collect();
+    assert_eq!(runs.len(), 4, "one gate line per run: {steps}");
     assert_eq!(
         runs.iter()
             .map(|l| l["scores"].as_u64().unwrap())
             .collect::<Vec<_>>(),
-        vec![dry, 0, 0],
+        vec![dry, 0, 0, 1],
         "{steps}"
     );
+    // The first run scored its tip; the last read the kept score.
+    let tips: Vec<bool> = lines
+        .iter()
+        .filter(|l| l["step"] == "score tip")
+        .map(|l| l["kept"] == true)
+        .collect();
+    assert_eq!(tips, [false, true], "{steps}");
 }

@@ -543,12 +543,86 @@ fn keep_pass(
     if let Ok(b) = serde_json::to_vec(&kept) {
         let _ = fs::write(&f, b);
     }
+    // Its commit's score, for a dry run stacked on it (`--after`), whose
+    // tip that commit is.
+    if !end.remeasured {
+        keep_tip_file(c, &end.commit, &end.json, &end.rows);
+    }
     // And by its patch's bytes, for a dry run stacked on it (`--after`).
     if let Some(by) = pass_by_diff(&c.home, &item.patch.diff)
         && let Ok(b) = serde_json::to_vec(&kept)
     {
         let _ = fs::write(by, b);
     }
+}
+
+/// A commit's score, kept for the next gate that finds it the tip
+/// (docs/gate.md, "The tip's score, kept"): `<gate home>/tips/KEY.json`,
+/// KEY the BLAKE3 of the game, the commit and the game kit's hash. A clip's
+/// own score is cached by the model's whole text, and a patch's score keeps
+/// the earlier rows of the clips its change can't move, so a landed commit
+/// had no clip of its own cached: the first gate after a landing scored
+/// every clip of the new tip again (86 clips in 514.7 s on 2026-11-23), the
+/// tree its landing had just scored.
+fn tip_file(c: &Ctx, commit: &str) -> PathBuf {
+    let mut h = blake3::Hasher::new();
+    for w in [&*c.rel.to_string_lossy(), commit, &c.kit_hash] {
+        h.update(&(w.len() as u64).to_le_bytes());
+        h.update(w.as_bytes());
+    }
+    c.home
+        .join("tips")
+        .join(format!("{}.json", &h.finalize().to_hex()[..32]))
+}
+
+/// How many commits' scores stay kept in `tips/`: the newest.
+const TIPS_KEPT: usize = 32;
+
+/// Keeps `json`, the score of `commit` with `rows`, for the next gate on it
+/// ([`tip_file`]). A score with a clip that couldn't be made or scored isn't
+/// kept: the next gate scores that tip again.
+fn keep_tip(c: &Ctx, commit: &str, json: &[u8], rows: &Rows) {
+    if commit.is_empty() || rows.is_empty() || rows.iter().any(|(_, r)| r.error.is_some()) {
+        return;
+    }
+    let f = tip_file(c, commit);
+    let Some(dir) = f.parent() else { return };
+    if fs::create_dir_all(dir).is_err() {
+        return;
+    }
+    // Whole or not at all: written beside it and renamed over it.
+    let tmp = f.with_extension(format!("tmp-{}", std::process::id()));
+    if fs::write(&tmp, json).is_err() || fs::rename(&tmp, &f).is_err() {
+        let _ = fs::remove_file(&tmp);
+        return;
+    }
+    let mut all: Vec<(std::time::SystemTime, PathBuf)> = fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| e.path().extension().is_some_and(|x| x == "json"))
+        .filter_map(|e| Some((e.metadata().ok()?.modified().ok()?, e.path())))
+        .collect();
+    all.sort_by_key(|a| std::cmp::Reverse(a.0));
+    for (_, p) in all.into_iter().skip(TIPS_KEPT) {
+        let _ = fs::remove_file(p);
+    }
+}
+
+/// [`keep_tip`] from a score's file.
+fn keep_tip_file(c: &Ctx, commit: &str, json: &Path, rows: &Rows) {
+    if let Ok(b) = fs::read(json) {
+        keep_tip(c, commit, &b, rows);
+    }
+}
+
+/// The kept score of `commit` ([`tip_file`]): its rows and its bytes. None
+/// when none is kept for this game, commit and kit.
+fn kept_tip(c: &Ctx, commit: &str) -> Option<(Rows, Vec<u8>)> {
+    let b = fs::read(tip_file(c, commit)).ok()?;
+    let v: Value = serde_json::from_slice(&b).ok()?;
+    let rows = rows_of(&v).filter(|r| !r.is_empty())?;
+    Some((rows, b))
 }
 
 /// Where a patch's last dry-run pass is kept by the patch's own bytes:
@@ -667,6 +741,10 @@ fn reuse_pass(c: &Ctx, item: &Item, tip: &str, lines: &mut Vec<String>) -> Optio
     let (tip_rows, new_rows) = (read(&tip_file), read(&new_file));
     if !tip_rows.is_empty() && !new_rows.is_empty() {
         lines.push(status_line(c, &kept.commit, &tip_rows, &new_rows));
+    }
+    // The landed commit is the next gate's tip, and this is its score.
+    if !kept.remeasured {
+        keep_tip_file(c, &kept.commit, &new_file, &new_rows);
     }
     forget();
     let line = format!("PASS: landed {} on {}", kept.commit, c.onto);
@@ -2036,23 +2114,49 @@ fn gate_batch(c: &Ctx, a: &GateArgs, items: &[Item], rom: &[u8]) -> Result<Vec<O
                     Ok(m) => m,
                     Err(e) => bail!("the tip's module doesn't build: {e:#}"),
                 };
-                let assets = assets_for(c, &tree_game, rom)?;
-                let (rows, json) = score(
-                    c,
-                    &tree_game,
-                    module.as_deref(),
-                    &assets,
-                    None,
-                    false,
-                    "tip",
-                    &mut lines,
-                )?;
-                lines.push(format!(
-                    "tip {}: {} clips scored in {} s",
-                    &tip[..8],
-                    rows.len(),
-                    started.elapsed().as_secs()
-                ));
+                // The tip's score kept by the gate that landed it, or that
+                // scored it before (keep_tip); else scored, and kept.
+                let (rows, json) = match kept_tip(c, &tip) {
+                    Some((rows, bytes)) => {
+                        let dir = c.home.join("scores");
+                        fs::create_dir_all(&dir)?;
+                        let f = dir.join(format!("tip-{}.json", c.run));
+                        fs::write(&f, bytes)?;
+                        crate::gate_hold::step(
+                            "score tip",
+                            started.elapsed().as_secs_f64(),
+                            true,
+                            json!({"kept": true, "clips": rows.len()}),
+                        );
+                        lines.push(format!(
+                            "tip {}: {} clips, the score an earlier gate kept for this commit, read with no scoring",
+                            &tip[..8],
+                            rows.len()
+                        ));
+                        (rows, f)
+                    }
+                    None => {
+                        let assets = assets_for(c, &tree_game, rom)?;
+                        let (rows, json) = score(
+                            c,
+                            &tree_game,
+                            module.as_deref(),
+                            &assets,
+                            None,
+                            false,
+                            "tip",
+                            &mut lines,
+                        )?;
+                        lines.push(format!(
+                            "tip {}: {} clips scored in {} s",
+                            &tip[..8],
+                            rows.len(),
+                            started.elapsed().as_secs()
+                        ));
+                        keep_tip_file(c, &tip, &json, &rows);
+                        (rows, json)
+                    }
+                };
                 let wasm: Vec<PathBuf> = module.iter().cloned().collect();
                 let scan = crate::package::scan::run(&tree_game, &[], &wasm, &c.paths)?;
                 tip_json = Some(json.clone());
@@ -2112,6 +2216,18 @@ fn gate_batch(c: &Ctx, a: &GateArgs, items: &[Item], rom: &[u8]) -> Result<Vec<O
         }
         if landed.is_ok() && !a.dry_run && !end.commits.is_empty() && !tip_rows.is_empty() {
             lines.push(status_line(c, &end.commit, &tip_rows, &end.rows));
+        }
+        // The landed commit is the next gate's tip: its score is the one
+        // the batch ended on, or, when only patches no score reads landed,
+        // the tip's kept score. Curves measured again are scored afresh.
+        if landed.is_ok() && !a.dry_run && !end.commits.is_empty() && !end.remeasured {
+            if end.json.is_file() {
+                keep_tip_file(c, &end.commit, &end.json, &end.rows);
+            } else if scored.is_empty()
+                && let Some((rows, bytes)) = kept_tip(c, &tip)
+            {
+                keep_tip(c, &end.commit, &bytes, &rows);
+            }
         }
         said.extend(lines);
         // A dry run's pass is kept for the gate after the YES (DryPass).
@@ -2678,6 +2794,7 @@ fn score_only(c: &Ctx, rom: &[u8]) -> Result<Outcome> {
         tip_rows.len(),
         started.elapsed().as_secs()
     ));
+    keep_tip_file(c, &tip, &tip_json, &tip_rows);
     let clips: Vec<Value> = tip_rows.iter().map(|(_, r)| r.raw.clone()).collect();
     let reran = fs::read(&tip_json)
         .ok()
@@ -3495,6 +3612,110 @@ mod tests {
             fs::read_dir(home.join("passed")).unwrap().next().is_none(),
             "a pass not used is dropped"
         );
+    }
+
+    /// docs/gate.md, "The tip's score, kept": the commit a YES lands keeps
+    /// its dry run's score, so the next gate, finding it the
+    /// tip, reads it instead of scoring every clip again; for this game and
+    /// kit only, and never a score with a clip that couldn't be scored.
+    #[test]
+    fn a_landed_commit_keeps_its_score_for_the_next_gate() {
+        let d = tempfile::tempdir().unwrap();
+        let repo = d.path().join("repo");
+        fs::create_dir_all(repo.join("g")).unwrap();
+        let g = |args: &[&str]| {
+            let mut v = vec!["-c", "user.name=t", "-c", "user.email=t@t"];
+            v.extend_from_slice(args);
+            git(&repo, &v).unwrap()
+        };
+        g(&["init", "-q", "-b", "main"]);
+        fs::write(repo.join("g/model.toml"), "a = 1\n").unwrap();
+        g(&["add", "-A"]);
+        g(&["commit", "-qm", "a"]);
+        let tip = g(&["rev-parse", "main"]);
+        g(&["checkout", "-qb", "side"]);
+        fs::write(repo.join("g/model.toml"), "a = 2\n").unwrap();
+        g(&["commit", "-qam", "fix"]);
+        let made = g(&["rev-parse", "side"]);
+        g(&["checkout", "-q", "main"]);
+        let home = d.path().join("gate");
+        let ctx = |rel: &str, kit: &str| Ctx {
+            repo: repo.clone(),
+            rel: PathBuf::from(rel),
+            copy: None,
+            tree: repo.clone(),
+            paths: Paths {
+                home: home.clone(),
+                store: home.join("store"),
+                roms: d.path().join("roms"),
+            },
+            home: home.clone(),
+            onto: "main".into(),
+            run: "gate".into(),
+            kit: d.path().join("kit"),
+            kit_hash: kit.into(),
+            stack_on: None,
+        };
+        let c = ctx("g", "kit1");
+        let score = |clips: Value| json!({"record": {"predicate": {"clips": clips}}});
+        let new_score = d.path().join("patched.json");
+        let v = score(json!([
+            {"id": "g.a.001", "frames": 10, "frames_together": 10},
+            {"id": "g.b.001", "frames": 20, "frames_together": 19},
+        ]));
+        fs::write(&new_score, serde_json::to_vec(&v).unwrap()).unwrap();
+        let end = State {
+            commit: made.clone(),
+            rows: rows_of(&v).unwrap(),
+            json: new_score.clone(),
+            commits: vec![(0, made.clone())],
+            remeasured: false,
+        };
+        let diff = d.path().join("fix.diff");
+        fs::write(&diff, "diff --git a/g/model.toml b/g/model.toml\n").unwrap();
+        let item = Item {
+            patch: Patch {
+                diff,
+                message: None,
+                author: None,
+                date: None,
+            },
+            shown: "fix.diff".into(),
+            message: Some("fix".into()),
+            removes: Vec::new(),
+            replaces: Vec::new(),
+            files: vec!["g/model.toml".into()],
+        };
+        assert!(kept_tip(&c, &made).is_none(), "nothing kept before");
+        keep_pass(&c, &item, &tip, &end, None, Vec::new());
+        // The kept copy outlives the pass, which is used once.
+        let _ = fs::remove_file(tip_file(&c, &made));
+        assert!(reuse_pass(&c, &item, &tip, &mut Vec::new()).is_some());
+        assert_eq!(g(&["rev-parse", "main"]), made, "its commit landed");
+        let (rows, bytes) = kept_tip(&c, &made).expect("the landed commit's score is kept");
+        assert_eq!(
+            rows.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>(),
+            ["g.a.001", "g.b.001"]
+        );
+        assert_eq!(serde_json::from_slice::<Value>(&bytes).unwrap(), v);
+        // Another kit makes scores with other code, another game is
+        // another score: neither reads it.
+        assert!(kept_tip(&ctx("g", "kit2"), &made).is_none());
+        assert!(kept_tip(&ctx("h", "kit1"), &made).is_none());
+        // A score with a clip that couldn't be scored isn't kept.
+        let broken = score(json!([{"id": "g.a.001", "error": "past its deadline"}]));
+        keep_tip(
+            &c,
+            &tip,
+            &serde_json::to_vec(&broken).unwrap(),
+            &rows_of(&broken).unwrap(),
+        );
+        assert!(kept_tip(&c, &tip).is_none());
+        // Only the newest are kept.
+        for i in 0..TIPS_KEPT + 3 {
+            keep_tip(&c, &format!("{i:040}"), &bytes, &rows);
+        }
+        assert_eq!(fs::read_dir(home.join("tips")).unwrap().count(), TIPS_KEPT);
     }
 
     #[test]
