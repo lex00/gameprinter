@@ -237,6 +237,41 @@ pub(crate) fn saved_looks(games: Option<&Path>, game: &str) -> Vec<Look> {
         .unwrap_or_default()
 }
 
+/// The game's approved looks as landed: approved.toml on the `main` branch
+/// of the games checkout `games` (default $GP_GAMES_DIR), which a loop
+/// worker's games worktree shares with the person's checkout. A worker's
+/// `gp mechanic approve` writes only its own worktree's file, and a lock is
+/// in only once its model gate lands that on main; on 2026-11-22 step
+/// sec22de82d20b approved confirm-second-bonus-round in its worktree and
+/// set the row done with nothing landed. A checkout that isn't a git
+/// repository with a main branch gives its working file, as
+/// [`saved_looks`].
+pub(crate) fn landed_looks(games: Option<&Path>, game: &str) -> Vec<Look> {
+    let Some(d) =
+        crate::roms_cmd::games_dir(games).and_then(|g| crate::labels::game_folder(&g, game))
+    else {
+        return Vec::new();
+    };
+    let git = |args: &[&str]| {
+        std::process::Command::new("git")
+            .arg("-C")
+            .arg(&d)
+            .args(args)
+            .stdin(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+    };
+    if git(&["rev-parse", "--verify", "-q", "main^{commit}"]).is_none() {
+        return read(&d).unwrap_or_default();
+    }
+    git(&["show", &format!("main:./{FILE}")])
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .and_then(|t| parse(&t).ok())
+        .unwrap_or_default()
+}
+
 /// The saved look quest-log row `r` of `game` asks about: a look of
 /// approved.toml on the row's own name whose clip is the row's and whose
 /// frames hold the row's, in the game's own pictures.

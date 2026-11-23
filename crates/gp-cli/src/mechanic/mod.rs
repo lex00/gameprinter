@@ -1527,8 +1527,9 @@ pub(crate) fn worker_ask_refused(r: &Value) -> Option<String> {
 
 /// Why a worker may not set row `r` of `game` done, or None: it has a look
 /// in the game's own pictures to lock, and the games checkout `games`
-/// (default $GP_GAMES_DIR) has no approved.toml look of it
-/// (crate::approved::saved). A lock is in only once the model gate landed
+/// (default $GP_GAMES_DIR) has no approved.toml look of it on its main
+/// (crate::approved::landed_looks, saved), so a worker's approve in its own
+/// worktree doesn't count. A lock is in only once the model gate landed
 /// it, and then the runner closes the row itself (settle_saved); on
 /// 2026-11-22 a worker said Locked on confirm-second-bonus-round after its
 /// lock's gate failed, and the session saved it by hand.
@@ -1537,12 +1538,12 @@ fn unlocked_look(game: &str, r: &Value, games: Option<&std::path::Path>) -> Opti
     if c["look"] != json!("game") || !(c["id"].is_string() || c["n"].is_u64()) {
         return None;
     }
-    let looks = crate::approved::saved_looks(games, game);
+    let looks = crate::approved::landed_looks(games, game);
     if crate::approved::saved(game, r, &looks).is_some() {
         return None;
     }
     Some(format!(
-        "its look ({}) isn't locked: approved.toml in the games checkout saves no look of it on this row. A lock is in when its model gate lands it (a FAIL lands nothing), and then the row closes itself; put the lock on a card and set the row \"in line\". A row whose look isn't to be locked takes --no-clip with the done",
+        "its look ({}) isn't locked: approved.toml on the games checkout's main saves no look of it on this row (gp mechanic approve in a worktree lands nothing). A lock is in when its model gate lands it (a FAIL lands nothing), and then the row closes itself; put the lock on a card and set the row \"in line\". A row whose look isn't to be locked takes --no-clip with the done",
         clip_words(c)
     ))
 }
@@ -2730,6 +2731,102 @@ mod tests {
             format!("[[look]]\nrow = \"{row}\"\nclip = \"test-hop.bonus.002\"\nframes = [0, 1131]\nlook = \"game\"\napproved = \"2026-11-22\"\napart = [[0, 0, 0]]\n"),
         )
         .unwrap();
+        let o = queue(&p, "test-hop", Some(row), &locked).unwrap();
+        assert_eq!(o.json["queue"][0]["status"], "done");
+    }
+
+    /// A worker's `gp mechanic approve` writes approved.toml in its own games
+    /// worktree; its done is refused until that look is on the games main,
+    /// where only the model gate puts it (step sec22de82d20b, 2026-11-22).
+    #[test]
+    fn a_worker_approve_in_its_worktree_doesnt_close_the_row() {
+        let d = tempfile::tempdir().unwrap();
+        let p = paths(d.path());
+        let main = d.path().join("games");
+        let wt = d.path().join("wt");
+        std::fs::create_dir_all(main.join("test-hop")).unwrap();
+        std::fs::write(main.join("test-hop/roms.toml"), "").unwrap();
+        let git = |dir: &std::path::Path, args: &[&str]| {
+            let o = std::process::Command::new("git")
+                .arg("-C")
+                .arg(dir)
+                .args([
+                    "-c",
+                    "user.name=t",
+                    "-c",
+                    "user.email=t@t",
+                    "-c",
+                    "commit.gpgsign=false",
+                ])
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(
+                o.status.success(),
+                "git {args:?}: {}",
+                String::from_utf8_lossy(&o.stderr)
+            );
+        };
+        git(&main, &["init", "-q", "-b", "main"]);
+        git(&main, &["add", "."]);
+        git(&main, &["commit", "-q", "-m", "games"]);
+        git(
+            &main,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "-b",
+                "loop/w",
+                wt.to_str().unwrap(),
+            ],
+        );
+        let row = "confirm-second-bonus-round";
+        let look = format!(
+            "[[look]]\nrow = \"{row}\"\nclip = \"test-hop.bonus.002\"\nframes = [0, 1131]\nlook = \"game\"\napproved = \"2026-11-22\"\napart = [[0, 0, 0]]\n"
+        );
+        std::fs::write(wt.join("test-hop/approved.toml"), &look).unwrap();
+        git(&wt, &["add", "."]);
+        git(&wt, &["commit", "-q", "-m", "approve"]);
+        let none: &[String] = &[];
+        let cl = row_clip("test-hop.bonus.002", Some("0-1131"), Some("game")).unwrap();
+        let ask = RowChange {
+            status: Some("asking you"),
+            note: Some("Does the bonus round look right?"),
+            plain: None,
+            worker: None,
+            known: none,
+            reads: none,
+            opens: none,
+            out_of_scope: None,
+            in_scope: false,
+            repo: None,
+            clip: Some(&cl),
+            no_clip: false,
+            target: None,
+            no_target: false,
+            measure_needed: None,
+            waits_on: None,
+            parked: None,
+            no_wait: false,
+            games: Some(&wt),
+            under_step: true,
+        };
+        queue(&p, "test-hop", Some(row), &ask).unwrap();
+        let locked = RowChange {
+            status: Some("done"),
+            note: Some("Locked."),
+            clip: None,
+            ..ask
+        };
+        let Err(e) = queue(&p, "test-hop", Some(row), &locked) else {
+            panic!("a done on a look approved only in the worktree was taken");
+        };
+        assert!(format!("{e}").contains("main"), "{e}");
+        let q = read_queue(&queue_file(&p, "test-hop").unwrap());
+        assert_eq!(q[0]["status"], "asking you");
+        // Landed on main (as the gate does), the worker's done is taken.
+        git(&main, &["merge", "-q", "loop/w"]);
         let o = queue(&p, "test-hop", Some(row), &locked).unwrap();
         assert_eq!(o.json["queue"][0]["status"], "done");
     }
