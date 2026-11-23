@@ -144,12 +144,19 @@ pub fn is_open(v: &Value, now: u64) -> bool {
 /// runner holds until the cards it stands on land (`after_held_ms`, a gate
 /// with `--after`) is as old as the runner's last look at those cards.
 pub fn is_yes(v: &Value, now: u64) -> bool {
-    let at = v["answered_ms"]
+    v["state"] == json!("yes") && now.saturating_sub(yes_seen_ms(v)) < YES_FOR_MS
+}
+
+/// When a yes was last known to be in hand: the person's answer, the
+/// runner's last look at the cards it stands on (`after_held_ms`, renewed
+/// each pass while it holds it) or the end of the minute a put-back yes
+/// waits (`kept_until_ms`), whichever is latest.
+pub fn yes_seen_ms(v: &Value) -> u64 {
+    v["answered_ms"]
         .as_u64()
         .unwrap_or(0)
         .max(v["after_held_ms"].as_u64().unwrap_or(0))
-        .max(v["kept_until_ms"].as_u64().unwrap_or(0));
-    v["state"] == json!("yes") && now.saturating_sub(at) < YES_FOR_MS
+        .max(v["kept_until_ms"].as_u64().unwrap_or(0))
 }
 
 /// How many times a yes whose gate failed for a cause outside its patch

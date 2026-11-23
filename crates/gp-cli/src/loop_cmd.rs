@@ -855,17 +855,10 @@ fn checks(paths: &gp_evidence::Paths, games_dir: Option<&std::path::Path>) -> Va
     // The yes cards: taken within a minute, and none failing.
     let mut waiting = 0;
     for a in gp_mcp::asks::all(home) {
-        if gp_mcp::asks::is_yes(&a, now)
-            && now.saturating_sub(a["answered_ms"].as_u64().unwrap_or(0)) > 60_000
-        {
-            bad(
-                &mut lines,
-                &mut problems,
-                format!(
-                    "Card {}: the person said yes over a minute ago and no runner has taken it.",
-                    a["id"].as_str().unwrap_or("")
-                ),
-            );
+        match yes_card_line(&a, now) {
+            Some(Ok(l)) => ok(&mut lines, l),
+            Some(Err(p)) => bad(&mut lines, &mut problems, p),
+            None => {}
         }
         if let Some(p) = failed_card_problem(&a, now) {
             bad(&mut lines, &mut problems, p);
@@ -984,9 +977,86 @@ fn checks(paths: &gp_evidence::Paths, games_dir: Option<&std::path::Path>) -> Va
     json!({"lines": lines, "problems": problems})
 }
 
+/// A yes card the runner hasn't started, for gp loop health: a problem
+/// once a minute has gone by with nothing in hand; an OK line while the
+/// runner holds it for the cards it stands on (`--after`, its
+/// `after_held_ms` renewed each pass) or while a put-back yes waits its
+/// minute. None for a card that isn't such a yes, or is younger.
+fn yes_card_line(a: &Value, now: u64) -> Option<Result<String, String>> {
+    if !gp_mcp::asks::is_yes(a, now) {
+        return None;
+    }
+    let id = a["id"].as_str().unwrap_or("");
+    let answered = a["answered_ms"].as_u64().unwrap_or(0);
+    if now.saturating_sub(answered) <= 60_000 {
+        return None;
+    }
+    if now.saturating_sub(gp_mcp::asks::yes_seen_ms(a)) > 60_000 {
+        return Some(Err(format!(
+            "Card {id}: the person said yes over a minute ago and no runner has taken it."
+        )));
+    }
+    if gp_mcp::asks::kept_waits(a, now) {
+        return Some(Ok(format!(
+            "Card {id}: its yes runs again within a minute ({})",
+            a["kept_why"].as_str().unwrap_or("it couldn't land")
+        )));
+    }
+    Some(Ok(format!(
+        "Card {id}: the runner holds its yes until {}",
+        a["after_waits"]
+            .as_str()
+            .unwrap_or("the cards it stands on land")
+            .trim_start_matches("it stands on ")
+    )))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A yes the runner holds for the cards it stands on, or a put-back
+    /// yes waiting its minute, is an OK line; once the runner's last look
+    /// at it is a minute old, or with nothing in hand, it is a problem.
+    #[test]
+    fn a_yes_held_for_the_cards_it_stands_on_is_not_a_problem() {
+        let now = 10_000_000;
+        let young = json!({"id": "y", "state": "yes", "answered_ms": now - 30_000});
+        assert_eq!(yes_card_line(&young, now), None);
+        let stuck = json!({"id": "s", "state": "yes", "answered_ms": now - 600_000});
+        let said = yes_card_line(&stuck, now).unwrap().unwrap_err();
+        assert!(said.contains("no runner has taken it"), "{said}");
+
+        let held = json!({
+            "id": "h", "state": "yes", "answered_ms": now - 600_000,
+            "after_held_ms": now - 3_000,
+            "after_waits": "it stands on cards not landed yet: 1-base (a fix)",
+        });
+        let said = yes_card_line(&held, now).unwrap().unwrap();
+        assert!(
+            said.contains("holds its yes until cards not landed yet: 1-base"),
+            "{said}"
+        );
+        // The runner stopped looking: the hold is a minute stale.
+        let stale = json!({
+            "id": "h", "state": "yes", "answered_ms": now - 600_000,
+            "after_held_ms": now - 90_000,
+        });
+        let said = yes_card_line(&stale, now).unwrap().unwrap_err();
+        assert!(said.contains("no runner has taken it"), "{said}");
+
+        let kept = json!({
+            "id": "k", "state": "yes", "answered_ms": now - 600_000,
+            "kept_until_ms": now + 20_000, "kept_why": "the tip kept moving",
+        });
+        let said = yes_card_line(&kept, now).unwrap().unwrap();
+        assert!(
+            said.contains("runs again within a minute (the tip kept moving)"),
+            "{said}"
+        );
+        let running = json!({"id": "r", "state": "running", "answered_ms": now - 600_000});
+        assert_eq!(yes_card_line(&running, now), None);
+    }
 
     /// A published build whose .pages lacks the built editor is a problem
     /// naming it, and saying a words-only landing won't publish it; with
