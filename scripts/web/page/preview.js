@@ -13,7 +13,12 @@
 // written, `retro`; `control=1` hands the frame to the page that embeds this
 // one (the workspace's game view, docs/inspector.md): it has no clock of
 // its own and answers messages from its parent, of its own origin only:
-//   {gp: "frames", text, frame}  the input to play, as a frames file
+//   {gp: "frames", text, frame, kept}
+//                                the input to play, as a frames file; with
+//                                `kept`, free play from power-on, which
+//                                starts with the high scores this browser
+//                                keeps and writes each change (docs/shell.md,
+//                                "High scores")
 //   {gp: "load-state", state, text, frame, draws}
 //                                the input to play from a model state (the
 //                                canonical state's bytes in base64): every
@@ -165,6 +170,25 @@ class Preview {
     if (code === 0) return { loaded: true };
     if (code === 2) return { profile: this.out() };
     return { refused: this.out() };
+  }
+  // High scores (gp_present::shell::kept, docs/shell.md "High scores"):
+  // the storage name the model's kept counters are kept under, or null
+  // when it keeps none (or the gp_web.wasm is from before them).
+  keptFile() {
+    if (!this.has("gp_kept_file")) return null;
+    return this.run("gp_kept_file") === 0 ? this.out() : null;
+  }
+  // Their values now, as the file holds them.
+  keptText() {
+    return this.check(this.run("gp_kept_text"));
+  }
+  // Puts kept values back into the game.
+  keptLoad(text) {
+    this.check(this.run("gp_kept_load", enc.encode(text)));
+  }
+  // Puts every kept counter back at its start.
+  keptClear() {
+    this.check(this.run("gp_kept_clear"));
   }
   // The rewind ring, the shell standard's (gp_present::shell::Ring), held
   // by the module: false from a gp_web.wasm built before it.
@@ -1983,7 +2007,7 @@ async function main() {
     // The look drawn now, read when the control's models start again: its
     // present text, large art and stages live in this function.
     const lookNow = () => ({ present: lookPresent, art: lookArt, stages: artStages });
-    control(p, stills, bundle, lookNow, canvas, draw, profile, st, cfg.regions);
+    control(p, stills, bundle, lookNow, canvas, draw, profile, st, cfg.regions, t.game);
     placeInView(canvas, cfg.visible, cfg.view);
     return;
   }
@@ -2041,6 +2065,7 @@ async function main() {
         await applyRoles(looks.found.find((l) => l.id === looks.current && l.id !== looks.own[0]) ?? null);
       }
       frame = 0;
+      sh?.poweredOn();
       t.hashes = [p.hash()];
       sh?.restarted(quiet ? null : `Settings: ${name}. The game starts again from power-on`);
     } catch (e) {
@@ -2162,8 +2187,9 @@ async function main() {
   const loop = (now) => {
     acc = Math.min(acc + (now - last), 250);
     last = now;
-    if (restarting || settingsFrame() || prompt) {
+    if (restarting || sh?.waiting() || settingsFrame() || prompt) {
       // The game holds while the screen is open: no step, no time owed.
+      // It holds at power-on too until the high scores kept are read.
       acc = 0;
       draw();
       st?.draw();
@@ -2213,6 +2239,16 @@ async function main() {
   };
   draw();
   requestAnimationFrame(loop);
+}
+
+// The shell's settings file (gp_present::shell::Settings::parse): a line
+// not there is the default, so Keep high scores is on unless turned off.
+function parseShellSettings(s) {
+  return {
+    console_only: /^console_only\s*=\s*true\s*$/m.test(s),
+    quick_buttons: /^quick_buttons\s*=\s*true\s*$/m.test(s),
+    keep_scores: !/^keep_scores\s*=\s*false\s*$/m.test(s),
+  };
 }
 
 // The runtime shell for keyboard and gamepad play (docs/shell.md): slots,
@@ -2348,9 +2384,10 @@ function shell(p, cfg, canvas, profileNow, host) {
     return out;
   };
   // The shell's own settings (gp_present::shell::Settings), as their file
-  // holds them: Console only, and the quick save buttons.
-  const parseShell = (s) => ({ console_only: /^console_only\s*=\s*true\s*$/m.test(s), quick_buttons: /^quick_buttons\s*=\s*true\s*$/m.test(s) });
-  const shellText = (s) => `console_only = ${s.console_only}\nquick_buttons = ${s.quick_buttons}\n`;
+  // holds them: Console only, the quick save buttons, and Keep high scores
+  // (on unless the file turns it off).
+  const parseShell = parseShellSettings;
+  const shellText = (s) => `console_only = ${s.console_only}\nquick_buttons = ${s.quick_buttons}\nkeep_scores = ${s.keep_scores}\n`;
   let settings = parseShell("");
   // Each binding's need of those settings, from the table.
   const needs = new Map(BINDINGS.map((b) => [b.action, b.needs]));
@@ -2365,6 +2402,30 @@ function shell(p, cfg, canvas, profileNow, host) {
   const kept = new Map();
   let files = null;
   let writes = Promise.resolve();
+  // High scores (gp_present::shell::kept, docs/shell.md "High scores"):
+  // the storage name of the model's kept counters (null when it keeps
+  // none), and their values as last read or written. The game starts with
+  // them before its first frame, each change is written, and a state put
+  // back (a load, a rewind) gets them back, so none takes a score away.
+  let keptName = p.keptFile();
+  let scores = null;
+  let ready = false;
+  const powerOn = () => {
+    if (!keptName) return;
+    if (settings.keep_scores && scores !== null) p.keptLoad(scores);
+    scores = p.keptText();
+  };
+  const scoresBack = () => {
+    if (keptName && settings.keep_scores && scores !== null) p.keptLoad(scores);
+  };
+  const keepScores = () => {
+    if (!keptName || !settings.keep_scores) return;
+    const now = p.keptText();
+    if (now === scores) return;
+    scores = now;
+    void keep(keptName, enc.encode(now)).catch((e) => say(`High scores not kept: ${e?.message ?? e}`));
+  };
+  t.scores = () => (keptName ? p.keptText() : null);
   const opened = openStorage(game)
     .then(async (s) => {
       // Slots kept in localStorage before the shell's storage are moved
@@ -2397,10 +2458,22 @@ function shell(p, cfg, canvas, profileNow, host) {
       }
       const shellFile = await s.read(SHELL_SETTINGS);
       if (shellFile) settings = parseShell(text.decode(shellFile));
+      // The high scores this browser keeps, read with Keep high scores on
+      // only (off, nothing is read or written).
+      if (keptName && settings.keep_scores) {
+        const b = await s.read(keptName);
+        if (b) scores = text.decode(b);
+      }
       files = s;
       return s;
     })
-    .catch(() => null);
+    .catch(() => null)
+    .finally(() => {
+      // The game starts with them, before its first frame: the loop holds
+      // until the storage is read (`waiting`).
+      powerOn();
+      ready = true;
+    });
   const keep = (name, bytes) =>
     (writes = writes
       .then(() => opened)
@@ -2538,6 +2611,7 @@ function shell(p, cfg, canvas, profileNow, host) {
     if (got.refused !== undefined) return got.refused;
     if (got.profile !== undefined) return `${what} is in ${modeTitle(got.profile)}`;
     p.ringClear();
+    scoresBack();
     say(`Loaded ${what}${inMode}, ${time(frameOf(p.stateBytes()))}`);
     return null;
   };
@@ -2621,6 +2695,7 @@ function shell(p, cfg, canvas, profileNow, host) {
       settings = parseShell(chosen);
       void keep(SHELL_SETTINGS, enc.encode(chosen)).catch(() => {});
       if (settings.console_only !== was.console_only) say(settings.console_only ? "Console only: saves, loads and rewind are off" : "Saves, loads and rewind are on again");
+      else if (settings.keep_scores !== was.keep_scores) say(settings.keep_scores ? "High scores are kept in this browser" : "High scores aren't kept: nothing is written");
       else say(settings.quick_buttons ? "Quick save buttons on: RB saves, LB loads" : "Quick save buttons off");
       show();
     },
@@ -2634,7 +2709,15 @@ function shell(p, cfg, canvas, profileNow, host) {
         if (host.screenOpen()) this.fillScreen();
       };
       try {
-        if (what === "save") {
+        if (what === "scores") {
+          // Clear high scores: out of the storage, and the game's back at
+          // their starts.
+          if (!keptName) return tell("This game keeps no high scores");
+          p.keptClear();
+          scores = p.keptText();
+          await keep(keptName, null);
+          tell("High scores cleared");
+        } else if (what === "save") {
           save(n);
           refresh();
           tell(`Saved to slot ${n}`);
@@ -2729,7 +2812,10 @@ function shell(p, cfg, canvas, profileNow, host) {
       const rewinding = allowed("rewind") && (webKeys("rewind").some((k) => down.has(k)) || pads.rewind);
       if (!back && can && rewinding && p.ringBack()) back = true;
       show();
-      if (back) return "back";
+      if (back) {
+        scoresBack();
+        return "back";
+      }
       if (halted) {
         if (advance === 0) return "hold";
         advance -= 1;
@@ -2742,6 +2828,16 @@ function shell(p, cfg, canvas, profileNow, host) {
     after() {
       if (can) p.ringNote();
       if (canSave && !settings.console_only && p.autosaveDue()) save(AUTOSAVE_SLOT);
+      keepScores();
+    },
+    // Until the storage is read, the game holds at power-on, so it starts
+    // with the high scores kept.
+    waiting: () => !!keptName && !ready,
+    // The game powered on again (a restart in new settings): the kept
+    // high scores are put back before its first frame.
+    poweredOn() {
+      keptName = p.keptFile();
+      powerOn();
     },
   };
 }
@@ -2769,7 +2865,7 @@ function placeInView(canvas, visible, view) {
   });
 }
 
-function control(p, stills, bundle, lookNow, canvas, drawGame, profile, st, regions) {
+function control(p, stills, bundle, lookNow, canvas, drawGame, profile, st, regions, game) {
   // The settings screen over the picture while the parent has it open.
   const draw = (pl = p) => {
     drawGame(pl);
@@ -2788,6 +2884,33 @@ function control(p, stills, bundle, lookNow, canvas, drawGame, profile, st, regi
   // A model and the frame it's at: the one watched, and the one stills are taken on.
   const watched = { p, at: 0 };
   const still = { p: stills, at: 0 };
+  // High scores (docs/shell.md, "High scores"): free play from power-on,
+  // `{gp: "frames", kept: true}`, starts with the ones this browser keeps
+  // for the game, and each change the watched model makes is written. The
+  // values read are given at every start again, so a seek back plays the
+  // same steps from the same start. A clip ({gp: "load-state"}, or frames
+  // without `kept`) never reads or writes them.
+  const keptName = p.keptFile();
+  let keptP = null;
+  let keptStart = null;
+  let keptOut = null;
+  let keptWritten = null;
+  const openKept = () =>
+    (keptP ??= openStorage(game)
+      .then(async (s) => {
+        const sf = await s.read(SHELL_SETTINGS);
+        if (!parseShellSettings(sf ? text.decode(sf) : "").keep_scores) return { s, on: false, text: null };
+        const b = await s.read(keptName);
+        return { s, on: true, text: b ? text.decode(b) : null };
+      })
+      .catch(() => null));
+  const writeKept = () => {
+    if (!keptOut?.on) return;
+    const now = watched.p.keptText();
+    if (now === keptWritten) return;
+    keptWritten = now;
+    void keptOut.s.write(keptName, enc.encode(now)).catch(() => {});
+  };
   const reset = (m) => {
     m.p.load(bundle);
     // The game's regions, which the module keeps from load to load.
@@ -2805,6 +2928,7 @@ function control(p, stills, bundle, lookNow, canvas, drawGame, profile, st, regi
     // A gp_web.wasm built before draws takes none: the model rolls its own.
     if (draws && start && !m.p.setDraws(`gp-draws 0\n${draws.lines.join("")}`, draws.base)) draws = null;
     if (start) m.p.loadState(start);
+    else if (keptStart !== null) m.p.keptLoad(keptStart);
     m.at = 0;
   };
   const step = (m, n) => {
@@ -2820,17 +2944,50 @@ function control(p, stills, bundle, lookNow, canvas, drawGame, profile, st, regi
     draw(watched.p);
   };
   const tell = (m) => parent.postMessage(m, location.origin);
+  // Messages that came while the kept high scores were read, handled in
+  // order once they are.
+  let held = null;
+  const receive = (m) => {
+    if (held) {
+      held.push(m);
+      return;
+    }
+    if (m.gp === "frames" && m.kept && keptName) {
+      // Free play from power-on: the kept high scores are read first.
+      held = [];
+      void openKept().then((k) => {
+        keptOut = k;
+        keptStart = k?.on ? k.text : null;
+        const after = held;
+        held = null;
+        handle(m, true);
+        for (const x of after) receive(x);
+      });
+      return;
+    }
+    handle(m, false);
+  };
   addEventListener("message", (e) => {
     const m = e.data;
     if (e.origin !== location.origin || !m || typeof m !== "object" || typeof m.gp !== "string") return;
+    receive(m);
+  });
+  // `free`: this is free play's start, the kept high scores read.
+  function handle(m, free) {
     try {
       if (m.gp === "frames" || m.gp === "load-state") {
+        if (!free) {
+          keptOut = null;
+          keptStart = null;
+        }
         start = m.gp === "load-state" ? Uint8Array.from(atob(m.state), (c) => c.charCodeAt(0)) : null;
         draws = start && m.draws ? { base: Number(m.draws.base) || 0, lines: [String(m.draws.lines ?? "")] } : null;
         steps = parseFrames(m.text);
         reset(watched);
         reset(still);
+        keptWritten = keptOut?.on ? watched.p.keptText() : null;
         seek(m.frame ?? 0);
+        writeKept();
       } else if (m.gp === "seek") {
         seek(m.frame);
       } else if (m.gp === "push") {
@@ -2842,6 +2999,7 @@ function control(p, stills, bundle, lookNow, canvas, drawGame, profile, st, regi
         }
         for (const x of parseFrames(m.text)) steps.push(x);
         seek(steps.length);
+        writeKept();
       } else if (m.gp === "bundle" || m.gp === "profile") {
         // The model changed (the refinement loop wrote new numbers into
         // the run's bundle), or another physics profile was chosen: load
@@ -2899,7 +3057,7 @@ function control(p, stills, bundle, lookNow, canvas, drawGame, profile, st, regi
       t.error = String(err?.stack ?? err);
       tell({ gp: "error", message: String(err) });
     }
-  });
+  }
   draw();
   mark("first-frame");
   tell({ gp: "ready" });

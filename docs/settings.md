@@ -36,6 +36,8 @@ The screen is drawn at the game's own resolution (256 by 224 on Donkey Kong), in
 | Remove it from the cache | For a downloaded theme: takes its files out of the browser's cache. It can be downloaded again |
 | `[ ] Console only` | The shell's switch for no saves, loads or rewind ("Saves on the screen", below) |
 | `[ ] Quick save buttons` | The shell's switch for quick save and load on a controller's bumpers |
+| `[X] Keep high scores` | For a game whose model keeps counters (`kept`): the shell's switch, on at first, that keeps its high scores in the browser from one play to the next ([high scores](shell.md#high-scores)) |
+| Clear high scores | Under it: deletes the high scores kept, and puts the game's back at their starts |
 | Saves | A heading, then Resume (once the autosave is kept), Slot 1 to Slot 4 and Load from a file |
 | A heading for each group | The group's `title`, in the file's order. The cursor passes over it |
 | `[X]` or `[ ]` and a switch's name | Each switch of the group, on or off |

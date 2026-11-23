@@ -164,6 +164,10 @@ pub enum SlotAction {
     Download(usize),
     /// Load a save from a file the player picks.
     LoadFile,
+    /// Clear the high scores the game keeps (`shell::kept`): the host
+    /// deletes them from its storage and puts the game's back at their
+    /// starts.
+    ClearScores,
 }
 
 /// What a key did.
@@ -203,6 +207,10 @@ pub enum Row {
     ConsoleOnly,
     /// The shell's "Quick save buttons" switch.
     QuickButtons,
+    /// The shell's "Keep high scores" switch, for a game that keeps some.
+    KeepScores,
+    /// Clears the high scores kept, for a game that keeps some.
+    ClearScores,
     /// The Saves heading, which the cursor passes over.
     Saves,
     /// Under the heading while "Console only" is on.
@@ -291,6 +299,10 @@ pub struct Screen {
     /// host offers them.
     pub shell: Option<shell::Settings>,
     pub running_shell: Option<shell::Settings>,
+    /// Whether the game keeps high scores (a model's kept counters,
+    /// `shell::kept`), so the screen lists Keep high scores and Clear high
+    /// scores with the shell's settings.
+    pub scores: bool,
     /// The slot chosen, while the screen asks what to do with it.
     pub asking: Option<usize>,
     /// What the host said of the last thing done, shown under the list
@@ -347,6 +359,7 @@ impl Screen {
             saves: None,
             shell: None,
             running_shell: None,
+            scores: false,
             asking: None,
             said: None,
         }
@@ -356,6 +369,13 @@ impl Screen {
     pub fn with_shell(mut self, settings: shell::Settings) -> Screen {
         self.shell = Some(settings);
         self.running_shell = Some(settings);
+        self
+    }
+
+    /// The screen of a game that keeps high scores: with the shell's
+    /// settings it lists Keep high scores and Clear high scores.
+    pub fn with_scores(mut self, scores: bool) -> Screen {
+        self.scores = scores;
         self
     }
 
@@ -477,6 +497,10 @@ impl Screen {
         if self.shell.is_some() {
             out.push(Row::ConsoleOnly);
             out.push(Row::QuickButtons);
+            if self.scores {
+                out.push(Row::KeepScores);
+                out.push(Row::ClearScores);
+            }
         }
         if let Some(saves) = &self.saves {
             out.push(Row::Saves);
@@ -541,6 +565,11 @@ impl Screen {
                 "{} Quick save buttons",
                 mark(self.shell.is_some_and(|s| s.quick_buttons))
             ),
+            Row::KeepScores => format!(
+                "{} Keep high scores",
+                mark(self.shell.is_some_and(|s| s.keep_scores))
+            ),
+            Row::ClearScores => "  Clear high scores".to_owned(),
             Row::Saves => "Saves".to_owned(),
             Row::SavesOff => "  Off: console only is on".to_owned(),
             Row::Slot(n) => self.slot_text(n),
@@ -619,6 +648,8 @@ impl Screen {
             Row::ThemeAbout | Row::ThemeRemove => String::new(),
             Row::ConsoleOnly => "Console only: no saves, loads or rewind, as on the console. The game doesn't start again".to_owned(),
             Row::QuickButtons => "Quick save buttons: on a controller, the right bumper saves and the left bumper loads, to the last slot used (slot 1 at first). Off at first, so a stray press can't replace a save".to_owned(),
+            Row::KeepScores => "Keep high scores: the high scores stay in this browser from one play to the next. Off, nothing is kept or read".to_owned(),
+            Row::ClearScores => "Clear high scores: takes the kept high scores out of this browser, and out of the game now".to_owned(),
             Row::Saves | Row::SavesOff => "Saves are off while Console only is on".to_owned(),
             Row::Slot(n) => self.slot_detail(n),
             Row::LoadFile => "Loads a save from a file you downloaded from this game before".to_owned(),
@@ -828,6 +859,15 @@ impl Screen {
                         if let Some(s) = &mut self.shell {
                             s.quick_buttons = !s.quick_buttons;
                         }
+                    }
+                    Row::KeepScores => {
+                        if let Some(s) = &mut self.shell {
+                            s.keep_scores = !s.keep_scores;
+                        }
+                    }
+                    Row::ClearScores if k == Key::Choose => {
+                        self.said = None;
+                        return Outcome::Slot(SlotAction::ClearScores);
                     }
                     Row::Slot(n) if k == Key::Choose => {
                         self.asking = Some(n);
@@ -1577,7 +1617,8 @@ mod tests {
             s.shell,
             Some(crate::shell::Settings {
                 console_only: true,
-                quick_buttons: true
+                quick_buttons: true,
+                keep_scores: true
             })
         );
         assert!(s.changed());
@@ -1599,5 +1640,39 @@ mod tests {
             Outcome::Closed { restart: false, .. }
         ));
         assert!(s.shell.unwrap().console_only);
+    }
+
+    /// A game that keeps high scores lists Keep high scores, on at first,
+    /// and Clear high scores, which hands the clearing to the host; a game
+    /// that keeps none lists neither.
+    #[test]
+    fn a_game_that_keeps_high_scores_lists_keep_and_clear() {
+        let shell = crate::shell::Settings::default();
+        let none = Screen::open(catalog(), RETRO).with_shell(shell);
+        assert!(!none.rows().contains(&Row::KeepScores));
+        let mut s = Screen::open(catalog(), RETRO)
+            .with_shell(shell)
+            .with_scores(true);
+        assert_eq!(
+            &s.rows()[1..5],
+            &[
+                Row::ConsoleOnly,
+                Row::QuickButtons,
+                Row::KeepScores,
+                Row::ClearScores
+            ]
+        );
+        assert_eq!(s.text(Row::KeepScores), "[X] Keep high scores");
+        s.cursor = 3;
+        s.key(Key::Choose);
+        assert_eq!(s.text(Row::KeepScores), "[ ] Keep high scores");
+        assert!(!s.shell.unwrap().keep_scores && s.changed());
+        s.key(Key::Down);
+        assert_eq!(s.key(Key::Choose), Outcome::Slot(SlotAction::ClearScores));
+        assert!(matches!(
+            s.key(Key::Back),
+            Outcome::Closed { restart: false, .. }
+        ));
+        assert!(!s.shell.unwrap().keep_scores);
     }
 }

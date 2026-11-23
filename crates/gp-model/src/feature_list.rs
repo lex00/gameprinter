@@ -809,6 +809,12 @@ pub const FEATURES: &[Feature] = &[
         &["counters.*.high_of"],
     ),
     core(
+        "counter.kept",
+        "",
+        "A counter a player keeps from one play to the next, as a high score",
+        &["counters.*.kept"],
+    ),
+    core(
         "counter.restarts_clock",
         "",
         "A counter whose clocks start over when a level sets it",

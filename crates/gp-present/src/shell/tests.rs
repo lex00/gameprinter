@@ -323,6 +323,7 @@ fn the_shell_settings_are_kept_and_turn_keys_off() {
     let s = Settings {
         console_only: true,
         quick_buttons: true,
+        keep_scores: false,
     };
     s.write(&mut m).unwrap();
     assert_eq!(Settings::read(&mut m), s);

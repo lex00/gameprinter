@@ -1467,6 +1467,10 @@
             "null"
           ]
         },
+        "kept": {
+          "description": "Feature `counter.kept`: the counter outlasts a power-off, as a high\nscore table does. The simulation never reads this; a player keeps\nthe counter's value where it plays (the browser's storage) and puts\nit back at the game's start (`gp_present::shell::kept`). A clip,\na score and a comparison start from the state they are given.",
+          "type": "boolean"
+        },
         "max": {
           "description": "It never goes above this: a change past it stops at it, or with\n`wrap`, goes on from `min` (or 0) and fires `<counter>.wrapped`.",
           "type": [

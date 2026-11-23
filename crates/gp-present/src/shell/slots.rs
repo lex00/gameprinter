@@ -229,7 +229,7 @@ pub const SETTINGS_NAME: &str = "settings/shell.txt";
 /// The shell's own settings: switches of the shell, never of the model,
 /// so changing one never restarts the game. Kept through [`Storage`] as
 /// [`SETTINGS_NAME`], beside the theme (docs/shell.md).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Settings {
     /// "Console only": no saves, loads or rewind, as the console had none.
     pub console_only: bool,
@@ -237,6 +237,20 @@ pub struct Settings {
     /// (the bumpers), off by default since a stray press would replace a
     /// slot.
     pub quick_buttons: bool,
+    /// "Keep high scores": the model's kept counters are kept from one play
+    /// to the next ([`super::kept`]). On by default; off, nothing is read
+    /// or written.
+    pub keep_scores: bool,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Settings {
+            console_only: false,
+            quick_buttons: false,
+            keep_scores: true,
+        }
+    }
 }
 
 impl Settings {
@@ -244,13 +258,14 @@ impl Settings {
     /// each.
     pub fn to_text(self) -> String {
         format!(
-            "console_only = {}\nquick_buttons = {}\n",
-            self.console_only, self.quick_buttons
+            "console_only = {}\nquick_buttons = {}\nkeep_scores = {}\n",
+            self.console_only, self.quick_buttons, self.keep_scores
         )
     }
 
     /// Settings from their file. A line not understood is left out, so a
-    /// file from a later build reads as what this build knows of it.
+    /// file from a later build reads as what this build knows of it, and
+    /// one from before a switch has it as it is by default.
     pub fn parse(text: &str) -> Settings {
         let mut s = Settings::default();
         for line in text.lines() {
@@ -261,6 +276,7 @@ impl Settings {
             match k.trim() {
                 "console_only" => s.console_only = on,
                 "quick_buttons" => s.quick_buttons = on,
+                "keep_scores" => s.keep_scores = on,
                 _ => {}
             }
         }

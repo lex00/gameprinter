@@ -946,7 +946,8 @@ async function rbPlay(kind = "beside") {
 function rbStartFree() {
   if (!liveRb) return;
   liveRb.queue = [];
-  rbPost({ gp: "frames", text: "gp-frames 1\n", frame: 0 });
+  // With the high scores this browser keeps (docs/shell.md, "High scores").
+  rbPost({ gp: "frames", text: "gp-frames 1\n", frame: 0, kept: true });
   liveRb.on = true;
   liveRb.labelUntil = performance.now() + 3000;
   const older = liveRb.olderBuild ? " A newer build of the model is building; you're playing the previous one." : "";

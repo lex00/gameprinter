@@ -203,6 +203,43 @@ pub extern "C" fn gp_step(buttons: u32, reset: u32) -> i32 {
     result(with_preview(|p| p.step_pads(buttons as u16, reset != 0)).map(|_| String::new()))
 }
 
+/// The storage name the model's high scores are kept under
+/// (`Preview::kept_file`) in the output buffer; 1 when the model keeps none.
+#[unsafe(no_mangle)]
+pub extern "C" fn gp_kept_file() -> i32 {
+    result(with_preview(|p| {
+        p.kept_file()
+            .ok_or_else(|| "the model keeps no high scores".to_owned())
+    }))
+}
+
+/// The kept counters' values now (`Preview::kept_text`), as their file
+/// holds them, in the output buffer.
+#[unsafe(no_mangle)]
+pub extern "C" fn gp_kept_text() -> i32 {
+    result(with_preview(|p| Ok(p.kept_text())))
+}
+
+/// Puts kept values back (`Preview::kept_load`), their text from
+/// `gp_alloc`: the output buffer holds how many counters were set.
+#[unsafe(no_mangle)]
+pub extern "C" fn gp_kept_load(ptr: *mut u8, len: usize) -> i32 {
+    let bytes = input(ptr, len);
+    result(with_preview(|p| {
+        let t = std::str::from_utf8(&bytes).map_err(|e| e.to_string())?;
+        Ok(p.kept_load(t).to_string())
+    }))
+}
+
+/// Puts every kept counter back at its start (`Preview::kept_clear`).
+#[unsafe(no_mangle)]
+pub extern "C" fn gp_kept_clear() -> i32 {
+    result(with_preview(|p| {
+        p.kept_clear();
+        Ok(String::new())
+    }))
+}
+
 /// Loads a canonical model state (`Preview::load_state`).
 #[unsafe(no_mangle)]
 pub extern "C" fn gp_load_state(ptr: *mut u8, len: usize) -> i32 {
@@ -657,10 +694,12 @@ pub extern "C" fn gp_settings_shell(ptr: *mut u8, len: usize) -> i32 {
     result((|| {
         let t = std::str::from_utf8(&text).map_err(|e| e.to_string())?;
         let shell = gp_present::shell::Settings::parse(t);
+        // The Keep high scores line, for a model that keeps some.
+        let scores = with_preview(|p| Ok(p.kept_file().is_some())).unwrap_or(false);
         SETTINGS.with(|s| {
             let mut s = s.borrow_mut();
             let screen = s.take().ok_or("no settings screen is open")?;
-            *s = Some(screen.with_shell(shell));
+            *s = Some(screen.with_shell(shell).with_scores(scores));
             Ok(String::new())
         })
     })())
@@ -771,7 +810,8 @@ pub extern "C" fn gp_settings_close_loaded() -> i32 {
 /// game starts again from power-on; on a close the output buffer holds the
 /// setting to keep. 4 when the player asked for something done with a save
 /// slot, the screen staying open: the output buffer says what, as `save N`,
-/// `load N`, `delete N`, `download N` or `file`. -1 when no screen is open
+/// `load N`, `delete N`, `download N` or `file`, or `scores` for Clear high
+/// scores. -1 when no screen is open
 /// or the key isn't one.
 #[unsafe(no_mangle)]
 pub extern "C" fn gp_settings_key(code: u32) -> i32 {
@@ -801,6 +841,7 @@ fn closed(out: Option<gp_present::settings::Outcome>) -> i32 {
                 SlotAction::Delete(n) => format!("delete {n}"),
                 SlotAction::Download(n) => format!("download {n}"),
                 SlotAction::LoadFile => "file".to_owned(),
+                SlotAction::ClearScores => "scores".to_owned(),
             };
             set_out(text.as_bytes());
             4

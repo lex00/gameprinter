@@ -120,6 +120,7 @@ A feature is an optional part of a format with a name. A model lists the ones it
 | `action.emit` |  | The action `emit:<event>`, which fires an event | `**.states.*.transition.do=emit:*` |
 | `change.if` |  | A counter change on an event made only while a counter condition holds | `counters.*.change.if` |
 | `counter.high_of` |  | A counter that keeps another's highest value, as a top score | `counters.*.high_of` |
+| `counter.kept` |  | A counter a player keeps from one play to the next, as a high score | `counters.*.kept` |
 | `counter.restarts_clock` |  | A counter whose clocks start over when a level sets it | `counters.*.restarts_clock` |
 | `camera.keep_in_view_turn` |  | An entity in the air that reaches a keep_in_view bound turns around instead of stopping | `cameras.*.keep_in_view_turn` |
 | `camera.keep_in_view_rows` |  | Other keep_in_view bounds while the followed entity's row (its takeoff height in the air) is in a range, such as a wall short of the screen's edge on one girder | `cameras.*.keep_in_view_rows` |

@@ -700,8 +700,10 @@ async function startModel(mine = model.token) {
   model.queue = [];
   if (show.view === "solo") {
     // The model alone, from its own start: it never waits on the
-    // original's title screen (app.js's rbStartFree).
-    modelPost({ gp: "frames", text: "gp-frames 1\n", frame: 0 });
+    // original's title screen (app.js's rbStartFree). From power-on, it
+    // starts with the high scores this browser keeps (`kept`,
+    // docs/shell.md "High scores"); a clip never does.
+    modelPost({ gp: "frames", text: "gp-frames 1\n", frame: 0, kept: true });
     model.free = true;
     model.on = true;
     return;

@@ -54,6 +54,8 @@ pub struct Interp {
     /// Whether each step also gives the sound requests the hooks made on
     /// it ([`SOUND_KIND`] events).
     sound_events: bool,
+    /// Counters a reset leaves as they are ([`Interp::keeping_on_reset`]).
+    kept: Vec<usize>,
 }
 
 /// The event kind of a sound request a hook makes
@@ -97,7 +99,24 @@ impl Interp {
             draws: None,
             apu_events: false,
             sound_events: false,
+            kept: Vec::new(),
         }
+    }
+
+    /// Leaves these counters (by index) as they are when a reset powers
+    /// the game on again: a player's high scores (feature `counter.kept`,
+    /// docs/shell.md "High scores"). Only a player's own play keeps them;
+    /// a tool's run, which starts from the state it is given, never does.
+    pub fn keeping_on_reset(mut self, counters: Vec<usize>) -> Self {
+        self.kept = counters;
+        self
+    }
+
+    /// The spec and the world to change: a player putting back the
+    /// counters it keeps ([`Interp::keeping_on_reset`]).
+    pub fn spec_and_world_mut(&mut self) -> (&Spec, &mut World) {
+        self.view.take();
+        (&self.spec, &mut self.world)
     }
 
     /// Runs these `ext` hooks from now on, by the names the model gives.
@@ -226,8 +245,12 @@ impl Interp {
         }
         if input.reset {
             let frame = self.world.frame;
+            let kept: Vec<i64> = self.kept.iter().map(|&i| self.world.counters[i]).collect();
             self.world = World::power_on(&self.spec);
             self.world.frame = frame;
+            for (&i, v) in self.kept.iter().zip(kept) {
+                self.world.counters[i] = v;
+            }
         }
         let [p1, p2, ..] = input.buttons.to_le_bytes();
         Ok(gp_sim::step_pads(

@@ -3226,6 +3226,13 @@ pub struct Counter {
     /// every award).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub high_of: Option<String>,
+    /// Feature `counter.kept`: the counter outlasts a power-off, as a high
+    /// score table does. The simulation never reads this; a player keeps
+    /// the counter's value where it plays (the browser's storage) and puts
+    /// it back at the game's start (`gp_present::shell::kept`). A clip,
+    /// a score and a comparison start from the state they are given.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub kept: bool,
 }
 
 /// A linear feedback shift register in a counter's low `bits` bits: each

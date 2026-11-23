@@ -47,6 +47,10 @@ pub struct Preview {
     /// `regions`), given to every large-art look as it is resolved
     /// ([`Preview::set_regions`]).
     regions: Vec<gp_present::art::Region>,
+    /// The counters the model keeps from one play to the next (feature
+    /// `counter.kept`, docs/shell.md "High scores"), which the page keeps
+    /// in its storage: a reset leaves them as they are.
+    kept: gp_present::shell::Kept,
 }
 
 /// The model's sound, played live: the cues say what plays when, gp-sound's
@@ -231,9 +235,19 @@ impl Preview {
     /// components say, and nothing would say so.
     pub fn load(bundle: &[u8]) -> Result<Self, String> {
         let bundle = Bundle::from_bytes(bundle)?;
-        let interp = Interp::from_bundle(&bundle)?;
+        let model = bundle.parse_model()?;
+        let interp = Interp::load(&model, &bundle.assets)?;
+        let names: Vec<String> = model
+            .counters
+            .iter()
+            .filter(|(_, c)| c.kept)
+            .map(|(n, _)| n.clone())
+            .collect();
+        let kept = gp_present::shell::Kept::of(interp.spec(), &names)?;
         let (exts, hooks) = gp_exts::registry(&interp.spec().name);
-        let interp = interp.with_exts(std::sync::Arc::new(exts));
+        let interp = interp
+            .with_exts(std::sync::Arc::new(exts))
+            .keeping_on_reset(kept.counters().to_vec());
         let missing = interp.ext_hooks();
         if !missing.is_empty() {
             return Err(format!(
@@ -256,7 +270,63 @@ impl Preview {
             stage_px: Vec::new(),
             painter: gp_present::art::Painter::new(),
             regions: Vec::new(),
+            kept,
         })
+    }
+
+    /// The storage name the model's kept counters are kept under
+    /// (`gp_present::shell::Kept::file`), or None when it keeps none.
+    pub fn kept_file(&self) -> Option<String> {
+        (!self.kept.is_empty()).then(|| self.kept.file(self.interp.spec()))
+    }
+
+    /// The kept counters' values now, as their file holds them; empty when
+    /// the model keeps none.
+    pub fn kept_text(&self) -> String {
+        self.kept.text(self.interp.spec(), self.interp.world())
+    }
+
+    /// Puts kept values back (`gp_present::shell::Kept::apply`): the page
+    /// does it at the game's start, before the first frame, and after it
+    /// puts a state back, so a load never takes a high score away. Returns
+    /// how many counters were set.
+    pub fn kept_load(&mut self, text: &str) -> usize {
+        let (spec, world) = self.interp.spec_and_world_mut();
+        self.kept.apply(spec, world, text)
+    }
+
+    /// The game's start as the page's shell does it, with its storage
+    /// (`gp_present::shell::Kept::start`): the values it starts with.
+    pub fn kept_start(
+        &mut self,
+        settings: gp_present::shell::Settings,
+        store: &mut dyn gp_present::shell::Storage,
+    ) -> String {
+        let (spec, world) = self.interp.spec_and_world_mut();
+        self.kept.start(spec, world, settings, store)
+    }
+
+    /// After a frame, as the page's shell does it
+    /// (`gp_present::shell::Kept::keep`): true when the values were written.
+    pub fn kept_keep(
+        &self,
+        settings: gp_present::shell::Settings,
+        last: &mut String,
+        store: &mut dyn gp_present::shell::Storage,
+    ) -> Result<bool, String> {
+        self.kept.keep(
+            self.interp.spec(),
+            self.interp.world(),
+            settings,
+            last,
+            store,
+        )
+    }
+
+    /// Puts every kept counter back at its start: the high scores cleared.
+    pub fn kept_clear(&mut self) {
+        let (spec, world) = self.interp.spec_and_world_mut();
+        self.kept.clear(spec, world);
     }
 
     /// Empties the rewind ring and sizes it for the standard's seconds at
@@ -1115,6 +1185,88 @@ mod tests {
         .map(|(k, v)| (k.to_owned(), v))
         .collect();
         Bundle::new(&model, gp_interp::Lifted { files }).to_bytes()
+    }
+
+    /// High scores kept in the browser (docs/shell.md, "High scores"), on
+    /// a made-up game: Moss Hop with a kept counter `best` that counts a
+    /// frame in ten. A value written survives a reload of the page and a
+    /// reset; a clip's replay, which starts from the state it was recorded
+    /// with, and the native interpreter that scores clips ignore it; with
+    /// Keep high scores off nothing is read or written; Clear high scores
+    /// puts it back at its start.
+    #[test]
+    fn high_scores_kept_in_the_browser_outlast_a_reload_and_never_reach_a_clip() {
+        use gp_present::shell::{Memory, Settings, Storage as _};
+        let bundle = mosshop_bundle_with(|t| {
+            t.replacen(
+                "[counters.lives]",
+                "[counters.best]\nkept = true\nmax = 9999\nchange = [{ every = 10 }]\n\n[counters.lives]",
+                1,
+            )
+        });
+        let best = |p: &Preview| {
+            let i = p.interp.spec().counters.index_of("best").unwrap();
+            p.interp.world().counters[i]
+        };
+        let on = Settings::default();
+        assert!(on.keep_scores, "Keep high scores is on at first");
+        let mut store = Memory::default();
+        // The first visit: nothing kept, so the game starts at 0, and each
+        // change is written.
+        let mut p = Preview::load(&bundle).unwrap();
+        let file = p.kept_file().unwrap();
+        assert!(file.starts_with("kept/scores-") && file.ends_with(".txt"));
+        let mut last = p.kept_start(on, &mut store);
+        assert_eq!(last, "best = 0\n");
+        // A clip's state, taken before the scores grow.
+        let clip_start = p.state();
+        let mut writes = 0;
+        for _ in 0..100 {
+            p.step(0, false).unwrap();
+            writes += usize::from(p.kept_keep(on, &mut last, &mut store).unwrap());
+        }
+        assert_eq!(best(&p), 10);
+        assert_eq!(writes, 10, "a write for each change, none between");
+        assert_eq!(store.read(&file).unwrap(), b"best = 10\n");
+        // A reset (the console's) leaves it as it is.
+        p.step(0, true).unwrap();
+        assert_eq!(best(&p), 10);
+        // The page loaded again: the game starts with it, before its first
+        // frame, and counts on from there.
+        let mut q = Preview::load(&bundle).unwrap();
+        assert_eq!(best(&q), 0);
+        let mut last = q.kept_start(on, &mut store);
+        assert_eq!((best(&q), q.interp.world().frame), (10, 0));
+        for _ in 0..10 {
+            q.step(0, false).unwrap();
+            q.kept_keep(on, &mut last, &mut store).unwrap();
+        }
+        assert_eq!(store.read(&file).unwrap(), b"best = 11\n");
+        // A clip's replay starts from the state it was recorded with: the
+        // value kept never reaches it, nor the native interpreter that
+        // scores clips (gp clip score).
+        let mut clip = Preview::load(&bundle).unwrap();
+        clip.load_state(&clip_start).unwrap();
+        assert_eq!(best(&clip), 0);
+        let native = Interp::from_bundle(&Bundle::from_bytes(&bundle).unwrap()).unwrap();
+        let i = native.spec().counters.index_of("best").unwrap();
+        assert_eq!(native.world().counters[i], 0);
+        // Keep high scores off: nothing is read, and nothing is written.
+        let off = Settings::parse("keep_scores = false\n");
+        let mut fresh = Memory::default();
+        let mut r = Preview::load(&bundle).unwrap();
+        let mut last = r.kept_start(off, &mut store);
+        assert_eq!(best(&r), 0, "off, the kept value isn't read");
+        for _ in 0..30 {
+            r.step(0, false).unwrap();
+            assert!(!r.kept_keep(off, &mut last, &mut fresh).unwrap());
+        }
+        assert!(fresh.list("").is_empty(), "off, nothing is stored");
+        // Clear high scores: back at its start.
+        q.kept_clear();
+        assert_eq!(best(&q), 0);
+        // A model that keeps nothing has no file, and no Keep line.
+        assert_eq!(Preview::load(&mosshop_bundle()).unwrap().kept_file(), None);
     }
 
     /// Any set of Moss Hop's switches is applied to the bundle from the

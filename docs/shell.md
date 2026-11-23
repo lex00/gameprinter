@@ -15,7 +15,8 @@ Every part keeps the game as its canonical state (`gp_sim::World::canonical`, th
 | The rewind ring and its policy | `gp_present::shell::Ring` | A state every 2 frames (`REWIND_EVERY`), 20 seconds of them (`REWIND_SECONDS`, `Ring::standard`). Held rewind steps back one state a tick, so 2 frames a tick. The lengths a player can choose are 0 (off), 10, 20, 40 and 60 seconds (`REWIND_CHOICES`). A load or a restart empties it |
 | The autosave policy | `gp_present::shell::autosaves` | Slot 0 is written after a tick whose events hold `level.started` |
 | The slots as a player sees them | `gp_present::shell::slots` | `write_slot` keeps a record with a stamp beside it, `saves/slot-N.when` (the seconds since 1970 when it was saved, as text; the shell's clock, never the simulation's). `slot_lines` reads slot 0 and 1 to 4 for the settings screen's Saves line: each one's frame, mode and level from the record and its state, its stamp, and whether this build refuses it ("Saves on the settings screen" below) |
-| The shell's own settings | `gp_present::shell::Settings` | "Console only" and "Quick save buttons", both off at first, kept through storage as `settings/shell.txt` (a `name = true` or `false` line each). They are the shell's, never the model's, so a change never restarts the game. `allows` says whether a binding of the key table acts under them |
+| The shell's own settings | `gp_present::shell::Settings` | "Console only" and "Quick save buttons", both off at first, and "Keep high scores", on at first, kept through storage as `settings/shell.txt` (a `name = true` or `false` line each; a line not there is the default). They are the shell's, never the model's, so a change never restarts the game. `allows` says whether a binding of the key table acts under them |
+| High scores | `gp_present::shell::kept` | The counters a model marks `kept` (feature `counter.kept`), kept from one play to the next ("High scores" below) |
 | Keys and buttons | `gp_present::shell::keys::BINDINGS` | One table of every key and gamepad button the shell and the NES buttons use ("Keys and buttons" below) |
 | Storage | `gp_present::shell::storage` | The one thing a target supplies ("Storage" below) |
 | The shell check | `gp_present::shell::check` | What every target must pass ("The standard's checks" below) |
@@ -57,6 +58,26 @@ The bindings are `crates/gp-present/src/shell/storage.rs` (the `Storage` trait a
 `gp self shell` (game-printer's `gp docs shell`) writes both bindings from `wit/shell/storage.wit` with `wit-parser`, and `scripts/web/page/shell-keys.js` from the key table; `just docs` runs it, and `gp self shell --check` exits 1 while one is stale. The test `the_shell_s_generated_files_are_current` (crates/gp-cli/src/docs_shell.rs) fails while any of the three isn't what it writes, so a change to the key table or the interface is made in the WIT or the Rust table, and the JavaScript follows.
 
 The preview calls `persist` on the player's first save of a visit (an autosave doesn't ask), `export` from a slot's "Download as a file" and `import` from "Load from a file" on the Saves line. A browser opens its file chooser only while a key or a click is being handled, so Load from a file needs a key or a click; a gamepad's button can't open it.
+
+## High scores
+
+The owner asked on 2026-11-23: "i assume the scores will persist until the browser gets refreshed. can we persist scores in some way from the browser like a cookie?". A model names the state that outlasts a power-off by marking counters `kept = true` ([counters](model.md#rules-and-counters)), as a high score table's places, scores and initials would be. The player keeps them in the shell's storage, which stays in the browser and is never sent with a request, as a cookie would be.
+
+| Part | What |
+|---|---|
+| The file | `kept/scores-<version>.txt` in the game's storage, a `name = value` line a kept counter (`Kept::file`, `Kept::text`). The version is FNV-1a of each kept counter's name, start and bounds (`Kept::version`), so a model whose table changed reads no older table's values, and any other change to the model keeps them |
+| The start | Before the game's first frame, with Keep high scores on, the values kept are put into the game, each held within its counter's bounds (`Kept::start`, `Kept::apply`). The preview holds its first frame until the storage is read. A restart in other settings puts them back too |
+| Each frame | After a frame, with Keep high scores on, the values are written when they changed (`Kept::keep`). Off, nothing is read or written |
+| A reset | F5 (the console's reset) leaves the kept counters as they are (`Interp::keeping_on_reset`, which only the preview sets) |
+| A load or a rewind | The values kept are put back into the state loaded, so a save from before a high score never takes it away |
+| Clear high scores | On the settings screen: the file is deleted and the game's kept counters go back to their starts (`Kept::clear`) |
+
+Where it runs: the preview played from the keyboard or a gamepad (the public page), and free play from power-on on the screens page (the model alone) and the mechanic page, which send `{gp: "frames", kept: true}` in control mode: the values read are given at every start again, so a seek back plays the same steps. A clip's playback (`load-state`, or frames without `kept`), `run=` and `test=1` never read or write them, and neither does anything native: `gp clip score`, the gates and the lockstep run the model from the state a clip was recorded with. The editor's free play follows the original from its save points, so it never starts the model from power-on and keeps none. The Keep high scores line and Clear high scores are on the preview's own settings screen, where the shell's lines are; the mechanic page's settings screen in free play has none of the shell's lines.
+
+| Test | What it checks |
+|---|---|
+| gp-web `high_scores_kept_in_the_browser_outlast_a_reload_and_never_reach_a_clip` | A made-up game (Moss Hop with a kept counter that counts a frame in ten): a value written survives a reload and a reset; a clip's replay and the native interpreter ignore it; with Keep high scores off nothing is read or stored; Clear puts it back at its start |
+| gp-present `a_game_that_keeps_high_scores_lists_keep_and_clear` | The screen's Keep high scores line, on at first and toggled, and Clear high scores handed to the host; neither for a game that keeps none |
 
 ## Keys and buttons
 

@@ -10,7 +10,8 @@
 //! | The rewind ring and its policy | [`Ring`], [`REWIND_EVERY`], [`REWIND_SECONDS`] |
 //! | The autosave policy | [`autosaves`], into [`AUTOSAVE_SLOT`] |
 //! | The slots as the settings screen lists them | [`slots::slot_lines`], [`slots::write_slot`] |
-//! | The shell's own settings (console only, quick save buttons) | [`slots::Settings`] |
+//! | The shell's own settings (console only, quick save buttons, keep high scores) | [`slots::Settings`] |
+//! | High scores kept from one play to the next | [`kept::Kept`] |
 //! | The keys and gamepad buttons | [`keys::BINDINGS`] |
 //! | Storage | [`Storage`], generated from the WIT; [`Memory`] for checks |
 //! | The shell check every target passes | [`check`], on a [`Target`] |
@@ -21,6 +22,7 @@
 //! them changes what a tick does: a run that saves, loads and rewinds
 //! reaches the state hash a straight run of the same input reaches.
 
+pub mod kept;
 pub mod keys;
 pub mod slots;
 pub mod storage;
@@ -30,6 +32,7 @@ use std::collections::{BTreeMap, VecDeque};
 use gp_sim::save::{NOT_A_SAVE, OTHER_BUILD, OTHER_GAME, Record};
 use gp_sim::{Spec, World};
 
+pub use kept::Kept;
 pub use slots::{Settings, SlotLine, SlotSave};
 pub use storage::{Picked, Storage};
 
@@ -568,10 +571,12 @@ fn shell_settings(store: &mut dyn Storage) -> Result<(), String> {
         Settings {
             console_only: true,
             quick_buttons: true,
+            keep_scores: true,
         },
         Settings {
             console_only: false,
             quick_buttons: true,
+            keep_scores: false,
         },
         Settings::default(),
     ] {
