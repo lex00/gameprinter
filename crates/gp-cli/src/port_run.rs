@@ -80,17 +80,29 @@ pub(crate) fn game_of(step: &Value) -> Option<String> {
 
 /// The gp a worker on `game` starts on: its run's, while the run is on and
 /// its build is still there; else `newest`, and a run starts on it.
+///
+/// A run never keeps a worker off a newer gp (the owner, 2026-11-22: 'why
+/// is the worker gate on the old one lol, fix that'): a game's rows are
+/// rarely all at rest, so a run kept its gp for a day, and every gate a
+/// worker ran was the gate of that morning, without the day's fixes to it.
+/// The run's record stays, naming the gp its last worker started on.
 pub(crate) fn gp_for(home: &Path, game: &str, newest: &Path, now_ms: u64) -> PathBuf {
-    let mut run = read(home, game);
-    if let Some(r) = &mut run {
-        let gp = r["gp"].as_str().map(PathBuf::from);
-        if let Some(gp) = gp.filter(|g| g.is_file()) {
-            r["workers"] = json!(r["workers"].as_u64().unwrap_or(0) + 1);
-            write(home, game, r);
-            return gp;
-        }
-    }
     let gp = fs::canonicalize(newest).unwrap_or_else(|_| newest.to_path_buf());
+    let mut run = read(home, game);
+    if let Some(r) = &mut run
+        && r["gp"].as_str().map(PathBuf::from).as_deref() == Some(gp.as_path())
+        && gp.is_file()
+    {
+        r["workers"] = json!(r["workers"].as_u64().unwrap_or(0) + 1);
+        write(home, game, r);
+        return gp;
+    }
+    let moved = run.as_ref().is_some_and(|r| {
+        r["gp"]
+            .as_str()
+            .map(PathBuf::from)
+            .is_some_and(|g| g.is_file())
+    });
     write(
         home,
         game,
@@ -99,7 +111,9 @@ pub(crate) fn gp_for(home: &Path, game: &str, newest: &Path, now_ms: u64) -> Pat
             "gp": gp,
             "started_ms": now_ms,
             "workers": 1,
-            "why": if run.is_some() {
+            "why": if moved {
+                "a newer gp was published, so the run goes on with it"
+            } else if run.is_some() {
                 "the run's gp was gone, so it starts again on the newest"
             } else {
                 "a worker started on the game"
@@ -212,7 +226,7 @@ mod tests {
     }
 
     #[test]
-    fn a_worker_started_in_a_port_run_keeps_the_runs_gp_after_a_tool_landing() {
+    fn a_worker_in_a_port_run_starts_on_the_newest_gp_after_a_tool_landing() {
         let t = tempfile::tempdir().unwrap();
         let home = t.path();
         let bin = home.join("bin");
@@ -225,12 +239,14 @@ mod tests {
         let new = fs::canonicalize(&new).unwrap();
         // The first worker on hilltop starts the run on the gp published then.
         assert_eq!(gp_for(home, "hilltop", &old, 1), old);
-        // A tool landing publishes another; the run's next worker keeps the
-        // run's, and another game's first worker takes the newest.
-        assert_eq!(gp_for(home, "hilltop", &new, 2), old);
+        // A tool landing publishes another: the run's next worker starts on
+        // it (a run never keeps a worker off a newer gp), and so does
+        // another game's first worker. One more on the same gp counts on.
+        assert_eq!(gp_for(home, "hilltop", &new, 2), new);
         assert_eq!(gp_for(home, "rooftop", &new, 3), new);
+        assert_eq!(gp_for(home, "hilltop", &new, 4), new);
         assert_eq!(read(home, "hilltop").unwrap()["workers"], json!(2));
-        assert!(builds(home).contains(old.file_name().unwrap()));
+        assert!(builds(home).contains(new.file_name().unwrap()));
         // A row still open keeps the run on; with every row of the game's
         // done (a tools row doesn't count) it ends, and the next worker
         // starts a new run on the newest.

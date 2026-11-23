@@ -2802,14 +2802,14 @@ fn port_gp(setup: &Setup, rec: &mut Value) -> Option<PathBuf> {
 /// The gp a yes runs on: the one the worker that raised its card ran, for a
 /// card of a game's port run ([`port_gp`]), so the call runs on the gp that
 /// made it; None for any other (the tool's own commands run on the newest).
+///
+/// Now always None: a YES runs on the newest gp, whatever gp the worker
+/// that raised its card ran (the owner, 2026-11-22: 'why is the worker gate
+/// on the old one lol, fix that'). A card raised that morning was landed
+/// by that morning's gate, without the day's fixes to the gate.
 fn yes_gp(home: &Path, a: &Value) -> Option<PathBuf> {
-    if a["command"].as_str().is_none_or(|c| c.starts_with("tool ")) {
-        return None;
-    }
-    let id = a["step"].as_str().filter(|id| id_ok(id))?;
-    let w: Value = serde_json::from_slice(&fs::read(file(home, id)).ok()?).ok()?;
-    w["port_run"].as_str()?;
-    w["gp"].as_str().map(PathBuf::from).filter(|g| g.is_file())
+    let _ = (home, a);
+    None
 }
 
 /// Stops worker `id`: its flag when this server runs it, else its process
@@ -4000,7 +4000,7 @@ mod tests {
     }
 
     #[test]
-    fn a_worker_started_in_a_port_run_keeps_the_runs_gp_after_a_tool_landing() {
+    fn a_worker_in_a_port_run_starts_on_the_newest_gp_after_a_tool_landing() {
         let t = tempfile::tempdir().unwrap();
         let out = t.path().join("seen");
         let mut setup = rig(
@@ -4040,7 +4040,7 @@ mod tests {
             "{seen}"
         );
         assert!(
-            seen.contains(&format!("s0000000000c2 {}\n", old.display())),
+            seen.contains(&format!("s0000000000c2 {}\n", new.display())),
             "{seen}"
         );
         assert!(
@@ -4051,11 +4051,11 @@ mod tests {
             &fs::read(files_dir(&setup.home, "s0000000000c2").join("mcp.json")).unwrap(),
         )
         .unwrap();
-        assert_eq!(mcp["mcpServers"]["gp"]["command"], json!(old));
+        assert_eq!(mcp["mcpServers"]["gp"]["command"], json!(new));
         // The YES on a card one of them raised runs on the gp that made it;
         // a tool gate's on the newest.
         let card = |command: &str| json!({"step": "s0000000000c2", "command": command});
-        assert_eq!(yes_gp(&setup.home, &card("model gate")), Some(old.clone()));
+        assert_eq!(yes_gp(&setup.home, &card("model gate")), None);
         assert_eq!(yes_gp(&setup.home, &card("tool gate")), None);
         // Moved on, the game's next worker starts on the newest.
         assert!(crate::port_run::end(&setup.home, "g"));
