@@ -2,6 +2,22 @@
 
 Each release of gp has a section here, `## gp VERSION` (a date may follow), and its GitHub release's notes are that section. A release is refused before it is cut when its section is missing ([docs/release.md](docs/release.md)). Add the next one in a commit to main before `just release`.
 
+## gp 0.1.5
+
+The loop waits less. A change to gp itself lands once its gate passes, with no card to answer; cards are for a game's looks, which only you can judge. Set `land_tools = false` under `[runner]` in `loop.toml` to get the cards back.
+
+The model gate scores only what it has to. A patch that adds a locked look or a scoreboard line scores no clip, where before it scored the whole corpus. A landing after its own dry run passed scores nothing again, and a new gp no longer throws those passes away. A dry run of a fix made on top of fixes still waiting for your YES is tested on top of them, so when they land it lands without scoring again. Cards you approve together land in one run. Each run says how many scoring passes it made.
+
+A gate that hangs lets go. Both gates log their steps, and one that logs nothing for 15 minutes gives up its lock; before, a hung gate could hold every landing for hours. `gp loop health` says how long ago each gate's last step was. The tool gate checks that a patch applies and is formatted before it waits for the lock.
+
+The loop makes less work for itself: no bookkeeping rows for a status you set by hand, a worker you stop stays stopped, and `gp serve` reads its workers' state every 5 seconds, not four times a second. Scoring takes half the machine's cores.
+
+On the page, a card in YOUR TURN wraps onto a second line, where a long one used to push its buttons off the right edge.
+
+Also fixed: the published gp could stay on an old build after a release; a worker could say a look was locked when its save had failed; `gp mechanic say` works on a row no worker has started. The release build makes the module kit with a small tool of its own, which took 9 to 12 minutes of every build job before.
+
+Windows builds are still to come.
+
 ## gp 0.1.4
 
 The Intel Mac archive is back. It is built on the Apple silicon runner and checked there under Rosetta, so it no longer makes the release wait on the slow Intel runner. With Homebrew, `brew install lex00/tap/gp` works on an Intel Mac again.
