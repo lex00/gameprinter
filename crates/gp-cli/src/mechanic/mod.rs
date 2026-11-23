@@ -1525,6 +1525,28 @@ pub(crate) fn worker_ask_refused(r: &Value) -> Option<String> {
     Some("a worker asks the person only about a look: give the row the clip that shows it (--clip N --frames A-B --look THEME), or put the change on a card and say so in --note. A question about the tools, the routing or how to do the work is yours: pick, say why in --note, and go on (--status next, or carry on in this step)".to_owned())
 }
 
+/// Why a worker may not set row `r` of `game` done, or None: it has a look
+/// in the game's own pictures to lock, and the games checkout `games`
+/// (default $GP_GAMES_DIR) has no approved.toml look of it
+/// (crate::approved::saved). A lock is in only once the model gate landed
+/// it, and then the runner closes the row itself (settle_saved); on
+/// 2026-11-22 a worker said Locked on confirm-second-bonus-round after its
+/// lock's gate failed, and the session saved it by hand.
+fn unlocked_look(game: &str, r: &Value, games: Option<&std::path::Path>) -> Option<String> {
+    let c = &r["clip"];
+    if c["look"] != json!("game") || !(c["id"].is_string() || c["n"].is_u64()) {
+        return None;
+    }
+    let looks = crate::approved::saved_looks(games, game);
+    if crate::approved::saved(game, r, &looks).is_some() {
+        return None;
+    }
+    Some(format!(
+        "its look ({}) isn't locked: approved.toml in the games checkout saves no look of it on this row. A lock is in when its model gate lands it (a FAIL lands nothing), and then the row closes itself; put the lock on a card and set the row \"in line\". A row whose look isn't to be locked takes --no-clip with the done",
+        clip_words(c)
+    ))
+}
+
 /// A row's clip, as the screen page reads it: `{"n": N}` (with
 /// `"mechanic"` for another row's) or `{"id": CORPUS-ID}`, with `from` and
 /// `to` (frames from the clip's start) and `look` (a theme, or game).
@@ -1782,6 +1804,12 @@ fn queue(paths: &Paths, game: &str, mechanic: Option<&str>, c: &RowChange) -> Re
         {
             crate::scoreboard::may_close(board.as_ref(), t)
                 .map_err(|e| anyhow::anyhow!("{m}: {e}"))?;
+        }
+        if c.under_step
+            && c.status == Some("done")
+            && let Some(why) = unlocked_look(game, r, c.games)
+        {
+            bail!("{m}: {why}");
         }
         if r["status"] != json!("done")
             && r.get("target").is_none()
@@ -2631,5 +2659,78 @@ mod tests {
         };
         let o = queue(&p, "test-hop", Some("mug"), &off).unwrap();
         assert!(o.json["queue"][0].get("clip").is_none());
+    }
+
+    /// Under a step, a row with a look to lock goes done only once
+    /// approved.toml in the games checkout saves it: a worker's "Locked"
+    /// after a lock whose gate failed is refused, and writes nothing.
+    #[test]
+    fn a_worker_closes_a_confirm_row_only_once_its_look_is_saved() {
+        let d = tempfile::tempdir().unwrap();
+        let p = paths(d.path());
+        let games = d.path().join("games");
+        let hop = games.join("test-hop");
+        std::fs::create_dir_all(&hop).unwrap();
+        std::fs::write(hop.join("roms.toml"), "").unwrap();
+        let none: &[String] = &[];
+        let cl = row_clip("test-hop.bonus.002", Some("0-1131"), Some("game")).unwrap();
+        let base = RowChange {
+            status: Some("asking you"),
+            note: Some("Does the bonus round look right?"),
+            plain: None,
+            worker: None,
+            known: none,
+            reads: none,
+            opens: none,
+            out_of_scope: None,
+            in_scope: false,
+            repo: None,
+            clip: Some(&cl),
+            no_clip: false,
+            target: None,
+            no_target: false,
+            measure_needed: None,
+            waits_on: None,
+            parked: None,
+            no_wait: false,
+            games: Some(&games),
+            under_step: true,
+        };
+        let row = "confirm-second-bonus-round";
+        queue(&p, "test-hop", Some(row), &base).unwrap();
+        let locked = RowChange {
+            status: Some("done"),
+            note: Some("Locked."),
+            clip: None,
+            ..base
+        };
+        let Err(e) = queue(&p, "test-hop", Some(row), &locked) else {
+            panic!("a worker's done on an unsaved look was taken");
+        };
+        assert!(format!("{e}").contains("isn't locked"), "{e}");
+        let q = read_queue(&queue_file(&p, "test-hop").unwrap());
+        assert_eq!(q[0]["status"], "asking you");
+        // Off a step (the session, the runner's settle) it isn't checked.
+        let by_hand = RowChange {
+            under_step: false,
+            ..locked
+        };
+        queue(&p, "test-hop", Some(row), &by_hand).unwrap();
+        queue(&p, "test-hop", Some(row), &base).unwrap();
+        // A look that isn't to be locked goes done with --no-clip.
+        let unlocked = RowChange {
+            no_clip: true,
+            ..locked
+        };
+        queue(&p, "test-hop", Some(row), &unlocked).unwrap();
+        queue(&p, "test-hop", Some(row), &base).unwrap();
+        // Saved on the games checkout, the worker's done is taken.
+        std::fs::write(
+            hop.join("approved.toml"),
+            format!("[[look]]\nrow = \"{row}\"\nclip = \"test-hop.bonus.002\"\nframes = [0, 1131]\nlook = \"game\"\napproved = \"2026-11-22\"\napart = [[0, 0, 0]]\n"),
+        )
+        .unwrap();
+        let o = queue(&p, "test-hop", Some(row), &locked).unwrap();
+        assert_eq!(o.json["queue"][0]["status"], "done");
     }
 }
