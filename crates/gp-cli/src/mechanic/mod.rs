@@ -1123,7 +1123,13 @@ pub(crate) fn run(cmd: &MechanicCmd, paths: &Paths) -> Result<Outcome> {
                 );
                 turn["judge"] = j;
             }
-            let n = s.turn(turn)?;
+            let set = |k: &str| std::env::var_os(k).is_some_and(|v| !v.is_empty());
+            let in_step = set(gp_mcp::steps::STEP_ENV) || set("GP_WORKER");
+            let n = if say_keeps_status(paths, game, mechanic, in_step) {
+                s.turn_keeping_status(turn)?
+            } else {
+                s.turn(turn)?
+            };
             Ok(Outcome::ok(
                 json!({"turn": n}),
                 format!("said (turn {n}){line}"),
@@ -1507,6 +1513,26 @@ pub(crate) fn is_parked(r: &Value) -> bool {
         && (r.get("parked").is_some()
             || r.get("waits_on").is_some()
             || r["note"].as_str().is_some_and(|n| n.starts_with("Parked:")))
+}
+
+/// Whether `gp mechanic say` on row `mechanic` of `game` leaves the row's
+/// status as it is: said from outside the loop's steps (`in_step` false:
+/// the session, passing on the person's words) on a row next or in line,
+/// the turn is a word for the row's next worker, and the row stays the
+/// runner's. On 2026-11-22 the session's say on shoved-bartender-head-wraps
+/// set it asking you (its note asks for a card), and setting it next again
+/// by hand filed a trouble row (crate::trouble::status_by_hand).
+fn say_keeps_status(paths: &Paths, game: &str, mechanic: &str, in_step: bool) -> bool {
+    if in_step {
+        return false;
+    }
+    let Ok(f) = queue_file(paths, game) else {
+        return false;
+    };
+    read_queue(&f)
+        .iter()
+        .find(|r| r["mechanic"] == json!(mechanic))
+        .is_some_and(|r| matches!(r["status"].as_str(), Some("next" | "in line")))
 }
 
 /// Why a worker may not leave row `r` asking the person, or None: only a
@@ -2047,6 +2073,41 @@ mod tests {
         let (_, _, added) = seed_quest_log(&p, "test-hop", "platformer", "ab").unwrap();
         assert_eq!(added, 0);
         assert_eq!(read_queue(&dir.join("queue.json"))[2]["status"], "done");
+    }
+
+    /// The session's say on a row next or in line is a word for its next
+    /// worker and leaves the row as it is, even when its note asks for a
+    /// card; on a row agent working, or from a step, it asks as before.
+    #[test]
+    fn a_say_from_the_session_leaves_a_next_row_next() {
+        let d = tempfile::tempdir().unwrap();
+        let p = paths(d.path());
+        let note = "Bring a card with LOOK AT IT on those frames.";
+        let s = Session::create(&p, "test-hop", "head", None, "ab").unwrap();
+        let f = queue_file(&p, "test-hop").unwrap();
+        write_queue(
+            &f,
+            &[
+                json!({"mechanic": "head", "status": "next", "note": note}),
+                json!({"mechanic": "park", "status": "in line", "note": note}),
+                json!({"mechanic": "busy", "status": "agent working", "note": note}),
+            ],
+        )
+        .unwrap();
+        assert!(say_keeps_status(&p, "test-hop", "head", false));
+        assert!(say_keeps_status(&p, "test-hop", "park", false));
+        assert!(!say_keeps_status(&p, "test-hop", "busy", false));
+        assert!(!say_keeps_status(&p, "test-hop", "head", true));
+        assert!(!say_keeps_status(&p, "test-hop", "none", false));
+        s.turn_keeping_status(
+            json!({"by": "agent", "text": "The owner: check earlier levels too"}),
+        )
+        .unwrap();
+        assert_eq!(read_queue(&f)[0]["status"], "next");
+        // The plain turn, a step's, still asks: the note names a card.
+        s.turn(json!({"by": "agent", "text": "the card is up"}))
+            .unwrap();
+        assert_eq!(read_queue(&f)[0]["status"], "asking you");
     }
 
     /// A quest-log row with no session shows its note and writes nothing;
