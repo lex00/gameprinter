@@ -401,15 +401,20 @@ pub(crate) fn start(ctx: Arc<Ctx>) {
                 run_yeses(&ctx);
                 run_confirms(&ctx);
             }
-            // Anything else new waits for the move; the new build takes it up.
-            if !super::reload::draining() {
-                if loop_state::settings(&ctx.paths.home).runner.on
-                    && crate::wrong::halt(&ctx.paths.home).is_none()
-                {
-                    keep_clips(&ctx);
-                }
-                look(&ctx);
+            // Clip keeping waits for the move; the new build takes it up.
+            if !super::reload::draining()
+                && loop_state::settings(&ctx.paths.home).runner.on
+                && crate::wrong::halt(&ctx.paths.home).is_none()
+            {
+                keep_clips(&ctx);
             }
+            // Workers start whether or not a move waits: a worker's process
+            // runs on its own, on the newest gp, and the new build takes it
+            // up (adopt). Before, nothing started from the moment a gp was
+            // published until every running yes had ended, and with a tool
+            // landing every few minutes and a model gate of ten, the open
+            // rows had no worker for most of an hour.
+            look(&ctx);
             std::thread::sleep(LOOK);
         }
     });
