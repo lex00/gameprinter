@@ -163,7 +163,9 @@ canvas { display: block; background: #000; border: 2px solid var(--line); image-
    and NO; a click on the question opens its detail. */
 .asks { display: flex; flex-direction: column; gap: 3px; }
 .asks[hidden], #cards-said[hidden] { display: none; }
-.asks .ask-card { display: flex; flex-wrap: nowrap; align-items: center; gap: 2px 8px; border: 2px solid var(--gold); background: #2a2000; padding: 2px 6px; font-size: 13px; }
+/* A card wraps: with a long LOOK AT IT its buttons and answer box go to a
+   second line, where on one line they ran off the page's right edge. */
+.asks .ask-card { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 8px; border: 2px solid var(--gold); background: #2a2000; padding: 2px 6px; font-size: 13px; }
 .asks .ask-card.open { flex-wrap: wrap; }
 .asks .ask-card.ran { border-color: var(--muted); background: var(--panel, #1c1c1c); }
 .asks .ask-head { flex: none; font: bold 11px var(--mono); color: var(--gold); letter-spacing: 0.06em; white-space: nowrap; }
@@ -177,7 +179,7 @@ canvas { display: block; background: #000; border: 2px solid var(--line); image-
 /* A card's answer box, open: the person's words, sent alone or with YES or NO. */
 .asks .ask-words-send { order: 5; color: var(--bg); background: var(--gold); border: 2px solid var(--gold); font-size: 11px; }
 .asks .ask-card.wording { flex-wrap: wrap; }
-.asks .ask-words { flex: 1 1 60%; order: 4; min-width: 0; font: 13px var(--mono); background: var(--bg); color: var(--fg); border: 2px solid var(--gold); padding: 2px 6px; }
+.asks .ask-words { flex: 1 1 16em; order: 4; min-width: 0; font: 13px var(--mono); background: var(--bg); color: var(--fg); border: 2px solid var(--gold); padding: 2px 6px; }
 /* Comments on a quest-log row or a clip, and the talk they go into. */
 .comment-open { font: bold 11px var(--mono); padding: 0 6px; margin-left: 6px; }
 form.comment { display: flex; gap: 6px; flex-basis: 100%; margin-top: 4px; }
@@ -189,7 +191,8 @@ form.comment .comment-text { flex: 1; min-width: 0; font: 13px var(--mono); back
 /* LOOK AT IT: a row's clip to judge on, set up on the screens. */
 button.judge { flex: none; font: bold 12px var(--mono); padding: 0 10px; margin-left: 6px; color: var(--bg); background: var(--gold); border: 2px solid var(--gold); cursor: pointer; white-space: nowrap; }
 #turn button.judge, .asks button.judge { margin-left: 0; }
-.asks .ask-question { flex: 1 1 auto; min-width: 0; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; }
+.asks button.judge { flex: 0 1 auto; min-width: 0; white-space: normal; text-align: left; }
+.asks .ask-question { flex: 1 1 22em; min-width: 0; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; }
 .asks .ask-card.open .ask-question { white-space: normal; flex-basis: 100%; order: 1; }
 .asks .ask-says { flex-basis: 100%; order: 2; color: var(--muted); font-size: 12px; }
 /* NOW: what is being worked on, and the loop's switches. */
