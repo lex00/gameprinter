@@ -936,6 +936,7 @@ fn checks(paths: &gp_evidence::Paths, games_dir: Option<&std::path::Path>) -> Va
             let waits = s.held(&g) && r["repo"] != json!("tools");
             if r["status"] == json!("agent working")
                 && !waits
+                && !crate::steps::taken_by_hand(&r)
                 && !held.contains(&format!("row:{g}/{row}"))
             {
                 bad(

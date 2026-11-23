@@ -4452,8 +4452,8 @@ mod tests {
     #[test]
     fn a_row_claims_its_line_the_game_only_for_the_games_files_else_itself() {
         let claim = |r: Value| crate::steps::claim_of("g", &r, &g_lines());
-        let line = |l: &str| Some(format!("line:g/{l}"));
-        let table = [
+        let line = |l: &str| vec![format!("line:g/{l}")];
+        let table: [(Value, Vec<String>); 9] = [
             // A target names its line, whatever else the row says.
             (
                 json!({"target": "Level 2 sprites at least 10", "note": "model.toml"}),
@@ -4466,27 +4466,30 @@ mod tests {
             ),
             // Found on a line (gp picture --propose --line) with no target.
             (json!({"line": "Level 2"}), line("level 2")),
-            // A clip no line measures and nothing else: only the row.
-            (json!({"clip": {"id": "g.other.001"}}), None),
+            // A clip no line measures: that clip.
+            (
+                json!({"clip": {"id": "g.other.001"}}),
+                vec!["clip:g/g.other.001".into()],
+            ),
             // The game's own files: the whole game.
             (
                 json!({"note": "the timer in model.toml is a frame short"}),
-                Some("game:g".into()),
+                vec!["game:g".into()],
             ),
             (
                 json!({"from": "mapping.toml:12 sprite.slot"}),
-                Some("game:g".into()),
+                vec!["game:g".into()],
             ),
             (
                 json!({"note": "a hook in ext/ draws it"}),
-                Some("game:g".into()),
+                vec!["game:g".into()],
             ),
             // The owner's words with no clip, target or file: only the row.
             (
                 json!({"note": "the fourth bar's background is wrong"}),
-                None,
+                vec![],
             ),
-            (json!({}), None),
+            (json!({}), vec![]),
         ];
         for (r, want) in table {
             assert_eq!(claim(r.clone()), want, "{r}");
@@ -4502,6 +4505,10 @@ mod tests {
             (&["line:g/level 1"][..], "line:g/level 2", false),
             (&["game:h"][..], "line:g/level 1", false),
             (&["game:g"][..], "row:g/x", false),
+            (&["game:g"][..], "clip:g/g.other.001", true),
+            (&["clip:g/g.other.001"][..], "game:g", true),
+            (&["clip:g/g.other.001"][..], "clip:g/g.other.001", true),
+            (&["clip:g/g.other.001"][..], "line:g/level 1", false),
             (&["row:g/x"][..], "row:g/x", true),
             (&["row:g/x"][..], "row:g/y", false),
         ];
@@ -4560,6 +4567,67 @@ mod tests {
         );
         assert_eq!(crate::steps::waits_for(&words, &held), None);
         assert_eq!(crate::steps::waits_for(&whole, &held), None);
+    }
+
+    /// Two picture rows of one cause, one with a target on level 1 and seen
+    /// in level 2's clip too, the other with a target on level 2, went to
+    /// two workers who each brought the same fix (docs/loop.md). A row claims the line of every clip it was seen in, so the second
+    /// waits for the first; a clip no line measures is claimed by its id.
+    #[test]
+    fn rows_seen_in_one_clip_wait_for_each_other() {
+        let ids = |v: Vec<Value>| -> Vec<String> {
+            v.iter()
+                .map(|x| x["id"].as_str().unwrap().to_owned())
+                .collect()
+        };
+        let e3 = row_step_of(
+            "s000000000031",
+            "tiles-74-e3",
+            json!({"target": "level 1 sprites at least 1350 of 1400",
+                   "seen_in": ["g.l1.001", "g.l2.001"]}),
+        );
+        assert_eq!(
+            e3["touches"],
+            json!(["row:g/tiles-74-e3", "line:g/level 1", "line:g/level 2"])
+        );
+        let e4 = row_step_of(
+            "s000000000032",
+            "tiles-74-e4",
+            json!({"target": "level 2 sprites at least 1314 of 1464",
+                   "seen_in": ["g.l2.001"]}),
+        );
+        let other = row_step_of(
+            "s000000000033",
+            "elsewhere",
+            json!({"seen_in": ["g.demo.001"]}),
+        );
+        assert_eq!(other["touches"][1], json!("clip:g/g.demo.001"));
+        let same_clip = row_step_of(
+            "s000000000034",
+            "elsewhere-too",
+            json!({"clip": {"id": "g.demo.001", "from": 3, "to": 9}}),
+        );
+        let none = BTreeSet::new();
+        let open = [e3.clone(), e4.clone(), other.clone(), same_clip.clone()];
+        assert_eq!(
+            ids(plan(&open, &[], &none, 5, 0)),
+            ["s000000000031", "s000000000033"]
+        );
+        let held = [e3.clone(), other.clone()];
+        assert_eq!(
+            crate::steps::waits_for(&e4, &held).as_deref(),
+            Some("Waits for tiles-74-e3, which holds the line level 2.")
+        );
+        assert_eq!(
+            crate::steps::waits_for(&same_clip, &held).as_deref(),
+            Some("Waits for elsewhere, which holds the clip g.demo.001.")
+        );
+        // A whole-game row waits for a row that holds only a clip.
+        let whole = row_step("s000000000035", "w", None);
+        assert_eq!(
+            ids(plan(&[other.clone(), whole], &[], &none, 5, 0)),
+            ["s000000000033"]
+        );
     }
 
     #[test]

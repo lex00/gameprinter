@@ -485,7 +485,9 @@ pub enum MechanicCmd {
         plain: Option<String>,
         /// Who works the row while it is "agent working": a worker's name
         /// (default: $GP_WORKER). The page shows it on the row and keeps
-        /// the rows being worked at the top. Another status clears it.
+        /// the rows being worked at the top. Another status clears it. A
+        /// name that isn't the loop's (loop-ID) takes the row by hand: the
+        /// loop starts no worker on it until another status hands it back.
         #[arg(long, requires = "status")]
         worker: Option<String>,
         /// Something measured, exact (repeat for each). Replaces the list.

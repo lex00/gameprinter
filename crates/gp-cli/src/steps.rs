@@ -155,37 +155,73 @@ const WHOLE_GAME: [&str; 3] = ["model.toml", "mapping.toml", "ext/"];
 
 /// What a game's quest-log row claims besides itself, the narrowest thing
 /// that holds its work: the scoreboard line its target names
-/// (`line:GAME/LINE`, the line lower case, as targets are read); else the
+/// (`line:GAME/LINE`, the line lower case, as targets are read), else the
 /// line of the clip it was filed with (its `clip`, a corpus clip one of
 /// `lines` measures) or of the gap it was found on (`line`, from `gp
-/// picture --propose --line`); else, for a row whose note or from names
-/// model.toml, mapping.toml or ext/, the whole game (`game:GAME`); else
-/// nothing but the row.
-pub(crate) fn claim_of(game: &str, row: &Value, lines: &[(String, String)]) -> Option<String> {
+/// picture --propose --line`); and with it the line of every corpus clip
+/// it was seen in (`seen_in`, and its `clip`), or `clip:GAME/ID` for a clip
+/// no line measures. Two rows seen in one clip claim the same thing, so the
+/// second waits for the first's worker and starts from its pending patch
+/// (two rows of one cause on two lines' targets went to two workers who
+/// each brought the same fix: docs/loop.md). With
+/// none of these, a row whose note or from names model.toml, mapping.toml
+/// or ext/ claims the whole game (`game:GAME`); else nothing but the row.
+pub(crate) fn claim_of(game: &str, row: &Value, lines: &[(String, String)]) -> Vec<String> {
     let line = |l: &str| format!("line:{game}/{}", l.trim().to_lowercase());
+    let line_of_clip = |id: &str| lines.iter().find(|(_, c)| c == id).map(|(n, _)| line(n));
+    let mut out: Vec<String> = Vec::new();
+    let mut add = |c: String| {
+        if !out.contains(&c) {
+            out.push(c);
+        }
+    };
+    let clip = row["clip"]["id"].as_str();
     if let Some(t) = row["target"]
         .as_str()
         .and_then(|t| crate::scoreboard::parse_target(t).ok())
     {
-        return Some(line(&t.line));
+        add(line(&t.line));
+    } else if let Some(l) = clip.and_then(line_of_clip) {
+        add(l);
+    } else if let Some(l) = row["line"].as_str().filter(|l| !l.trim().is_empty()) {
+        add(line(l));
     }
-    if let Some(id) = row["clip"]["id"].as_str()
-        && let Some((name, _)) = lines.iter().find(|(_, c)| c == id)
-    {
-        return Some(line(name));
+    let seen = row["seen_in"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str);
+    for id in clip.into_iter().chain(seen) {
+        let id = id.trim();
+        if !id.is_empty() {
+            add(line_of_clip(id).unwrap_or_else(|| format!("clip:{game}/{id}")));
+        }
     }
-    if let Some(l) = row["line"].as_str().filter(|l| !l.trim().is_empty()) {
-        return Some(line(l));
+    if out.is_empty() {
+        let said = format!(
+            "{} {}",
+            row["note"].as_str().unwrap_or(""),
+            row["from"].as_str().unwrap_or("")
+        );
+        if WHOLE_GAME.iter().any(|f| said.contains(f)) {
+            out.push(format!("game:{game}"));
+        }
     }
-    let said = format!(
-        "{} {}",
-        row["note"].as_str().unwrap_or(""),
-        row["from"].as_str().unwrap_or("")
-    );
-    WHOLE_GAME
-        .iter()
-        .any(|f| said.contains(f))
-        .then(|| format!("game:{game}"))
+    out
+}
+
+/// Whether a row is taken by hand: "agent working" with a worker that
+/// isn't one of the loop's (`loop-ID`), set by a session that works it
+/// itself (`gp mechanic queue GAME ROW --status "agent working" --worker
+/// NAME`). The loop starts no worker on it and `gp loop health` doesn't
+/// call it stale; another status hands it back (a worker repeated a row a
+/// session was doing by hand: docs/loop.md).
+pub(crate) fn taken_by_hand(row: &Value) -> bool {
+    row["status"] == json!("agent working")
+        && row["worker"]
+            .as_str()
+            .map(str::trim)
+            .is_some_and(|w| !w.is_empty() && !w.starts_with("loop-"))
 }
 
 /// Whether a step claims a whole game (`game:GAME`).
@@ -240,6 +276,8 @@ pub(crate) fn waits_for(s: &Value, held: &[Value]) -> Option<String> {
             "the game".to_owned()
         } else if let Some((_, l)) = x.strip_prefix("line:").and_then(|l| l.split_once('/')) {
             format!("the line {l}")
+        } else if let Some((_, c)) = x.strip_prefix("clip:").and_then(|c| c.split_once('/')) {
+            format!("the clip {c}")
         } else {
             "the row".to_owned()
         };
@@ -249,16 +287,23 @@ pub(crate) fn waits_for(s: &Value, held: &[Value]) -> Option<String> {
 }
 
 /// Whether claim `t` clashes with one in `taken`: the same claim, or a
-/// game's whole claim (`game:GAME`) and a line of it (`line:GAME/LINE`).
+/// game's whole claim (`game:GAME`) and a line or clip of it
+/// (`line:GAME/LINE`, `clip:GAME/ID`).
 pub(crate) fn clashes(taken: &BTreeSet<String>, t: &str) -> bool {
     if taken.contains(t) {
         return true;
     }
     if let Some(g) = t.strip_prefix("game:") {
-        let lines = format!("line:{g}/");
-        return taken.iter().any(|x| x.starts_with(&lines));
+        let (lines, clips) = (format!("line:{g}/"), format!("clip:{g}/"));
+        return taken
+            .iter()
+            .any(|x| x.starts_with(&lines) || x.starts_with(&clips));
     }
-    if let Some((g, _)) = t.strip_prefix("line:").and_then(|l| l.split_once('/')) {
+    if let Some((g, _)) = ["line:", "clip:"]
+        .iter()
+        .find_map(|k| t.strip_prefix(k))
+        .and_then(|l| l.split_once('/'))
+    {
         return taken.contains(&format!("game:{g}"));
     }
     false
@@ -297,6 +342,11 @@ pub(crate) fn row_steps(paths: &gp_evidence::Paths, games: Option<&Path>) -> Vec
             // The owner's yes to a look waits for gp serve's runner to lock
             // it (serve/runner.rs, run_confirms): no worker's.
             if r["confirmed"].is_object() {
+                continue;
+            }
+            // A session works the row by hand ([`taken_by_hand`]): no
+            // worker's, until another status hands it back.
+            if taken_by_hand(&r) {
                 continue;
             }
             // The person's turn is the last in the row's talk: they answered
@@ -356,8 +406,8 @@ pub(crate) fn row_steps(paths: &gp_evidence::Paths, games: Option<&Path>) -> Vec
             // there), so tool rows run side by side up to the runner's limit.
             // A game's row holds the narrowest thing its work needs
             // ([`claim_of`]): the scoreboard line its target or clip is on
-            // (`line:GAME/LINE`), so rows of other lines of the game run
-            // beside it; the whole game only for a row that names
+            // (`line:GAME/LINE`) and the lines of the clips it was seen in,
+            // so rows of other lines of the game run beside it; the whole game only for a row that names
             // model.toml, mapping.toml or ext/, which every line of it
             // clashes with ([`clashes`]); else only itself. Each worker's
             // tree has the game's pending patches (serve/runner.rs,
@@ -555,6 +605,46 @@ mod tests {
         s.hold.clear();
         gp_mcp::steps::save(&p.home, &s).unwrap();
         assert_eq!(rows(&p), every);
+    }
+
+    /// A row a session takes by hand ("agent working" with a worker that
+    /// isn't the loop's) makes no step, answered or not; a loop worker's row
+    /// and a row with no worker do, and another status hands it back.
+    #[test]
+    fn a_row_taken_by_hand_makes_no_step() {
+        let t = tempfile::tempdir().unwrap();
+        let p = crate::test_paths(&t.path().join("home"));
+        let games = t.path().join("games");
+        std::fs::create_dir_all(games.join("g")).unwrap();
+        std::fs::write(games.join("g").join("package.toml"), "").unwrap();
+        let f = crate::mechanic::session::queue_file(&p, "g").unwrap();
+        let rows = |q: Value| -> Vec<String> {
+            crate::mechanic::session::write_queue(&f, q.as_array().unwrap()).unwrap();
+            row_steps(&p, Some(&games))
+                .iter()
+                .filter_map(|s| s["touches"][0].as_str().map(str::to_owned))
+                .collect()
+        };
+        let by_hand =
+            json!({"mechanic": "space-bar", "status": "agent working", "worker": "a-session"});
+        assert!(taken_by_hand(&by_hand));
+        // The person's words in its talk don't hand it to a worker.
+        let d = p.home.join("mechanics/g/space-bar");
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(
+            d.join("talk.ndjson"),
+            "{\"by\":\"player\",\"text\":\"the bar\",\"at_ms\":5}\n",
+        )
+        .unwrap();
+        let q = json!([
+            by_hand,
+            {"mechanic": "a", "status": "agent working", "worker": "loop-s0123"},
+            {"mechanic": "b", "status": "agent working"},
+            {"mechanic": "c", "status": "next", "worker": "a-session"},
+        ]);
+        assert_eq!(rows(q), ["row:g/a", "row:g/b", "row:g/c"]);
+        let back = json!([{"mechanic": "space-bar", "status": "next", "worker": "a-session"}]);
+        assert_eq!(rows(back), ["row:g/space-bar"]);
     }
 
     #[test]
