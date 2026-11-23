@@ -95,7 +95,9 @@ release label="auto":
 # Put a released version on main (scripts/release/version-on-main.sh): stamp
 # it into the files release.version names on a fresh worktree of origin/main
 # and push that commit, so /plugin install gp@gameprinter gives the plugin of
-# the gp just released. LABEL is the version or latest; a version with no
+# the gp just released. Local main follows it and is never rebased: with
+# landings origin/main lacks, the commit goes on local main after them and
+# nothing is pushed. LABEL is the version or latest; a version with no
 # GitHub release is refused. `just release` runs it after a run passes. The
 # owner's to run.
 #   just release-on-main latest

@@ -169,12 +169,15 @@ fn self_publish(paths: &Paths) -> Result<Outcome> {
         );
     }
     let commit = git(&top, &["rev-parse", "HEAD"])?;
+    let branch = git(&top, &["rev-parse", "--abbrev-ref", "HEAD"])?;
+    let onto = (branch != "HEAD").then_some(branch.as_str());
     let line = publish(
         &paths.home,
         &std::env::current_exe()?,
         &commit,
         &top,
         &top,
+        onto,
         &mut Vec::new(),
     )?;
     Ok(Outcome::ok(json!({"published": line.clone()}), line))
@@ -185,12 +188,17 @@ fn self_publish(paths: &Paths) -> Result<Outcome> {
 /// points the link at it, unless the link's commit already holds
 /// `commit`: the link only moves forward, so a slow gate finishing late
 /// can't undo a newer landing. `repo` answers which commit is newer.
+/// A linked commit that isn't on `onto` (the branch `commit` landed on)
+/// holds nothing back: a history rebased under the link (a release's
+/// version commit on origin/main, local main's landings put after it)
+/// leaves it on a commit main no longer has, and the link moves off it.
 pub(crate) fn publish(
     home: &Path,
     binary: &Path,
     commit: &str,
     repo: &Path,
     tree: &Path,
+    onto: Option<&str>,
     lines: &mut Vec<String>,
 ) -> Result<String> {
     let bin = home.join("bin");
@@ -211,17 +219,31 @@ pub(crate) fn publish(
 
     let link = bin.join("gp");
     let held = fs::read_link(&link).ok().and_then(|p| commit_of(&p));
+    // A linked commit the repo doesn't know, or one `onto` doesn't hold (a
+    // rebased history), doesn't block.
+    let off = held.as_deref().filter(|old| {
+        git(repo, &["cat-file", "-e", &format!("{old}^{{commit}}")]).is_err()
+            || onto.is_some_and(|b| {
+                let tip = format!("refs/heads/{b}");
+                git(repo, &["merge-base", "--is-ancestor", old, &tip]).is_err()
+            })
+    });
     let ahead = match &held {
         None => true,
-        // An unknown linked commit (a rebased history) doesn't block.
         Some(old) => {
-            git(repo, &["merge-base", "--is-ancestor", old, commit]).is_ok()
-                || git(repo, &["cat-file", "-e", old]).is_err()
+            off.is_some() || git(repo, &["merge-base", "--is-ancestor", old, commit]).is_ok()
         }
     };
     let line = if ahead {
         point_at(&bin, &link, short)?;
-        format!("published {short} as {}", link.display())
+        match off {
+            Some(old) => format!(
+                "published {short} as {}; the link was on {old}, which {} doesn't hold (a rebased history)",
+                link.display(),
+                onto.unwrap_or("the repo")
+            ),
+            None => format!("published {short} as {}", link.display()),
+        }
     } else {
         format!(
             "published {short} at {}; the link stays on the newer {}",
@@ -452,7 +474,7 @@ mod tests {
         let none = self_path(&paths).unwrap();
         assert_eq!(none.exit, 1, "{}", none.text);
         let mut lines = Vec::new();
-        publish(&home, &exe, &newer, &repo, &repo, &mut lines).unwrap();
+        publish(&home, &exe, &newer, &repo, &repo, None, &mut lines).unwrap();
         let published = home.join("bin").join(format!("gp-{}", &newer[..12]));
         assert!(published.is_file());
         assert!(
@@ -463,7 +485,7 @@ mod tests {
             fs::canonicalize(home.join("bin/gp")).unwrap(),
             fs::canonicalize(&published).unwrap()
         );
-        let said = publish(&home, &exe, &older, &repo, &repo, &mut lines).unwrap();
+        let said = publish(&home, &exe, &older, &repo, &repo, None, &mut lines).unwrap();
         assert!(said.contains("stays"), "{said}");
         assert_eq!(
             fs::canonicalize(home.join("bin/gp")).unwrap(),
@@ -476,6 +498,55 @@ mod tests {
                 .is_file()
         );
         assert_eq!(self_path(&paths).unwrap().exit, 0);
+    }
+
+    /// After a rebase the link's commit is still in the object store but
+    /// no longer on the branch landed onto: the next landing on that branch
+    /// takes the link, while a late gate's older commit on it still doesn't.
+    #[test]
+    fn a_link_on_a_commit_the_branch_lost_in_a_rebase_moves() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("repo");
+        fs::create_dir(&repo).unwrap();
+        init(&repo);
+        let exe = dir.path().join("exe");
+        fs::write(&exe, b"binary").unwrap();
+        let home = dir.path().join("home");
+        let run = |args: &[&str]| git(&repo, args).unwrap();
+        let branch = run(&["rev-parse", "--abbrev-ref", "HEAD"]);
+        let first = run(&["rev-parse", "HEAD~1"]);
+        let lost = run(&["rev-parse", "HEAD"]);
+        let mut lines = Vec::new();
+        publish(&home, &exe, &lost, &repo, &repo, Some(&branch), &mut lines).unwrap();
+        // The history rebased: `lost` replaced by a new commit after `first`.
+        run(&["reset", "-q", "--hard", &first]);
+        run(&["commit", "-q", "--allow-empty", "-m", "two, rebased"]);
+        let landed = run(&["rev-parse", "HEAD"]);
+        let linked = || fs::canonicalize(home.join("bin/gp")).unwrap();
+        let build = |c: &str| fs::canonicalize(home.join(format!("bin/gp-{}", &c[..12]))).unwrap();
+
+        // With no branch named, a known commit that isn't an ancestor holds.
+        let said = publish(&home, &exe, &landed, &repo, &repo, None, &mut lines).unwrap();
+        assert!(said.contains("stays"), "{said}");
+        assert_eq!(linked(), build(&lost));
+
+        let said = publish(
+            &home,
+            &exe,
+            &landed,
+            &repo,
+            &repo,
+            Some(&branch),
+            &mut lines,
+        )
+        .unwrap();
+        assert!(said.contains("doesn't hold"), "{said}");
+        assert_eq!(linked(), build(&landed), "the landing takes the link");
+
+        // A slow gate's older commit, on the branch, still can't take it.
+        let said = publish(&home, &exe, &first, &repo, &repo, Some(&branch), &mut lines).unwrap();
+        assert!(said.contains("stays"), "{said}");
+        assert_eq!(linked(), build(&landed));
     }
 
     #[cfg(unix)]
@@ -566,7 +637,7 @@ mod tests {
         fs::write(&exe, b"binary").unwrap();
         let commit = "0123456789ab0123456789ab0123456789ab0123";
         let bin = home.join("bin");
-        let err = publish(&home, &exe, commit, &tree, &tree, &mut Vec::new()).unwrap_err();
+        let err = publish(&home, &exe, commit, &tree, &tree, None, &mut Vec::new()).unwrap_err();
         let err = format!("{err:#}");
         assert!(err.contains("editor/dist missing"), "{err}");
         assert!(
@@ -582,7 +653,7 @@ mod tests {
         fs::create_dir_all(tree.join("editor/dist")).unwrap();
         fs::write(tree.join("editor/dist/index.html"), "editor").unwrap();
         let mut lines = Vec::new();
-        publish(&home, &exe, commit, &tree, &tree, &mut lines).unwrap();
+        publish(&home, &exe, commit, &tree, &tree, None, &mut lines).unwrap();
         assert!(lines[0].contains("mechanic, editor/dist"), "{lines:?}");
         let pages = crate::repo::pages_beside(&bin.join("gp-0123456789ab")).unwrap();
         assert!(pages.join("editor/dist/index.html").is_file());

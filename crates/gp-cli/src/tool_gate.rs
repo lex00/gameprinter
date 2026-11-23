@@ -1084,7 +1084,7 @@ struct Tried {
 /// A patch of words alone: every file it changes is Markdown or a page of
 /// the docs site. CLI.md is generated from gp's commands, so a change to it
 /// is not words alone.
-fn docs_only(files: &str) -> bool {
+pub(crate) fn docs_only(files: &str) -> bool {
     files.lines().all(|f| {
         f != "CLI.md"
             && (f.ends_with(".md")
@@ -1442,6 +1442,7 @@ fn tries_in(
                                     &commit,
                                     &c.repo,
                                     &c.tree,
+                                    Some(&c.onto),
                                     &mut lines,
                                 )
                             },

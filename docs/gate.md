@@ -168,7 +168,7 @@ Each step of a tool gate run prints `tool gate: step NAME: S s` and adds a line 
 
 ## Published builds
 
-The tool gate publishes each landing's gp at `$GP_HOME/bin/gp-<commit>` and points the link `$GP_HOME/bin/gp` at it. The link only moves forward: a build of an older commit is published but not linked. The eight newest builds are kept. Published builds are `fastdev`: a debug gp takes the game gate about 10 minutes cold where `fastdev` takes 3.5.
+The tool gate publishes each landing's gp at `$GP_HOME/bin/gp-<commit>` and points the link `$GP_HOME/bin/gp` at it. The link only moves forward: a build of an older commit is published but not linked. A linked commit that the branch being landed onto doesn't hold (a history rebased under the link) doesn't count as newer, so the landing takes the link and says so. `gp loop health` says where the published gp stands against main's tip, and a published commit main doesn't hold is a PROBLEM. The eight newest builds are kept. Published builds are `fastdev`: a debug gp takes the game gate about 10 minutes cold where `fastdev` takes 3.5.
 
 Beside each build the gate copies the page's own files from the tree it built in: `$GP_HOME/bin/gp-<commit>.pages/` holds `mechanic/` (the game's page, the loop page, the journeys) and `editor/dist/` (the editor). A published gp serves those, and falls back to the checkout's files only when its build has none. The gate's tree holds each patch it tries, dry runs included, so serving from it would show the person a page that hasn't landed; with the copy, their page changes only when a landing publishes and gp serve moves onto the new build. A build's page files are pruned with it.
 

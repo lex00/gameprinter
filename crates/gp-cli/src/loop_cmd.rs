@@ -657,6 +657,46 @@ fn published_pages_problem(link: &std::path::Path) -> Option<String> {
     ))
 }
 
+/// Where the published gp (`link`) stands against `branch` of `repo`: a
+/// line when it is the branch's tip or behind it, a problem when its
+/// commit isn't on the branch at all (a history rebased under the link),
+/// None when no gp is published as a link or `repo` has no such branch.
+fn published_against(
+    link: &std::path::Path,
+    repo: &std::path::Path,
+    branch: &str,
+) -> Option<Result<String, String>> {
+    let real = std::fs::canonicalize(link).ok()?;
+    let short = real.file_name()?.to_str()?.strip_prefix("gp-")?.to_owned();
+    let git = |args: &[&str]| crate::gate::git(repo, args).ok();
+    let tip = git(&[
+        "rev-parse",
+        "--verify",
+        "-q",
+        &format!("refs/heads/{branch}"),
+    ])?;
+    let at = &tip[..tip.len().min(12)];
+    if tip.starts_with(&short) {
+        return Some(Ok(format!("The published gp {short} is {branch}'s tip")));
+    }
+    if git(&["merge-base", "--is-ancestor", &short, &tip]).is_none() {
+        return Some(Err(format!(
+            "The published gp {short} is of a commit {branch} doesn't hold (a history rebased under it?), so gp serve serves a page {branch} ({at}) may no longer have. The tool gate's next landing on {branch} moves the link; to move it now, run `just publish` in a clean checkout of {branch}."
+        )));
+    }
+    let n = git(&["rev-list", "--count", &format!("{short}..{tip}")])?;
+    let files = git(&["diff", "--name-only", &short, &tip])?;
+    Some(Ok(if crate::tool_gate::docs_only(&files) {
+        format!(
+            "The published gp {short} is on {branch}, {n} commit(s) behind its tip {at} by words alone (a words-only landing publishes nothing)"
+        )
+    } else {
+        format!(
+            "The published gp {short} is on {branch}, {n} commit(s) behind its tip {at}, which change more than words (landed by hand, or a release's version): the tool gate's next landing publishes them, or `just publish` in a clean checkout of {branch}"
+        )
+    }))
+}
+
 fn checks(paths: &gp_evidence::Paths, games_dir: Option<&std::path::Path>) -> Value {
     use std::fs;
     use std::time::UNIX_EPOCH;
@@ -758,6 +798,15 @@ fn checks(paths: &gp_evidence::Paths, games_dir: Option<&std::path::Path>) -> Va
     // serve serves the page from.
     if let Some(p) = published_pages_problem(&home.join("bin").join("gp")) {
         bad(&mut lines, &mut problems, p);
+    }
+    // The published gp against main's tip, in the checkout gp was built
+    // from (the tool gate's tree, which shares the repo's branches).
+    if let Some(repo) = crate::repo::built().filter(|r| r.join(".git").exists()) {
+        match published_against(&home.join("bin").join("gp"), &repo, "main") {
+            Some(Ok(l)) => ok(&mut lines, l),
+            Some(Err(p)) => bad(&mut lines, &mut problems, p),
+            None => {}
+        }
     }
     if live == 0 {
         bad(&mut lines, &mut problems, "No gp serve runs for this home: start one (gp serve --port 7796 --games DIR --clip-agent claude).".into());
@@ -961,6 +1010,68 @@ mod tests {
         std::fs::create_dir_all(pages.join("editor/dist")).unwrap();
         std::fs::write(pages.join("editor/dist/index.html"), "editor").unwrap();
         assert_eq!(published_pages_problem(&link), None);
+    }
+
+    /// The published gp at main's tip is said so; behind it by words or by
+    /// more, each said; on a commit main lost in a rebase, a problem.
+    #[cfg(unix)]
+    #[test]
+    fn a_published_gp_main_no_longer_holds_is_a_problem() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        std::fs::create_dir(&repo).unwrap();
+        let run = |args: &[&str]| {
+            let o = std::process::Command::new("git")
+                .arg("-C")
+                .arg(&repo)
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(o.status.success(), "{o:?}");
+            String::from_utf8_lossy(&o.stdout).trim().to_owned()
+        };
+        run(&["init", "-q", "-b", "main"]);
+        run(&["config", "user.email", "test@example.invalid"]);
+        run(&["config", "user.name", "health test"]);
+        run(&["commit", "-q", "--allow-empty", "-m", "one"]);
+        let one = run(&["rev-parse", "HEAD"]);
+        let bin = tmp.path().join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let link = bin.join("gp");
+        let publish = |c: &str| {
+            let name = format!("gp-{}", &c[..12]);
+            std::fs::write(bin.join(&name), "gp").unwrap();
+            let _ = std::fs::remove_file(&link);
+            std::os::unix::fs::symlink(&name, &link).unwrap();
+        };
+        publish(&one);
+        let said = published_against(&link, &repo, "main").unwrap().unwrap();
+        assert!(said.contains("is main's tip"), "{said}");
+        assert!(published_against(&link, &repo, "trunk").is_none());
+
+        std::fs::write(repo.join("notes.md"), "words").unwrap();
+        run(&["add", "notes.md"]);
+        run(&["commit", "-q", "-m", "words"]);
+        let said = published_against(&link, &repo, "main").unwrap().unwrap();
+        assert!(
+            said.contains("1 commit(s) behind") && said.contains("words alone"),
+            "{said}"
+        );
+        std::fs::write(repo.join("main.rs"), "code").unwrap();
+        run(&["add", "main.rs"]);
+        run(&["commit", "-q", "-m", "code"]);
+        let said = published_against(&link, &repo, "main").unwrap().unwrap();
+        assert!(said.contains("more than words"), "{said}");
+
+        // Rebased: the published commit is no longer on main.
+        let lost = run(&["rev-parse", "HEAD"]);
+        publish(&lost);
+        run(&["reset", "-q", "--hard", &one]);
+        run(&["commit", "-q", "--allow-empty", "-m", "version"]);
+        let said = published_against(&link, &repo, "main")
+            .unwrap()
+            .unwrap_err();
+        assert!(said.contains("main doesn't hold"), "{said}");
     }
 
     /// --hold adds games (all holds every one), --go-on lifts them, and a
