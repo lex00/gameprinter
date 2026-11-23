@@ -58,9 +58,9 @@ struct File {
 /// The game's approved looks; none without the file.
 ///
 /// The parsed file is kept while it doesn't change (its time and size):
-/// Tapper's, with 13 looks and 16,000 lines, takes 3 s to parse, the page
-/// asks for it through three calls a few seconds apart, and every lock adds
-/// a thousand lines to it.
+/// the page asks for it through three calls a few seconds apart, and every
+/// lock adds a thousand lines to it. A file of 13 looks and 16,000 lines
+/// parses in 5 ms, so this saves little today.
 pub(crate) fn read(game: &Path) -> std::result::Result<Vec<Look>, String> {
     let file = game.join(FILE);
     let Ok(meta) = fs::metadata(&file) else {

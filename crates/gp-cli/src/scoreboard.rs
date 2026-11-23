@@ -180,7 +180,7 @@ pub(crate) fn key_of(home: &Path, game_dir: &Path, game: &str, clip: &str, gp: &
 /// What every line's key of one game shares: the model and hooks' hash and
 /// the corpus's clips. The board makes it once for all its lines: making
 /// it for each (the hooks' hash reads the game's whole hook crate) took 3 s
-/// of every call for Tapper's 19 lines, and the page calls every few
+/// of every call on a board of 19 lines, and the page calls every few
 /// seconds.
 pub(crate) struct KeyBase {
     model: sha2::Sha256,
