@@ -79,6 +79,8 @@
       <p id="input-last">Press a button to see how it was read.</p>
       <label title="How long a press is held on after you let go, in ms. A pull that fell a little short of what the game asks then counts. 0 is the original's own timing.">HOLD ASSIST <input type="number" id="input-assist" min="0" max="100" step="1"> ms</label>
       <label title="How far past a game frame's own time its reading may look, in ms. More answers sooner; 0 reads exactly at the frame's time.">READ AHEAD <input type="number" id="input-lead" min="0" max="50" step="1"> ms</label>
+      <label title="How fast the game runs when you play, as a percent of its own speed. 50 is half speed: the original and the model both slow down, and a recording made slowed plays back at full speed. Clips always play at 100.">GAME SPEED <input type="number" id="input-speed" min="25" max="100" step="5"> %</label>
+      <label title="How far the right stick must move, as a percent of its reach, to count as a pull beginning or ending. A pull ends as soon as the stick has come back this far from where it got to. Smaller answers sooner; raise it if a pull drops out while you hold it.">STICK TRAVEL <input type="number" id="input-stick" min="1" max="50" step="1"> %</label>
       <label title="How often the gamepad is read, in ms. A page can only poll a gamepad; a smaller number catches a quick pull sooner.">GAMEPAD READ EVERY <input type="number" id="input-poll" min="1" max="16" step="1"> ms</label>
     </details>
     <!-- The page shows three things (owner, page-minimal): the screens; YOUR

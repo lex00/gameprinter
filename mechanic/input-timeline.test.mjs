@@ -1,7 +1,7 @@
 // node --test mechanic/input-timeline.test.mjs
 import test from "node:test";
 import assert from "node:assert/strict";
-import { InputTimeline, settings, DEFAULTS } from "./input-timeline.js";
+import { InputTimeline, StickPull, settings, DEFAULTS } from "./input-timeline.js";
 
 const TAP = 64;
 const F = 1000 / 30; // a 30 frames a second game
@@ -101,6 +101,35 @@ test("presses are measured: the ms held and the frames that read them", () => {
 
 test("settings stay in range and fall back to the defaults", () => {
   assert.deepEqual(settings(null), { ...DEFAULTS });
-  assert.deepEqual(settings('{"leadMs": 900, "assistMs": -3, "pollMs": "2"}'), { leadMs: 50, assistMs: 0, pollMs: 2 });
+  assert.deepEqual(settings('{"leadMs": 900, "assistMs": -3, "pollMs": "2", "stickTravel": 0}'), { leadMs: 50, assistMs: 0, pollMs: 2, stickTravel: 1, speed: 100 });
+  assert.equal(settings({ speed: 5 }).speed, 25);
+  assert.equal(settings({ speed: 400 }).speed, 100);
   assert.deepEqual(settings("not json"), { ...DEFAULTS });
+});
+
+test("a stick is let go at the first of its travel home, not near the middle", () => {
+  // Out to full, held, then home in steps of 5% of its reach.
+  const out = [0, 0.05, 0.2, 0.5, 0.8, 1, 1, 1];
+  const home = [0.95, 0.9, 0.85, 0.8, 0.6, 0.4, 0.2, 0];
+  const s = new StickPull(6);
+  const read = [...out, ...home].map((m) => s.read(m));
+  // Pulled by the third reading (20% out), well before the old halfway.
+  assert.deepEqual(read.slice(0, 4), [false, false, true, true]);
+  // Let go at 90%: 10% back from full is past the 6% asked. The old rule
+  // let go only under 50%, four readings later.
+  assert.equal(read[out.length], true, "95% is inside the stick's own wobble");
+  assert.equal(read[out.length + 1], false, "let go at 90%");
+  assert.ok(read.slice(out.length + 1).every((p) => !p));
+});
+
+test("a stick's wobble while held isn't a release, and a second pull needs no trip home", () => {
+  const s = new StickPull(6);
+  for (const m of [0, 0.3, 0.7, 0.72, 0.69, 0.71, 0.68, 0.7]) s.read(m);
+  assert.equal(s.pulled, true, "3 to 4% of wobble holds");
+  assert.equal(s.read(0.6), false, "back 12%: let go");
+  assert.equal(s.read(0.58), false);
+  assert.equal(s.read(0.66), true, "out again 8% from where it got back to: a new pull");
+  // Resting off-centre, as a worn stick does, is never a pull.
+  const worn = new StickPull(6);
+  assert.ok([0.08, 0.1, 0.09, 0.11, 0.1].every((m) => !worn.read(m)));
 });

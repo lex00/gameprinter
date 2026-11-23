@@ -18,7 +18,46 @@
 //             fell a few ms short of what the game asks counts as made.
 //   pollMs    how often the gamepad is polled.
 
-export const DEFAULTS = Object.freeze({ leadMs: 8, assistMs: 0, pollMs: 4 });
+//   stickTravel  how far a stick must move, as a percent of its reach, to
+//             count as a pull beginning or ending. A pull ends as soon as
+//             the stick has come back that far from where it got to, not
+//             when it is back near the middle: the release is read at the
+//             first of its travel home.
+
+//   speed     how fast the game runs when you play it, as a percent of
+//             its own speed: 50 is half speed, to see a later level
+//             without the hands for it yet. Clips always play at 100.
+
+export const DEFAULTS = Object.freeze({ leadMs: 8, assistMs: 0, pollMs: 4, stickTravel: 6, speed: 100 });
+
+/** A stick read as a pull by which way it is travelling (the owner,
+ * 2026-11-22: 'registering as early as possible on the stick's travel away
+ * from down', 'its about releases being late'). It is pulled once it has
+ * gone out `travel` of its reach from the lowest it has been since the last
+ * pull, past a small rest zone; it is let go once it has come back `travel`
+ * from the furthest it got. A stick read at a fixed halfway point is let go
+ * only when it is most of the way home. */
+export class StickPull {
+  constructor(travelPercent = DEFAULTS.stickTravel) {
+    this.travel = Math.min(0.5, Math.max(0.01, travelPercent / 100));
+    this.pulled = false;
+    /** While pulled, the furthest out; while not, the lowest since. */
+    this.mark = 0;
+  }
+
+  /** The stick is `m` of its reach from the middle (0 to 1): pulled or not. */
+  read(m) {
+    const REST = 0.12;
+    if (this.pulled) {
+      if (m > this.mark) this.mark = m;
+      if (m <= this.mark - this.travel || m < REST) { this.pulled = false; this.mark = m; }
+    } else {
+      if (m < this.mark) this.mark = m;
+      if (m >= this.mark + this.travel && m >= REST) { this.pulled = true; this.mark = m; }
+    }
+    return this.pulled;
+  }
+}
 
 /** Settings from `saved` (an object, or JSON text) over the defaults, each
  * kept inside its range. */
@@ -32,6 +71,8 @@ export function settings(saved) {
     leadMs: num(s?.leadMs, DEFAULTS.leadMs, 0, 50),
     assistMs: num(s?.assistMs, DEFAULTS.assistMs, 0, 100),
     pollMs: num(s?.pollMs, DEFAULTS.pollMs, 1, 16),
+    stickTravel: num(s?.stickTravel, DEFAULTS.stickTravel, 1, 50),
+    speed: num(s?.speed, DEFAULTS.speed, 25, 100),
   };
 }
 

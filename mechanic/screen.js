@@ -47,7 +47,7 @@
 // shown gives the model its draws, kept or recorded again from its replay.
 
 import { NesPlayer } from "./nesplayer.js";
-import { InputTimeline, settings as inputSettings } from "./input-timeline.js";
+import { InputTimeline, StickPull, settings as inputSettings } from "./input-timeline.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -293,15 +293,21 @@ const stickRested = new Map();
 function secondStick(g) {
   let seen = stickRested.get(g.index);
   if (!seen) stickRested.set(g.index, (seen = new Set()));
-  let pushed = false;
+  // How far out the stick is, over the axes that have been seen at rest.
+  let m = 0;
   for (const i of [2, 3]) {
     const v = g.axes[i];
     if (typeof v !== "number") continue;
     if (Math.abs(v) < 0.2) seen.add(i);
-    else if (Math.abs(v) > 0.5 && seen.has(i)) pushed = true;
+    if (seen.has(i)) m = Math.max(m, Math.abs(v));
   }
-  return pushed;
+  // Read by its travel (input-timeline.js's StickPull): pulled as it goes
+  // out, let go at the first of its travel home.
+  let pull = stickPulls.get(g.index);
+  if (!pull || pull.travel !== timeline.opts.stickTravel / 100) stickPulls.set(g.index, (pull = new StickPull(timeline.opts.stickTravel)));
+  return pull.read(Math.min(1, m));
 }
+const stickPulls = new Map();
 /** A gamepad as the machine's bits (app.js's gamepadBits). */
 function gamepadBits(g) {
   let pad = 0;
@@ -346,7 +352,7 @@ function savedInput() {
   try { saved = JSON.parse(localStorage.getItem(INPUT_KEY) ?? "null"); } catch (e) { /* none kept */ }
   const q = new URLSearchParams(location.search);
   const over = {};
-  for (const [param, key] of [["lead", "leadMs"], ["assist", "assistMs"], ["poll", "pollMs"]]) if (q.has(param)) over[key] = q.get(param);
+  for (const [param, key] of [["lead", "leadMs"], ["assist", "assistMs"], ["poll", "pollMs"], ["stick", "stickTravel"], ["speed", "speed"]]) if (q.has(param)) over[key] = q.get(param);
   return inputSettings({ ...(saved ?? {}), ...over });
 }
 const timeline = new InputTimeline(savedInput());
@@ -364,7 +370,7 @@ function pollPads() {
 function wireInput() {
   const box = $("input-set");
   if (!box) return;
-  const fields = { leadMs: $("input-lead"), assistMs: $("input-assist"), pollMs: $("input-poll") };
+  const fields = { leadMs: $("input-lead"), assistMs: $("input-assist"), pollMs: $("input-poll"), stickTravel: $("input-stick"), speed: $("input-speed") };
   for (const [k, el] of Object.entries(fields)) {
     if (!el) continue;
     el.value = String(timeline.opts[k]);
@@ -2978,11 +2984,14 @@ function usualLine() {
 
 let acc = 0, last = performance.now();
 function frame(now) {
-  acc = Math.min(acc + (now - last), (1000 / FPS) * 4);
+  // A game frame's length: the game's own, or longer when the person plays
+  // it slowed (CONTROLS' TIMING's GAME SPEED). A clip plays at its own.
+  const step = (1000 / FPS) * (mode === "live" ? 100 / timeline.opts.speed : 1);
+  acc = Math.min(acc + (now - last), step * 4);
   last = now;
   try {
-    while (acc >= 1000 / FPS) {
-      acc -= 1000 / FPS;
+    while (acc >= step) {
+      acc -= step;
       if (mode === "live" && show.view === "solo") {
         // The model alone takes every frame; the original holds.
         const pad = timeline.take(now - acc, performance.now());
