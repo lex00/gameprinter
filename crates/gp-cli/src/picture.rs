@@ -219,13 +219,14 @@ fn sprite_line(
     bodies: &[Drawn],
     board: Option<&[(u16, [i64; 4])]>,
 ) -> SpriteLine {
-    let original: Vec<(u16, [i64; 4])> = sprites
+    let shown: Vec<&Oam> = sprites
         .iter()
         .filter(|s| sprite_pixels(o, s.rect) > 0)
-        .map(|s| (s.tile, s.rect))
         .collect();
+    let original: Vec<(u16, [i64; 4])> = shown.iter().map(|s| (s.tile, s.rect)).collect();
     // On board art, the board's own entries: matched code for code within
-    // a few pixels, so a wrong picture shows as well as a missing one.
+    // a few pixels of the sprite's place (a wrapped sprite's pieces share
+    // it), so a wrong picture shows as well as a missing one.
     if let Some(board) = board {
         let near = |a: [i64; 4], b: [i64; 4]| (a[0] - b[0]).abs() <= 4 && (a[1] - b[1]).abs() <= 4;
         let model: Vec<(String, [i64; 4])> = board
@@ -233,17 +234,21 @@ fn sprite_line(
             .filter(|(_, r)| sprite_pixels(m, *r) > 0)
             .map(|(c, r)| (format!("{c:03x}"), *r))
             .collect();
-        let missing = original
+        let missing = shown
             .iter()
-            .filter(|(c, r)| !board.iter().any(|(mc, mr)| mc == c && near(*mr, *r)))
-            .cloned()
+            .filter(|s| {
+                !board
+                    .iter()
+                    .any(|(mc, mr)| *mc == s.tile && near(*mr, s.place))
+            })
+            .map(|s| (s.tile, s.rect))
             .collect();
         let extra = model
             .iter()
             .filter(|(c, r)| {
-                !original
+                !shown
                     .iter()
-                    .any(|(oc, or)| &format!("{oc:03x}") == c && near(*or, *r))
+                    .any(|s| &format!("{:03x}", s.tile) == c && near(s.place, *r))
             })
             .cloned()
             .collect();
@@ -747,42 +752,73 @@ fn rect_of(r: &Region) -> [i64; 4] {
     [r.x, r.y, r.w, r.h]
 }
 
-/// An original's sprite: its rect on the screen, tile and attributes.
+/// An original's sprite: the box on the screen it draws (`rect`), its
+/// tile and attributes, and `place`, the whole sprite's box where its
+/// position puts it. The two differ for an arcade sprite the board wraps
+/// round the screen's edge: each piece is a sprite of its own here, with
+/// the one place, which a model's entry at that place is matched against.
 struct Oam {
     rect: [i64; 4],
     tile: u16,
     attr: u8,
+    place: [i64; 4],
+}
+
+/// The board's sprite bitmap is 512 pixels each way, and a sprite's
+/// pixels wrap round it (gp_arcade::video::draw's `& 0x1ff`).
+const BOARD_WRAP: i64 = 512;
+
+/// A run of `len` pixels from `start` on a line that wraps every `span`:
+/// its start and length on the line, split in two where it crosses the
+/// end.
+fn wrapped(start: i64, len: i64, span: i64) -> Vec<(i64, i64)> {
+    let s = start.rem_euclid(span);
+    if s + len <= span {
+        vec![(s, len)]
+    } else {
+        vec![(s, span - s), (0, s + len - span)]
+    }
 }
 
 /// An arcade board's sprites from its sprite RAM (Midway MCR's, E800 to
 /// E9FF), as its picture shows them: each 32 by 32 screen pixels at
 /// twice its place in the game's units (gp_arcade::video::sprite_list),
-/// with no priority bit (attr 0).
+/// with no priority bit (attr 0). The board draws a sprite at its place
+/// modulo the bitmap's 512 pixels, so one placed past an edge (x -6) shows
+/// at the other one as well (506 to 511, and 0 to 25): such a sprite is a
+/// box for each piece.
 fn arcade_sprites(sprite_ram: &[u8]) -> Vec<Oam> {
     let unit = i64::from(gp_arcade::video::UNIT);
-    gp_arcade::video::sprite_list(sprite_ram)
-        .into_iter()
-        .map(|s| Oam {
-            rect: [
-                i64::from(s.x) * unit,
-                i64::from(s.y) * unit,
-                16 * unit,
-                16 * unit,
-            ],
-            tile: s.code,
-            attr: 0,
-        })
-        .collect()
+    let size = 16 * unit;
+    let mut out = Vec::new();
+    for s in gp_arcade::video::sprite_list(sprite_ram) {
+        let (x, y) = (i64::from(s.x) * unit, i64::from(s.y) * unit);
+        for (py, h) in wrapped(y, size, BOARD_WRAP) {
+            for &(px, w) in &wrapped(x, size, BOARD_WRAP) {
+                out.push(Oam {
+                    rect: [px, py, w, h],
+                    tile: s.code,
+                    attr: 0,
+                    place: [x, y, size, size],
+                });
+            }
+        }
+    }
+    out
 }
 
 fn sprites_of(oam: &[u8; 256], tall: bool) -> Vec<Oam> {
     let h = if tall { 16 } else { 8 };
     oam.chunks(4)
         .filter(|s| s[0] < 0xEF)
-        .map(|s| Oam {
-            rect: [i64::from(s[3]), i64::from(s[0]) + 1, 8, h],
-            tile: u16::from(s[1]),
-            attr: s[2],
+        .map(|s| {
+            let rect = [i64::from(s[3]), i64::from(s[0]) + 1, 8, h];
+            Oam {
+                rect,
+                tile: u16::from(s[1]),
+                attr: s[2],
+                place: rect,
+            }
         })
         .collect()
 }
@@ -1820,6 +1856,77 @@ mod tests {
                 "original only: tiles 2a".into()
             )]
         );
+    }
+
+    /// A sprite the board places past the screen's left edge (x byte 0:
+    /// -3 in the game's units, -6 on the screen) is drawn at 506 to 511 as
+    /// well as 0 to 25: it is a box for each piece, so the original's
+    /// pixels at 506 are put down to it (as original only) where they fell
+    /// to "the model draws a sprite no body owns"; and one at 500 (x byte
+    /// 253) is boxed at 0 to 19 too. The `--sprites` log lists both pieces,
+    /// matched to a model entry at the sprite's place.
+    #[test]
+    fn an_arcade_sprite_past_the_edge_is_boxed_where_the_board_draws_it() {
+        let mut ram = [0u8; 0x200];
+        // y, flags, picture, x: (0 - 3, 241 - 47) = (-3, 194), so
+        // (-6, 388) on the screen.
+        ram[..4].copy_from_slice(&[47, 0, 0x51, 0]);
+        ram[4..8].copy_from_slice(&[47, 0, 0x52, 253]);
+        let sprites = arcade_sprites(&ram);
+        let boxes: Vec<(u16, [i64; 4])> = sprites.iter().map(|s| (s.tile, s.rect)).collect();
+        assert_eq!(
+            boxes,
+            vec![
+                (0x51, [506, 388, 6, 32]),
+                (0x51, [0, 388, 26, 32]),
+                (0x52, [500, 388, 12, 32]),
+                (0x52, [0, 388, 20, 32]),
+            ]
+        );
+        assert!(sprites[..2].iter().all(|s| s.place == [-6, 388, 32, 32]));
+        let blank = || Frame {
+            w: 512,
+            h: 480,
+            rgb: vec![[0; 3]; 512 * 480],
+            sprite: vec![false; 512 * 480],
+            visible: [0, 0, 512, 480],
+            things: Vec::new(),
+        };
+        let (mut o, m) = (blank(), blank());
+        for y in 388..407 {
+            for x in 506..512 {
+                o.sprite[y * 512 + x] = true;
+                o.rgb[y * 512 + x] = [255, 255, 255];
+            }
+        }
+        let only_51 = &sprites[..2];
+        let got: Vec<(String, String)> = classify(
+            &o,
+            &m,
+            &Shown::default(),
+            only_51,
+            None,
+            &Looks::default(),
+            None,
+            &Art::empty(),
+        )
+        .into_iter()
+        .map(|f| (f.group.to_owned(), f.detail))
+        .collect();
+        assert_eq!(
+            got,
+            vec![(
+                "drawn in one game only".into(),
+                "original only: tiles 51".into()
+            )]
+        );
+        // The model's board entry for it, at its place: not missing.
+        let board = [(0x51u16, [-6i64, 388, 32, 32])];
+        let line = sprite_line(83, &o, &m, only_51, &[], Some(&board));
+        assert_eq!(line.original, vec![(0x51, [506, 388, 6, 32])]);
+        assert!(line.missing.is_empty());
+        let line = sprite_line(83, &o, &m, only_51, &[], Some(&[]));
+        assert_eq!(line.missing, vec![(0x51, [506, 388, 6, 32])]);
     }
 
     /// `--propose` makes a row of each gap seen on 2 frames or more, the
