@@ -573,7 +573,18 @@ pub(crate) fn board(home: &Path, games: &Path, game: &str) -> Option<Value> {
             })
         })
         .collect();
-    Some(json!({"game": game, "lines": rows, "held_out": held, "error": null}))
+    // How many of the corpus's clips are presses a person could make (gp
+    // clip feasible), kept while the corpus doesn't change.
+    let playable = crate::feasible::kept_count(&dir).map_or(
+        Value::Null,
+        |c| json!({"could": c.could, "measured": c.measured, "clips": c.clips}),
+    );
+    if __on {
+        eprintln!("board: playable {:?}", __t.elapsed());
+    }
+    Some(
+        json!({"game": game, "lines": rows, "held_out": held, "playable": playable, "error": null}),
+    )
 }
 
 /// The owner's lock on a line's clip, as the page shows it (`{day, row,
@@ -695,6 +706,13 @@ pub(crate) fn text(b: &Value) -> Vec<String> {
             s.push_str(" (out of date: gp serve scores it again)");
         }
         out.push(s);
+    }
+    let p = &b["playable"];
+    if p.is_object() {
+        out.push(format!(
+            "           a person could play: {} of {} clips' presses (gp clip feasible {game})",
+            p["could"], p["measured"]
+        ));
     }
     out
 }

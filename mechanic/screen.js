@@ -2485,7 +2485,7 @@ async function refreshScoreboard() {
   } catch (e) { /* the next look */ }
   const lines = v?.lines ?? [];
   if (v) { board = v; drawProgress(); drawAgentsHead(); }
-  const key = JSON.stringify([v?.error ?? null, lines, v?.held_out ?? []]);
+  const key = JSON.stringify([v?.error ?? null, lines, v?.held_out ?? [], v?.playable ?? null]);
   if (key === scoreDrawn) return;
   scoreDrawn = key;
   $("scoreboard").hidden = !v || (lines.length === 0 && !v.error);
@@ -2550,6 +2550,17 @@ async function refreshScoreboard() {
     if (r.stale || r.measuring) st.classList.add("old");
     const rest = cell(tr, r.resync ? `with resync ${r.resync.pct}%${r.longest ? `, longest together ${r.longest} s` : ""}` : "", r.resync?.moved ?? "", "frames together when the model is put back on the original after each split; a sealed run's pictures aren't checked");
     rest.colSpan = 3;
+  }
+  // How many of the game's tests are presses a person could make (gp clip
+  // feasible): a script's one-frame presses prove the model, not that a
+  // person can play that way.
+  const p = v?.playable;
+  if (p) {
+    const td = body.insertRow().insertCell();
+    td.colSpan = 5;
+    td.className = "held-none";
+    td.textContent = `A PERSON COULD PLAY: ${p.could} of ${p.measured} of the game's tests, by how long each press is held, how long between two presses and how many a second.`;
+    td.title = "the floor: a press of at least 50 ms, at least 50 ms let go between two presses of one control, at most 8 presses a second on one control (gp clip feasible GAME for each clip)";
   }
 }
 

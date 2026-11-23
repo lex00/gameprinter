@@ -433,6 +433,7 @@ pub const TABLE: &[Row] = &[
     r("capture verify", S, Write),
     r("catalog", S, Read),
     r("chunks", J, Write),
+    r("clip feasible", S, Read),
     r("clip log", S, Write),
     r("clip presses", J, Write),
     r("clip score", S, Read),

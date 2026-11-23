@@ -392,6 +392,28 @@ pub(crate) fn show(dir: &Path) -> Result<Outcome> {
             "hash": m.corpus.hash, "clips": now.recipes.len(), "target": m.target,
             "needs": m.needs, "changelog": m.changelog, "current": now.hash == m.corpus.hash,
             "problems": problems});
+        // Whether a person could make each clip's presses (gp clip
+        // feasible): the count, and the clips a person could not play.
+        match crate::feasible::clips(dir, &[]) {
+            Ok((fps, clips)) => {
+                let n = crate::feasible::count(&clips);
+                text.push(format!(
+                    "A person could play: {} (the floor: {}; gp clip feasible for each clip's numbers).",
+                    crate::feasible::count_words(n),
+                    crate::feasible::floor_words(fps)
+                ));
+                for c in clips
+                    .iter()
+                    .filter(|c| c.measure.as_ref().is_ok_and(|m| !m.could()))
+                {
+                    text.push(format!("  {}", crate::feasible::clip_line(c)));
+                }
+                v["feasible"] = json!({"could": n.could, "measured": n.measured,
+                    "fps_milli": fps,
+                    "clips": clips.iter().map(crate::feasible::clip_json).collect::<Vec<_>>()});
+            }
+            Err(e) => text.push(format!("A person could play: not measured: {e:#}")),
+        }
     }
     if let Some(t) = template_scores(dir) {
         if let Some(sa) = t["scored_against"].as_object() {

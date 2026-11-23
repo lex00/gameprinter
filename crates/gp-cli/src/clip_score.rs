@@ -93,6 +93,22 @@ pub enum ClipCmd {
         #[arg(long)]
         rom: Option<PathBuf>,
     },
+    /// Whether a person could make a corpus clip's presses: each clip's own
+    /// presses (from its start) against a human floor (a press of at least
+    /// 50 ms, at least 50 ms let go between two presses of one control, at
+    /// most 8 presses a second on one control; the table is in
+    /// gp-cli/src/feasible.rs with its source), at the model's frame_rate.
+    /// Prints each clip's shortest press, shortest gap, most presses a
+    /// second and presses under the floor, its verdict (a person could, a
+    /// person could not, with the first press under the floor), and how
+    /// many clips of each source a person could play. Reads only: no clip
+    /// is changed
+    Feasible {
+        /// The game's package folder (games/GAME).
+        game: PathBuf,
+        /// Clips of the game's corpus by their IDs (default: every one).
+        clips: Vec<String>,
+    },
     /// Run the screen measure on a corpus clip's original against itself:
     /// the clip played live, writing a score tape, then from that tape,
     /// every frame's pictures measured with the platform's options and the
@@ -176,6 +192,7 @@ pub(crate) fn run(cmd: &ClipCmd, paths: &Paths) -> Result<Outcome> {
             out,
             rom,
         } => log_cmd(paths, game, clip, out.as_deref(), rom.as_deref()),
+        ClipCmd::Feasible { game, clips } => crate::feasible::run(game, clips),
         ClipCmd::Screen {
             game,
             clip,

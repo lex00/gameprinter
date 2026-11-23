@@ -149,6 +149,32 @@ The old import also measured new clips' curves in a capture run (`--run`) and re
 
 On 2026-11-12, from the user's Donkey Kong sessions (the old home, `~/.game-printer`), with Donkey Kong's `[import]` above and prefix `donkey-kong-oe`: the import kept the plan's 21 session clips, left out the same 8 sessions as the old binary, and added the one clip neither corpus has yet (`two-p-over` 001). With those 21 clips removed and imported again, all 222 `inputs/` files came back byte for byte, with the same 114 clip IDs and recipe-set hash; six clips' names and reasons, edited by hand since, came back as the import writes them.
 
+## Could a person play it
+
+A clip proves the model matches the original for its presses; it says nothing about whether a person could press that way. `gp clip feasible GAME [ID...]` measures each corpus clip's own presses (from its start, not the path to it) against a human floor at the machine's own frame rate (the model's `frame_rate`: 30 for an MCR board, 39375000/655171 for the NES), and prints for each clip:
+
+| | |
+|---|---|
+| shortest press | The fewest frames a control is held, and in ms. A press held into the clip's first frame or past its last is cut by the clip's edge, its length unknown, so it is left out of this (not of the gaps or the count) |
+| shortest gap | The fewest frames let go between two presses of one control |
+| a second | The most presses one control starts within a second |
+| under the floor | How many presses break any rule of the floor, of all the clip's presses |
+| verdict | `a person could`, or `a person could not` with the first press under the floor: its frame, its control and why |
+
+A control is one button or one direction: up, down, left and right are each their own, so a lever pushed up and at once down is no gap. The last line counts the clips a person could play, and how many of each `source`. `gp corpus show` prints the same count with the clips a person could not play, and the scoreboard (`gp loop health`, the loop's page) has it as a line, A PERSON COULD PLAY: N of M of the game's tests. Nothing is changed: it measures and labels.
+
+The floor is one table in `crates/gp-cli/src/feasible.rs` (`FLOOR`):
+
+| Rule | Floor | Where it is from |
+|---|---|---|
+| A press | at least 50 ms | The owner, 2026-11-22, on Tapper's row clips-a-person-could-play: "if we are going to require it to be held for any length of time, then we have to know that our tests are in fact possible for a human to achieve"; the row's starting numbers |
+| Let go between two presses of one control | at least 50 ms | The same |
+| Presses a second on one control | at most 8 | The same |
+
+At 30 frames a second a frame is 33 ms, so a press of 1 frame or a gap of 1 frame is under the floor and 2 frames (67 ms) are not; on the NES 3 frames are 49.9 ms, under it, and 4 are 67. With these numbers the press and gap rules already keep one control under 8 a second at either rate (a press and a gap of at least 2 frames each at 30 a second, 4 each on the NES: at most 7.5 a second); the rate rule matters for a floor with a shorter press or gap.
+
+The day the row was raised, Tapper's 76 clips held 1341 tap presses, 1055 of them exactly 8 frames; 1651 direction presses, 1592 of them exactly 1 frame; and 458 gaps between two taps of exactly 2 frames, with 68 of the clips marked `played`: a script's presses, not a person's.
+
 ## Reduce
 
 `gp corpus reduce GAME` proposes the fewest clips of a corpus that still run every routine and branch way the whole corpus runs. It reads the clips the way `gp corpus score` does (the corpus plan, else `clips.toml`) and changes nothing: `--write PLAN` writes the kept and dropped clips, each with a reason, to a TOML file outside any git work tree.

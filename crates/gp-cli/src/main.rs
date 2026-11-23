@@ -58,6 +58,7 @@ mod element_z80;
 mod explore;
 mod explore_z80;
 mod farm;
+mod feasible;
 mod files;
 mod findings;
 mod findings_clip;
