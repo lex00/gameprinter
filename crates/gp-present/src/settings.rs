@@ -895,7 +895,32 @@ impl Screen {
     /// The screen as RGBA pixels, `w` by `h`, over the game: a dark
     /// backdrop a little see-through, the title, the lines with the cursor,
     /// the cursor's line explained under them, and the keys.
+    ///
+    /// On a screen twice a console's size or more (an arcade board's 512 by
+    /// 480) it is drawn at half the size and doubled, so its 5 by 7 letters
+    /// are as large on the glass as on a 256 by 224 screen: at one pixel a
+    /// dot they were too small to read there.
     pub fn draw(&self, w: usize, h: usize) -> Vec<u8> {
+        let scale = if w >= 480 && h >= 400 { 2 } else { 1 };
+        if scale == 1 {
+            return self.draw_at(w, h);
+        }
+        let (sw, sh) = (w / scale, h / scale);
+        let small = self.draw_at(sw, sh);
+        let mut out = Vec::with_capacity(w * h * 4);
+        for y in 0..h {
+            for x in 0..w {
+                // The last odd row or column repeats the one before it.
+                let (sx, sy) = ((x / scale).min(sw - 1), (y / scale).min(sh - 1));
+                let i = (sy * sw + sx) * 4;
+                out.extend_from_slice(&small[i..i + 4]);
+            }
+        }
+        out
+    }
+
+    /// The screen at one pixel a dot, `w` by `h`.
+    fn draw_at(&self, w: usize, h: usize) -> Vec<u8> {
         let mut c = Canvas::new(w, h, BACKDROP);
         c.text(8, 6, "SETTINGS", GOLD);
         let cols = w.saturating_sub(16) / 6;
@@ -1283,6 +1308,25 @@ mod tests {
                 theme: None
             }
         );
+    }
+
+    /// On an arcade board's screen the letters are doubled: the picture is
+    /// the 256 by 240 one with every dot four pixels.
+    #[test]
+    fn a_wide_screen_gets_the_letters_doubled() {
+        let mut s = Screen::open(catalog(), RETRO);
+        let small = s.draw(256, 240);
+        let big = s.draw(512, 480);
+        assert_eq!(big.len(), 512 * 480 * 4);
+        for (x, y) in [(0, 0), (9, 7), (100, 50), (255, 239)] {
+            let a = &small[(y * 256 + x) * 4..][..4];
+            for (dx, dy) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
+                let b = &big[((y * 2 + dy) * 512 + x * 2 + dx) * 4..][..4];
+                assert_eq!(a, b, "dot {x},{y}");
+            }
+        }
+        // A console's screen is drawn as it was.
+        assert_eq!(s.draw(256, 224).len(), 256 * 224 * 4);
     }
 
     #[test]

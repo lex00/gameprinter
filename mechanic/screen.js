@@ -471,7 +471,71 @@ window.addEventListener("message", (e) => {
     document.body.dataset.draws = m.draws ? JSON.stringify(m.draws) : "";
   }
   else if (m?.gp === "error") fault(`The model: ${m.message}`, 6000);
+  else if (m?.gp === "settings") onSettings(m);
 });
+
+// The game's settings screen (docs/settings.md) ------------------------
+//
+// Every game draws the same settings screen itself: its modes (retro,
+// normal) and every switch of its profiles.toml. It opens in MODEL ONLY,
+// where the model plays alone: beside the original the model is always the
+// model as written, since that is what is compared and scored.
+
+const settingsScreen = { open: false };
+function settingsKey() { return `gp-settings:${model.name ?? ""}`; }
+/** The switches the person keeps for this model ("retro", or names joined
+ * by +), as app.js's profileName. */
+function profileName() {
+  try { return localStorage.getItem(settingsKey()) || "retro"; } catch (e) { return "retro"; }
+}
+/** The profile's part of the model's address: only the model played alone
+ * takes one. */
+function profileParam() {
+  const p = profileName();
+  return show.view === "solo" && p !== "retro" ? `&profile=${encodeURIComponent(p)}` : "";
+}
+// The settings screen's keys while it is open (app.js's SETTINGS_KEYS).
+const SETTINGS_KEYS = { ArrowUp: "up", KeyW: "up", ArrowDown: "down", KeyS: "down", ArrowLeft: "left", KeyA: "left", ArrowRight: "right", KeyD: "right", Enter: "choose", Space: "choose", KeyX: "choose", Escape: "back", Backspace: "back", KeyZ: "back", F1: "open" };
+const SETTINGS_PAD = [[12, "up"], [13, "down"], [14, "left"], [15, "right"], [0, "choose"], [1, "back"], [11, "open"]];
+const settingsPadWas = new Set();
+/** The settings keys pressed on the first gamepad since the last look. */
+function settingsPadKeys() {
+  const g = firstPad();
+  const out = [];
+  if (!g) return out;
+  for (const [i, key] of SETTINGS_PAD) {
+    const on = !!g.buttons[i]?.pressed;
+    if (on && !settingsPadWas.has(i)) out.push(key);
+    if (on) settingsPadWas.add(i); else settingsPadWas.delete(i);
+  }
+  return out;
+}
+/** Whether the settings screen can open now: the model playing alone. */
+function settingsCan() { return mode === "live" && show.view === "solo" && model.on; }
+/** Opens the game's settings screen; from another view, goes to MODEL ONLY
+ * first and says so. */
+function openSettings() {
+  if (mode !== "live") { note("The settings open while you play: BACK TO PLAYING first."); return; }
+  if (show.view !== "solo") {
+    setView("solo");
+    note("The settings are the model's own, so the screen went to MODEL ONLY. Press SETTINGS again once it plays.", 6000);
+    return;
+  }
+  if (!model.on) { note("The model is still starting: press SETTINGS again in a moment."); return; }
+  modelPost({ gp: "settings", key: "open", profile: profileName() });
+}
+/** A settings message from the model: open, or closed with the setting to
+ * keep and whether it changes the switches. */
+function onSettings(m) {
+  settingsScreen.open = !!m.open;
+  document.body.dataset.settings = settingsScreen.open ? "open" : "";
+  if (m.open) { down.clear(); noteInput(performance.now()); return; }
+  if (typeof m.profile !== "string") return;
+  try { localStorage.setItem(settingsKey(), m.profile); } catch (e) { /* not kept */ }
+  if (m.restart && show.view === "solo") {
+    void loadModel(`Settings: ${m.profile.split("+").join(", ")}. The model starts again from power-on.`);
+  }
+}
 
 /** The theme's part of the model's address: large art is drawn bigger than
  * the board, so it is fitted. */
@@ -553,6 +617,7 @@ async function loadModel(why) {
     try {
       const pj = await api(`${base}preview.json`);
       model.visible = Array.isArray(pj.visible) ? pj.visible : null;
+      model.name = typeof pj.model === "string" ? pj.model : model.name ?? "";
     } catch (e) { model.visible = null; }
     const f = $("model-frame");
     await new Promise((resolve, reject) => {
@@ -561,7 +626,7 @@ async function loadModel(why) {
       model.onFailed = (why) => { clearTimeout(t); reject(new Error(`its preview didn't start: ${why}`)); };
       // files=here: the preview reads the build beside it, not the
       // browser's store of installed games.
-      f.src = `${base}index.html?control=1&files=here${lookParam()}&t=${Date.now()}`;
+      f.src = `${base}index.html?control=1&files=here${lookParam()}${profileParam()}&t=${Date.now()}`;
     });
     if (mine !== model.token) return;
     await startModel(mine);
@@ -2995,7 +3060,7 @@ function frame(now) {
       if (mode === "live" && show.view === "solo") {
         // The model alone takes every frame; the original holds.
         const pad = timeline.take(now - acc, performance.now());
-        if (model.on && model.free) model.queue.push(pad);
+        if (model.on && model.free && !settingsScreen.open) model.queue.push(pad);
       } else if (mode === "live") {
         // The buttons at this game frame's own time, not at whatever
         // moment the browser ran it: a late frame's catch-up steps each
@@ -3016,6 +3081,13 @@ function frame(now) {
     // A controller's button while the screen follows the work.
     if (mode === "clip" && clip?.work && (gamepadBits(firstPad()) || (LAYOUT.keys2.length && gamepadBits(secondPad())))) personPressed();
     if (mode === "live" && show.view === "solo" && padNow()) lastPlay = now;
+    // The settings screen from a controller: the right stick's press opens
+    // it, and while it is open the d-pad, A and B are its keys.
+    if (settingsCan() || settingsScreen.open) {
+      const keys = settingsPadKeys();
+      if (settingsScreen.open) for (const key of keys) modelPost({ gp: "settings", key });
+      else if (keys.includes("open")) openSettings();
+    }
     if (mode === "live") {
       const n = draws.live;
       const more = n && n.base !== null && n.lines.length ? n.lines.join("") : undefined;
@@ -3050,6 +3122,15 @@ window.addEventListener("keydown", (e) => {
     if (e.code !== "Escape") return;
   }
   if (e.ctrlKey || e.metaKey || e.altKey) return;
+  // The game's settings screen: while it is open its keys go to it and
+  // nothing else; F1 opens it.
+  if (settingsScreen.open) {
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    if (!e.repeat && SETTINGS_KEYS[e.code]) modelPost({ gp: "settings", key: SETTINGS_KEYS[e.code] });
+    return;
+  }
+  if (e.code === "F1") { e.preventDefault(); if (!e.repeat) openSettings(); return; }
   if (e.code === "KeyR" && !e.repeat) {
     e.preventDefault();
     // Following the work, R takes the screen back and records.
@@ -3163,6 +3244,7 @@ async function main() {
   $("model-frame").style.height = `${H}px`;
   $("keys").textContent = LAYOUT.footer;
   wireInput();
+  $("settings-open")?.addEventListener("click", (ev) => { ev.currentTarget.blur(); openSettings(); });
   session = await api("api/session").catch(() => null);
   // The set the page plays live; a clip plays on its own (romFor).
   const sets = await api("api/rom").catch(() => null);
