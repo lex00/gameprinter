@@ -61,6 +61,12 @@ pub struct Runner {
     /// Its effort (`--effort`: low, medium, high, xhigh, max); empty leaves
     /// it to the person's own.
     pub effort: String,
+    /// A change to gp itself lands once its gate passes, with no card
+    /// waiting for a YES: the card is a notice. On by default (the owner,
+    /// 2026-11-22: card waits were 38% of a tools row's time, and half
+    /// the cards were answered in under a minute). A game's change still
+    /// waits for its card, since only a person judges a look.
+    pub land_tools: bool,
 }
 
 /// The model a worker runs on when loop.toml names none.
@@ -73,6 +79,7 @@ impl Default for Runner {
         Runner {
             on: false,
             max_workers: 2,
+            land_tools: true,
             spending: String::new(),
             model: WORKER_MODEL.into(),
             effort: WORKER_EFFORT.into(),
@@ -537,6 +544,7 @@ mod tests {
                 spending: "about 5 dollars a day".into(),
                 model: "sonnet".into(),
                 effort: "medium".into(),
+                land_tools: true,
             },
             games: vec!["rooftop".into()],
             hold: vec!["hilltop".into()],

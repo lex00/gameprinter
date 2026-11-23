@@ -69,11 +69,11 @@ pub(crate) fn explicit() -> Option<usize> {
     }
 }
 
+/// Half the cores, at least one. It was every core less two: one gate's
+/// scoring then took 16 of 18 cores beside the workers' builds, and the
+/// same 76 clips took 153 s on a quiet machine and 546 s on a busy one.
 fn default_jobs() -> usize {
-    std::thread::available_parallelism()
-        .map_or(2, std::num::NonZero::get)
-        .saturating_sub(2)
-        .max(1)
+    (std::thread::available_parallelism().map_or(2, std::num::NonZero::get) / 2).max(1)
 }
 
 /// This process's share of the machine's helpers: every core less two
@@ -350,6 +350,14 @@ mod machine {
 
 #[cfg(test)]
 mod tests {
+    /// Scoring takes half the cores, never all but two.
+    #[test]
+    fn scoring_takes_half_the_cores() {
+        let cores = std::thread::available_parallelism().map_or(2, std::num::NonZero::get);
+        assert_eq!(super::default_jobs(), (cores / 2).max(1));
+        assert!(cores < 4 || super::default_jobs() <= cores - 2);
+    }
+
     use super::*;
 
     #[test]

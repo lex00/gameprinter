@@ -34,12 +34,15 @@ use std::time::Duration;
 use serde_json::{Value, json};
 
 /// How long a gate may log no step before it gives up the lock.
-pub(crate) const IDLE: Duration = Duration::from_secs(30 * 60);
+/// Ten minutes: it was thirty, and a hung gate held tool.lock for two
+/// hours on 2026-11-22 with seven runs behind it. The longest honest step
+/// (the tests under load) was seven.
+pub(crate) const IDLE: Duration = Duration::from_secs(10 * 60);
 /// How long a gate that was told to stop has to end on its own.
 const GRACE: Duration = Duration::from_secs(30);
 /// How long a gate with no steps file (the model gate) may hold the lock
 /// before gp loop health calls it stuck.
-const HELD_LONG: Duration = Duration::from_secs(2 * 60 * 60);
+const HELD_LONG: Duration = Duration::from_secs(30 * 60);
 
 static STOP: AtomicBool = AtomicBool::new(false);
 static WHY: Mutex<String> = Mutex::new(String::new());

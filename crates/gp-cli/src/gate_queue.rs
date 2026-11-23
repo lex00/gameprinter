@@ -149,6 +149,18 @@ impl Ticket {
     /// queue order, at most [`BATCH_MAX`] with this one: their names and
     /// requests.
     pub(crate) fn claim(&self) -> Vec<(String, Request)> {
+        // The gate that holds the lock waits a few seconds before it takes
+        // its batch: the runner starts every approved card's gate in one
+        // pass, and the first to the lock used to start alone, with the
+        // rest each scoring the corpus again behind it. GP_GATE_GATHER_MS
+        // sets the wait; a test waits for nothing.
+        let gather = std::env::var("GP_GATE_GATHER_MS")
+            .ok()
+            .and_then(|v| v.trim().parse::<u64>().ok())
+            .unwrap_or(if cfg!(test) { 0 } else { 8000 });
+        if gather > 0 {
+            std::thread::sleep(std::time::Duration::from_millis(gather));
+        }
         let mut out = Vec::new();
         for n in tickets(&self.queue) {
             if out.len() + 1 >= BATCH_MAX {

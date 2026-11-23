@@ -1093,6 +1093,86 @@ pub(crate) fn docs_only(files: &str) -> bool {
     })
 }
 
+/// The checks that need no lock and no gate tree: the patch applies to the
+/// branch's tip (through a scratch index, so no working tree is touched),
+/// and the caller's own tree passes `cargo fmt --all --check` when it is
+/// the tree the patch was cut from (it has changes). The phase and why of
+/// the first that fails. A check that can't run isn't a failure: the gate's
+/// own steps check both again.
+fn before_the_lock(
+    repo: &Path,
+    cwd: &Path,
+    onto: &str,
+    patch: &Path,
+) -> std::result::Result<(), (&'static str, String)> {
+    let index = std::env::temp_dir().join(format!("gp-tool-gate-{}.index", std::process::id()));
+    let with_index = |args: &[&str]| {
+        Command::new("git")
+            .current_dir(repo)
+            .env("GIT_INDEX_FILE", &index)
+            .args(args)
+            .output()
+    };
+    let read = with_index(&["read-tree", onto]);
+    let applies = match (read, patch.to_str()) {
+        (Ok(r), Some(p)) if r.status.success() => {
+            with_index(&["apply", "--cached", "--check", "--3way", p]).ok()
+        }
+        _ => None,
+    };
+    let _ = fs::remove_file(&index);
+    if let Some(o) = applies
+        && !o.status.success()
+    {
+        let said = String::from_utf8_lossy(&o.stderr);
+        return Err((
+            "patch",
+            format!(
+                "the patch doesn't apply to {onto}'s tip (checked before waiting for the lock): {}",
+                said.lines().take(6).collect::<Vec<_>>().join("; ")
+            ),
+        ));
+    }
+    let dirty = Command::new("git")
+        .current_dir(repo)
+        .args(["status", "--porcelain", "--untracked-files=no"])
+        .output()
+        .ok()
+        .is_some_and(|o| o.status.success() && !o.stdout.is_empty());
+    if dirty && repo.join("Cargo.toml").is_file() && cwd.starts_with(repo) {
+        let o = Command::new("cargo")
+            .current_dir(repo)
+            .args(["fmt", "--all", "--check"])
+            .output();
+        if let Ok(o) = o
+            && !o.status.success()
+        {
+            return Err((
+                "fmt",
+                "cargo fmt would change files in this tree (checked before waiting for the lock): run cargo fmt --all here and make the patch again".to_owned(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// The outcome of a patch refused before the lock: a FAIL of `phase`, as
+/// the gate's own step would give it.
+fn fail_before_the_lock(a: &ToolGateArgs, phase: &str, why: &str) -> Outcome {
+    let line = format!("FAIL ({phase}): {why}");
+    Outcome {
+        text: format!("{line}\n"),
+        json: json!({
+            "pass": false,
+            "phase": phase,
+            "why": why,
+            "dry_run": a.dry_run,
+            "before_the_lock": true,
+        }),
+        exit: 1,
+    }
+}
+
 pub(crate) fn run(a: &ToolGateArgs, paths: &Paths) -> Result<Outcome> {
     let cwd = std::env::current_dir()?;
     let repo = PathBuf::from(git(&cwd, &["rev-parse", "--show-toplevel"])?);
@@ -1128,6 +1208,12 @@ pub(crate) fn run(a: &ToolGateArgs, paths: &Paths) -> Result<Outcome> {
             &a.patch,
         )?)
     };
+    // What takes seconds and needs no lock is checked before the wait for
+    // it: 28 dry runs in one day failed on cargo fmt after waiting up to
+    // 45 minutes for the lock, and 8 on a patch that didn't apply.
+    if let Err((phase, why)) = before_the_lock(&repo, &cwd, &onto, &a.patch) {
+        return Ok(fail_before_the_lock(a, phase, &why));
+    }
     let waited = lock.try_lock().is_err();
     if waited {
         lock.lock()?;
@@ -2342,5 +2428,49 @@ date +%s > '{times}/just.end'
             ]
         );
         assert_eq!(test_runs(&[]), [("rest".to_owned(), vec![])]);
+    }
+
+    /// A patch that doesn't apply to the branch's tip is refused before
+    /// the lock, with nothing touched; one that applies goes on to the lock.
+    #[test]
+    fn a_patch_that_doesnt_apply_is_refused_before_the_lock() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path();
+        let run = |args: &[&str]| {
+            let o = Command::new("git")
+                .current_dir(repo)
+                .args(args)
+                .env("GIT_AUTHOR_NAME", "t")
+                .env("GIT_AUTHOR_EMAIL", "t@t.invalid")
+                .env("GIT_COMMITTER_NAME", "t")
+                .env("GIT_COMMITTER_EMAIL", "t@t.invalid")
+                .output()
+                .unwrap();
+            assert!(o.status.success(), "git {args:?}");
+            String::from_utf8_lossy(&o.stdout).into_owned()
+        };
+        run(&["init", "-q", "-b", "main"]);
+        fs::write(repo.join("a.txt"), "one\n").unwrap();
+        run(&["add", "-A"]);
+        run(&["commit", "-q", "-m", "one"]);
+        fs::write(repo.join("a.txt"), "two\n").unwrap();
+        let good = dir.path().join("good.patch");
+        fs::write(&good, run(&["diff"])).unwrap();
+        run(&["checkout", "-q", "--", "."]);
+        assert_eq!(before_the_lock(repo, repo, "main", &good), Ok(()));
+        let bad = dir.path().join("bad.patch");
+        fs::write(
+            &bad,
+            "diff --git a/a.txt b/a.txt\n--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-nine\n+ten\n",
+        )
+        .unwrap();
+        let (phase, why) = before_the_lock(repo, repo, "main", &bad).unwrap_err();
+        assert_eq!(phase, "patch");
+        assert!(why.contains("before waiting for the lock"), "{why}");
+        assert_eq!(
+            run(&["status", "--porcelain", "--untracked-files=no"]),
+            "",
+            "nothing is touched"
+        );
     }
 }

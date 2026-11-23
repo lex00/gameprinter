@@ -57,6 +57,10 @@ pub(super) fn routes() -> Vec<Route> {
 
 /// How many times a worker that ends with an error is started.
 pub(crate) const TRIES: u32 = 2;
+
+/// How often a live worker's state (its cards, its run records, its log's
+/// last line) is read again.
+const LOOK_AT_STATE: Duration = Duration::from_secs(5);
 /// How often the runner looks at the steps.
 const LOOK: Duration = Duration::from_secs(5);
 
@@ -419,6 +423,21 @@ pub(crate) fn start(ctx: Arc<Ctx>) {
 fn run_yeses(ctx: &Arc<Ctx>) {
     let home = ctx.paths.home.clone();
     let now = gp_mcp::asks::now_ms();
+    // A worker's card for a change to gp itself is answered by the gate:
+    // its landing run checks the patch, and a patch that fails lands
+    // nothing (Runner::land_tools).
+    if gp_mcp::steps::settings(&home).runner.land_tools {
+        for a in gp_mcp::asks::all(&home) {
+            if gp_mcp::asks::is_open(&a, now)
+                && a["command"] == json!("tool gate")
+                && a["step"].as_str().is_some_and(|s| !s.is_empty())
+                && let Some(id) = a["id"].as_str()
+                && gp_mcp::asks::answer(&home, id, gp_mcp::asks::Answer::Yes).is_ok()
+            {
+                let _ = gp_mcp::asks::mark(&home, id, "answered_by", json!("the gate"));
+            }
+        }
+    }
     for a in gp_mcp::asks::all(&home) {
         if !gp_mcp::asks::is_yes(&a, now) {
             continue;
@@ -2493,7 +2512,16 @@ fn state_now(home: &Path, id: &str) -> &'static str {
 
 /// The last line of a log with words in it.
 fn last_line(log: &Path) -> Option<String> {
-    let t = fs::read_to_string(log).ok()?;
+    // The log's tail only: a worker's log grows to megabytes, and this is
+    // read for every live worker on every look.
+    use std::io::{Read as _, Seek as _, SeekFrom};
+    const TAIL: u64 = 64 * 1024;
+    let mut f = fs::File::open(log).ok()?;
+    let len = f.metadata().ok()?.len();
+    f.seek(SeekFrom::Start(len.saturating_sub(TAIL))).ok()?;
+    let mut b = Vec::new();
+    f.read_to_end(&mut b).ok()?;
+    let t = String::from_utf8_lossy(&b);
     let tail = t.lines().rev().find(|l| !l.trim().is_empty())?;
     Some(crate::next::cut(tail, 160))
 }
@@ -2653,6 +2681,7 @@ fn work(setup: &Setup, live: &Live, rec: &mut Value, resume: bool) -> anyhow::Re
             p.reap();
         };
         let mut looked_alive = Instant::now();
+        let mut looked_at_state = Instant::now() - LOOK_AT_STATE;
         let code = loop {
             let ended = p.ended(looked_alive.elapsed() >= Duration::from_secs(2));
             if looked_alive.elapsed() >= Duration::from_secs(2) {
@@ -2688,6 +2717,14 @@ fn work(setup: &Setup, live: &Live, rec: &mut Value, resume: bool) -> anyhow::Re
                 ));
                 return Ok(());
             }
+            // Every card, every run record and the log's tail: read every
+            // few seconds, not every 250 ms (with six workers that was a
+            // scan of every card file 24 times a second).
+            if looked_at_state.elapsed() < LOOK_AT_STATE {
+                std::thread::sleep(Duration::from_millis(250));
+                continue;
+            }
+            looked_at_state = Instant::now();
             let now = state_now(&setup.home, &id);
             let last = last_line(&log_path);
             if rec["state"] != json!(now) || rec["last"] != json!(last) {
@@ -2711,6 +2748,13 @@ fn work(setup: &Setup, live: &Live, rec: &mut Value, resume: bool) -> anyhow::Re
             Some(c) => format!("exit {c}"),
             None => "a signal".to_owned(),
         };
+        // Ended by a signal: someone stopped it (a kill of its group, from
+        // a shell or another tool). That is a stop, not a failed try: its
+        // row is parked and no second worker starts on it.
+        if code.is_none() {
+            stopped_by_person(rec);
+            return Ok(());
+        }
         if n >= setup.tries.max(1) {
             rec["state"] = json!("stopped");
             rec["why"] = json!(format!("it failed {n} times; the last ended with {said}"));

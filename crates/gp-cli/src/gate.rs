@@ -1153,7 +1153,8 @@ pub(crate) struct Item {
 /// (docs/gate.md, "Lanes").
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum Lane {
-    /// Files no score reads: Markdown. The hook, then it lands.
+    /// Files no score reads: Markdown, the game's approved.toml and its
+    /// scoreboard.toml. The hook, then it lands.
     Free,
     /// Presentation: model.toml (its `present` sections, told apart once
     /// applied) and themes/. The picture measure and the corpus.
@@ -1165,7 +1166,15 @@ pub(crate) enum Lane {
 /// A patch's lane from its files, relative to the repo; `rel` is the
 /// game's folder.
 pub(crate) fn lane_of(files: &[String], rel: &str) -> Lane {
-    let free = |f: &String| f.ends_with(".md");
+    // Files no score reads. Markdown; and the game's approved.toml (a look
+    // saved from the tip is what the tip draws, and it binds the patches
+    // after it) and scoreboard.toml (which lines the page shows). A lock
+    // used to score all the corpus to prove nothing changed: 155 to 1453 s.
+    let free = |f: &String| {
+        f.ends_with(".md")
+            || f == &format!("{rel}/approved.toml")
+            || f == &format!("{rel}/scoreboard.toml")
+    };
     if files.iter().all(free) {
         Lane::Free
     } else if files.iter().all(|f| {
@@ -1977,7 +1986,19 @@ pub(crate) fn onto_branch(onto: Option<&str>, repo: &Path, any: bool) -> Result<
     }
     let b = git(repo, &["rev-parse", "--abbrev-ref", "HEAD"])?;
     if b == "HEAD" && !any {
-        bail!("this checkout is detached, so name the branch to land on with --onto");
+        // A detached checkout (every worker's tree) lands on main: 31 dry
+        // runs failed on this refusal in one day, each a round trip.
+        if git(
+            repo,
+            &["rev-parse", "--verify", "--quiet", "refs/heads/main"],
+        )
+        .is_ok()
+        {
+            return Ok("main".to_owned());
+        }
+        bail!(
+            "this checkout is detached and has no branch main, so name the branch to land on with --onto"
+        );
     }
     Ok(b)
 }
@@ -3437,6 +3458,30 @@ mod tests {
         let g = "mosshop";
         let lane = |fs: &[&str]| lane_of(&fs.iter().map(|f| f.to_string()).collect::<Vec<_>>(), g);
         assert_eq!(lane(&["mosshop/NOTES.md", "README.md"]), Lane::Free);
+        // What scores nothing, a row per case: a lock, a scoreboard line,
+        // both with notes. Each used to score the whole corpus.
+        for free in [
+            &["mosshop/approved.toml"][..],
+            &["mosshop/scoreboard.toml"],
+            &[
+                "mosshop/approved.toml",
+                "mosshop/scoreboard.toml",
+                "mosshop/x.md",
+            ],
+        ] {
+            assert_eq!(lane(free), Lane::Free, "{free:?}");
+        }
+        // Another game's lock isn't this game's, and a lock with a model
+        // change scores as the model change does.
+        assert_eq!(lane(&["other/approved.toml"]), Lane::Behaviour);
+        assert_eq!(
+            lane(&["mosshop/approved.toml", "mosshop/model.toml"]),
+            Lane::Picture
+        );
+        assert_eq!(
+            lane(&["mosshop/approved.toml", "mosshop/mapping.toml"]),
+            Lane::Behaviour
+        );
         assert_eq!(
             lane(&["mosshop/themes/kit/a.pix", "mosshop/x.md"]),
             Lane::Picture

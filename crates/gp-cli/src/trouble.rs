@@ -322,6 +322,12 @@ fn beats(home: &Path) -> Vec<Value> {
 /// gp serve starting: a restart by hand is filed (not one a server that
 /// moved itself started, with RELOADED_ENV set).
 pub(crate) fn serve_started(paths: &Paths, games: Option<&Path>, port: u16) {
+    // Files nothing, like a status set by hand (the owner, 2026-11-22): a
+    // server started by hand is the person's to do.
+    if true {
+        let _ = (paths, games, port);
+        return;
+    }
     if !live_home(&paths.home) || std::env::var_os(RELOADED_ENV).is_some_and(|v| !v.is_empty()) {
         return;
     }
@@ -350,18 +356,6 @@ pub(crate) fn serve_started(paths: &Paths, games: Option<&Path>, port: u16) {
     );
 }
 
-/// Whether the runner goes on the home: it is on, and a live server beat
-/// in the last 20 s.
-fn runner_going(home: &Path) -> bool {
-    let now = gp_mcp::asks::now_ms();
-    gp_mcp::steps::settings(home).runner.on
-        && beats(home).iter().any(|b| {
-            b["pid"].as_u64().is_some_and(gp_mcp::proc::alive)
-                && now.saturating_sub(b["at_ms"].as_u64().unwrap_or(0))
-                    <= gp_mcp::steps::BEAT_FOR_MS
-        })
-}
-
 /// `gp mechanic queue GAME ROW --status S` from outside the loop's steps
 /// (no GP_STEP, no GP_WORKER) while the runner goes: a hand fix, filed. A
 /// trouble row set by hand isn't filed again, nor a row of a game whose
@@ -369,29 +363,10 @@ fn runner_going(home: &Path) -> bool {
 /// queue command doesn't call this for a deliberate park (`--parked`,
 /// `--waits-on`) or a parked row set next (crate::mechanic::is_parked).
 pub(crate) fn status_by_hand(paths: &Paths, game: &str, row: &str, status: &str) {
-    let set = |k: &str| std::env::var_os(k).is_some_and(|v| !v.is_empty());
-    if row.starts_with("trouble-")
-        || set(gp_mcp::steps::STEP_ENV)
-        || set("GP_WORKER")
-        || gp_mcp::steps::settings(&paths.home).held(game)
-        || !live_home(&paths.home)
-        || !runner_going(&paths.home)
-    {
-        return;
-    }
-    let what = format!(
-        "The quest-log row {row} was set to {status} by hand, outside the loop's steps, while the runner was on"
-    );
-    let _ = file(
-        paths,
-        &Trouble {
-            game,
-            kind: Kind::Hand,
-            what: &what,
-            from: "gp mechanic queue --status, run by hand",
-        },
-        gp_mcp::asks::now_ms(),
-    );
+    // Files nothing (the owner, 2026-11-22): 74 of the 88 trouble rows the
+    // loop ever filed were this kind, each took a worker and a card, and
+    // none found a fault. A person setting a row is the person's to do.
+    let _ = (paths, game, row, status);
 }
 
 #[cfg(test)]
