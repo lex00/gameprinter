@@ -174,11 +174,38 @@ fn measuring_gp(home: &Path) -> PathBuf {
 /// the files it names, and the gp that measures (its size and time). A
 /// change to any of them makes the line out of date.
 pub(crate) fn key_of(home: &Path, game_dir: &Path, game: &str, clip: &str, gp: &Path) -> String {
-    let mut h = sha2::Sha256::new();
-    hash_model(&mut h, home, game_dir, game);
-    if let Ok(clips) = corpus_clips(game_dir)
-        && let Some(c) = clips.iter().find(|c| field(c, "id") == clip)
-    {
+    KeyBase::of(home, game_dir, game).key(game_dir, clip, gp)
+}
+
+/// What every line's key of one game shares: the model and hooks' hash and
+/// the corpus's clips. The board makes it once for all its lines: making
+/// it for each (the hooks' hash reads the game's whole hook crate) took 3 s
+/// of every call for Tapper's 19 lines, and the page calls every few
+/// seconds.
+pub(crate) struct KeyBase {
+    model: sha2::Sha256,
+    clips: Vec<toml::Table>,
+}
+
+impl KeyBase {
+    pub(crate) fn of(home: &Path, game_dir: &Path, game: &str) -> Self {
+        let mut model = sha2::Sha256::new();
+        hash_model(&mut model, home, game_dir, game);
+        KeyBase {
+            model,
+            clips: corpus_clips(game_dir).unwrap_or_default(),
+        }
+    }
+
+    pub(crate) fn key(&self, game_dir: &Path, clip: &str, gp: &Path) -> String {
+        let mut h = self.model.clone();
+        key_rest(&mut h, &self.clips, game_dir, clip, gp);
+        hex::encode(h.finalize())[..16].to_owned()
+    }
+}
+
+fn key_rest(h: &mut sha2::Sha256, clips: &[toml::Table], game_dir: &Path, clip: &str, gp: &Path) {
+    if let Some(c) = clips.iter().find(|c| field(c, "id") == clip) {
         h.update(toml::to_string(c).unwrap_or_default());
         for k in ["start", "presses"] {
             let f = field(c, k);
@@ -187,8 +214,7 @@ pub(crate) fn key_of(home: &Path, game_dir: &Path, game: &str, clip: &str, gp: &
             }
         }
     }
-    hash_gp(&mut h, gp);
-    hex::encode(h.finalize())[..16].to_owned()
+    hash_gp(h, gp);
 }
 
 /// The model a measure is of: the one the gate last landed (its hash in
@@ -438,11 +464,29 @@ pub(crate) fn board(home: &Path, games: &Path, game: &str) -> Option<Value> {
         Ok(l) => l,
         Err(e) => return Some(json!({"game": game, "lines": [], "error": e})),
     };
+    let __t = std::time::Instant::now();
+    let __on = std::env::var_os("GP_TIME_STEPS").is_some();
     let st = status(home, game);
+    if __on {
+        eprintln!("board: status {:?}", __t.elapsed());
+    }
     let cache = read_cache(home, game);
+    if __on {
+        eprintln!("board: read_cache {:?}", __t.elapsed());
+    }
     let gp = measuring_gp(home);
     let busy = measuring_now();
+    if __on {
+        eprintln!("board: measuring {:?}", __t.elapsed());
+    }
     let looks = crate::approved::read(&dir).unwrap_or_default();
+    if __on {
+        eprintln!("board: approved {:?}", __t.elapsed());
+    }
+    let keys = KeyBase::of(home, &dir, game);
+    if __on {
+        eprintln!("board: key base {:?}", __t.elapsed());
+    }
     let rows: Vec<Value> = lines
         .iter()
         .map(|l| {
@@ -491,7 +535,7 @@ pub(crate) fn board(home: &Path, games: &Path, game: &str) -> Option<Value> {
                 "locked": locked(&looks, &l.clip, background["total"].as_u64()),
                 "confirm_row": confirm_row(&l.name),
                 "measured_ms": e.map(|e| e.measured_ms),
-                "stale": e.is_none_or(|e| e.key != key_of(home, &dir, game, &l.clip, &gp)),
+                "stale": e.is_none_or(|e| e.key != keys.key(&dir, &l.clip, &gp)),
                 "measuring": busy.as_deref() == Some(&format!("{game}/{}", l.slot())),
                 "error": e.and_then(|e| e.error.clone()),
             })
