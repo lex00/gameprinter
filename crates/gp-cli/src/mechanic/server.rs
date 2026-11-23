@@ -958,6 +958,11 @@ fn handle(s: &Server, req: &Request) -> Result<Response> {
         // one screen, which the agent drives (gp_mcp::screen).
         ("GET" | "HEAD", "/screen.html") => page("screen.html", "text/html; charset=utf-8"),
         ("GET" | "HEAD", "/screen.js") => page("screen.js", "text/javascript; charset=utf-8"),
+        // screen.js imports it: without this route the screen's script
+        // doesn't load at all and the page stays on LOADING.
+        ("GET" | "HEAD", "/input-timeline.js") => {
+            page("input-timeline.js", "text/javascript; charset=utf-8")
+        }
         ("GET" | "HEAD", "/screen.css") => page("screen.css", "text/css; charset=utf-8"),
         ("GET" | "HEAD", "/api/screen") => screen_state(s),
         ("POST", "/api/screen") => {
