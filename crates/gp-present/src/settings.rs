@@ -1314,7 +1314,7 @@ mod tests {
     /// the 256 by 240 one with every dot four pixels.
     #[test]
     fn a_wide_screen_gets_the_letters_doubled() {
-        let mut s = Screen::open(catalog(), RETRO);
+        let s = Screen::open(catalog(), RETRO);
         let small = s.draw(256, 240);
         let big = s.draw(512, 480);
         assert_eq!(big.len(), 512 * 480 * 4);
