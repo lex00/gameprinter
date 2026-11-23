@@ -196,6 +196,13 @@ struct Ctx {
     /// `gp game kit` output for this run.
     kit: PathBuf,
     kit_hash: String,
+    /// A dry run's base when its patch stands on cards not landed yet
+    /// (`--after`): the commit their own dry runs passed with, on top of
+    /// the tip. The patch is applied and scored there, and its pass names
+    /// that commit as its tip, so once those cards land (each a move of
+    /// the branch to its dry run's commit) this one lands the same way,
+    /// with no scoring again.
+    stack_on: Option<String>,
 }
 
 /// `Err` with git's own words.
@@ -311,6 +318,15 @@ pub(crate) fn reran_lines(v: &Value, side: &str) -> Vec<String> {
     out
 }
 
+/// How many scoring passes this gate made (each a `score NAME` step).
+static SCORES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// The model gate's steps: one JSON line per step, as the tool gate's
+/// (`<gate home>/tool/steps.jsonl`). Its watch and gp loop health read it.
+pub(crate) fn steps_file(home: &Path) -> PathBuf {
+    home.join("steps.jsonl")
+}
+
 /// A score's rows, in the corpus's order, and the file holding its whole
 /// JSON. The clips it ran a second time are said in `lines`.
 #[allow(clippy::too_many_arguments)]
@@ -337,7 +353,23 @@ fn score(
         write: None,
         remeasure: remeasure.then(|| game.to_owned()),
     };
-    let o = crate::corpus_score::run(&cmd, &c.paths)?;
+    let t = std::time::Instant::now();
+    let o = crate::corpus_score::run(&cmd, &c.paths);
+    // One line per scoring pass: the count of these is what a landing
+    // after a passing dry run, or a lock alone, must keep at none.
+    let clips = o
+        .as_ref()
+        .ok()
+        .and_then(|o| rows_of(&o.json))
+        .map_or(0, |r| r.len());
+    SCORES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    crate::gate_hold::step(
+        &format!("score {name}"),
+        t.elapsed().as_secs_f64(),
+        o.is_ok(),
+        json!({"score": true, "clips": clips}),
+    );
+    let o = o?;
     lines.extend(reran_lines(&o.json, name));
     let dir = c.home.join("scores");
     fs::create_dir_all(&dir)?;
@@ -439,9 +471,10 @@ fn pass_differs(
             short(tip)
         ));
     }
-    if kept.gp != gp {
-        return Some("another gp runs the gate now".into());
-    }
+    // The gp that ran the dry run isn't asked to be this one: a tool
+    // landing publishes a new gp many times a day, and that voided every
+    // waiting pass. The kit's hash names the code a score is made with.
+    let _ = gp;
     if kept.kit_hash != kit_hash {
         return Some("the game kit changed since".into());
     }
@@ -510,6 +543,76 @@ fn keep_pass(
     if let Ok(b) = serde_json::to_vec(&kept) {
         let _ = fs::write(&f, b);
     }
+    // And by its patch's bytes, for a dry run stacked on it (`--after`).
+    if let Some(by) = pass_by_diff(&c.home, &item.patch.diff)
+        && let Ok(b) = serde_json::to_vec(&kept)
+    {
+        let _ = fs::write(by, b);
+    }
+}
+
+/// Where a patch's last dry-run pass is kept by the patch's own bytes:
+/// `<gate home>/passed/diff-HASH.json`.
+fn pass_by_diff(home: &Path, diff: &Path) -> Option<PathBuf> {
+    let b = fs::read(diff).ok()?;
+    let h = blake3::hash(&b).to_hex()[..32].to_owned();
+    Some(home.join("passed").join(format!("diff-{h}.json")))
+}
+
+/// The commit a dry run of a patch made on cards `after` (asks' ids, in
+/// the order they were made) is stacked on: the newest of their dry runs'
+/// commits, when every one of them has a pass kept, each sits on the one
+/// before, and the first sits on `tip`. None, with why, when the stack
+/// isn't whole: the dry run then runs on the tip as before.
+pub(crate) fn stack_base(
+    repo: &Path,
+    gate_home: &Path,
+    asks_home: &Path,
+    after: &[String],
+    tip: &str,
+) -> std::result::Result<Option<String>, String> {
+    let mut below = tip.to_owned();
+    let mut top = None;
+    for id in after {
+        let Some(ask) = gp_mcp::asks::read(asks_home, id) else {
+            return Err(format!("card {id} isn't on file"));
+        };
+        // A card that landed is in the tip already.
+        if ask["state"] == json!("used") && ask["ran"]["state"] != json!("failed") {
+            continue;
+        }
+        let argv: Vec<&str> = ask["argv"]
+            .as_array()
+            .map(|a| a.iter().filter_map(Value::as_str).collect())
+            .unwrap_or_default();
+        let Some(patch) = argv
+            .iter()
+            .position(|w| *w == "--patch")
+            .and_then(|i| argv.get(i + 1))
+        else {
+            return Err(format!("card {id} names no patch"));
+        };
+        let kept: Option<DryPass> = pass_by_diff(gate_home, Path::new(patch))
+            .and_then(|f| fs::read(f).ok())
+            .and_then(|b| serde_json::from_slice(&b).ok());
+        let Some(kept) = kept else {
+            return Err(format!("card {id}'s dry run kept no pass"));
+        };
+        if kept.tip != below {
+            return Err(format!(
+                "card {id}'s dry run passed on {}, not on {}",
+                short(&kept.tip),
+                short(&below)
+            ));
+        }
+        let commit = format!("{}^{{commit}}", kept.commit);
+        if git(repo, &["cat-file", "-e", &commit]).is_err() {
+            return Err(format!("card {id}'s commit is gone"));
+        }
+        below = kept.commit.clone();
+        top = Some(kept.commit);
+    }
+    Ok(top)
 }
 
 /// The gate after the person's YES, for a patch whose dry run passed on
@@ -521,8 +624,12 @@ fn reuse_pass(c: &Ctx, item: &Item, tip: &str, lines: &mut Vec<String>) -> Optio
     let f = pass_file(&c.home, &key);
     let kept: DryPass = serde_json::from_slice(&fs::read(&f).ok()?).ok()?;
     let (tip_file, new_file) = pass_scores(&f);
+    let by_diff = pass_by_diff(&c.home, &item.patch.diff);
     let forget = || {
         for p in [&f, &tip_file, &new_file] {
+            let _ = fs::remove_file(p);
+        }
+        if let Some(p) = &by_diff {
             let _ = fs::remove_file(p);
         }
     };
@@ -535,7 +642,9 @@ fn reuse_pass(c: &Ctx, item: &Item, tip: &str, lines: &mut Vec<String>) -> Optio
         forget();
         return None;
     }
-    if let Err((why, _)) = land(&c.repo, &c.onto, tip, &kept.commit) {
+    if let Err((why, _)) =
+        crate::gate_hold::timed("land reused", || land(&c.repo, &c.onto, tip, &kept.commit))
+    {
         lines.push(format!(
             "its dry run's commit {} didn't land ({why}): scored again",
             short(&kept.commit)
@@ -1722,6 +1831,19 @@ fn gate_batch(c: &Ctx, a: &GateArgs, items: &[Item], rom: &[u8]) -> Result<Vec<O
     let mut said: Vec<String> = Vec::new();
     for attempt in 1..=TIP_TRIES {
         let tip = git(&c.repo, &["rev-parse", &c.onto])?;
+        // A stacked dry run's base stands in for the tip all through: the
+        // patch is applied and scored there, and its pass names it.
+        let stacked = c
+            .stack_on
+            .as_ref()
+            .filter(|b| {
+                a.dry_run
+                    && n == 1
+                    && git(&c.repo, &["merge-base", "--is-ancestor", &tip, b]).is_ok()
+            })
+            .cloned();
+        let branch_tip = tip.clone();
+        let tip = stacked.clone().unwrap_or(tip);
         let mut lines = vec![if n == 1 {
             format!("gate: {} onto {} at {}", items[0].shown, c.onto, &tip[..12])
         } else {
@@ -1736,6 +1858,15 @@ fn gate_batch(c: &Ctx, a: &GateArgs, items: &[Item], rom: &[u8]) -> Result<Vec<O
                     .join(", ")
             )
         }];
+        if stacked.is_some() {
+            lines.push(format!(
+                "stacked: {} is {}'s tip {} with the dry runs of the cards this patch stands on; once they land this one lands with no scoring again",
+                short(&tip),
+                c.onto,
+                short(&branch_tip)
+            ));
+            crate::gate_hold::step("stacked", 0.0, true, json!({"on": tip, "tip": branch_tip}));
+        }
         // A YES to a patch whose dry run passed on this tip lands its commit
         // with no scoring again (DryPass).
         if attempt == 1
@@ -1815,7 +1946,9 @@ fn gate_batch(c: &Ctx, a: &GateArgs, items: &[Item], rom: &[u8]) -> Result<Vec<O
                 ));
                 (mid, (BTreeMap::new(), 0))
             } else {
-                let module = match module_at(c, &tree_game, &mut lines) {
+                let module = match crate::gate_hold::timed("module tip", || {
+                    module_at(c, &tree_game, &mut lines)
+                }) {
                     Ok(m) => m,
                     Err(e) => bail!("the tip's module doesn't build: {e:#}"),
                 };
@@ -1865,7 +1998,7 @@ fn gate_batch(c: &Ctx, a: &GateArgs, items: &[Item], rom: &[u8]) -> Result<Vec<O
         {
             Ok(())
         } else {
-            land(&c.repo, &c.onto, &tip, &end.commit)
+            crate::gate_hold::timed("land", || land(&c.repo, &c.onto, &tip, &end.commit))
         };
         match &landed {
             Err((why, true)) if attempt < TIP_TRIES => {
@@ -2040,7 +2173,7 @@ pub(crate) fn run(a: &GateArgs, paths: &Paths) -> Result<Outcome> {
         match stands_on(&paths.home, &a.after, gp_mcp::asks::now_ms()) {
             StandsOn::Refused(why) => bail!("{why}"),
             StandsOn::Waiting(why) if a.dry_run => eprintln!(
-                "gp model gate: {why}; this dry run is on the tip without them, so a patch that needs them may not apply here"
+                "gp model gate: {why}; this dry run is stacked on their dry runs' commits when each kept its pass"
             ),
             StandsOn::Waiting(why) => {
                 bail!(
@@ -2082,7 +2215,8 @@ pub(crate) fn run(a: &GateArgs, paths: &Paths) -> Result<Outcome> {
             );
         }
         lock.lock()?;
-        let hold = crate::gate_hold::Hold::take(&home, lane, what, None, a.dry_run);
+        let hold =
+            crate::gate_hold::Hold::take(&home, lane, what, Some(&steps_file(&home)), a.dry_run);
         match crate::gate_copy::open(&game, &home, &gp, a.message.as_deref())? {
             crate::gate_copy::Opened::Done(outcome) => return Ok(outcome),
             crate::gate_copy::Opened::Gate { repo, tree, diff } => {
@@ -2151,7 +2285,8 @@ pub(crate) fn run(a: &GateArgs, paths: &Paths) -> Result<Outcome> {
         {
             return Ok(o);
         }
-        let hold = crate::gate_hold::Hold::take(&home, lane, what, None, a.dry_run);
+        let hold =
+            crate::gate_hold::Hold::take(&home, lane, what, Some(&steps_file(&home)), a.dry_run);
         (repo, rel, onto, tree, file, hold)
     };
 
@@ -2168,6 +2303,20 @@ pub(crate) fn run(a: &GateArgs, paths: &Paths) -> Result<Outcome> {
         .as_str()
         .context("gp game kit gave no hash")?
         .to_owned();
+    // A dry run of a patch made on cards not landed is stacked on their
+    // dry runs' commits (stack_base), so it tests what will be there.
+    let stack_on = if a.dry_run && !a.after.is_empty() && copy.is_none() && !a.score_only {
+        let tip = git(&repo, &["rev-parse", &onto])?;
+        match stack_base(&repo, &home, &paths.home, &a.after, &tip) {
+            Ok(top) => top,
+            Err(why) => {
+                eprintln!("gp model gate: not stacked ({why}): this dry run is on the tip");
+                None
+            }
+        }
+    } else {
+        None
+    };
     let c = Ctx {
         repo,
         rel,
@@ -2183,6 +2332,7 @@ pub(crate) fn run(a: &GateArgs, paths: &Paths) -> Result<Outcome> {
         run: a.run.clone(),
         kit,
         kit_hash,
+        stack_on,
     };
     let rom = if c.copy.is_none() && !a.score_only && !on_tip(&c.repo, &c.onto, &c.rel) {
         match new_game_rom(&c, a, &patch_file)? {
@@ -2252,6 +2402,7 @@ pub(crate) fn run(a: &GateArgs, paths: &Paths) -> Result<Outcome> {
         });
         asked.push(name);
     }
+    let gate_started = std::time::Instant::now();
     let outcomes = if items.is_empty() {
         Vec::new()
     } else {
@@ -2265,6 +2416,22 @@ pub(crate) fn run(a: &GateArgs, paths: &Paths) -> Result<Outcome> {
             },
         }
     };
+    // What this run did, counted: the scoring passes it made. A landing
+    // after its dry run passed, and a patch no score reads, make none.
+    let scores = SCORES.load(std::sync::atomic::Ordering::Relaxed);
+    crate::gate_hold::step(
+        "gate",
+        gate_started.elapsed().as_secs_f64(),
+        outcomes.iter().all(|o| o.exit == 0),
+        json!({"scores": scores, "patches": items.len(), "dry_run": a.dry_run}),
+    );
+    let outcomes: Vec<Outcome> = outcomes
+        .into_iter()
+        .map(|mut o| {
+            o.json["counts"] = json!({"scores": scores, "patches": items.len()});
+            o
+        })
+        .collect();
     let mut mine = None;
     for (name, o) in asked.into_iter().zip(outcomes).chain(early) {
         match (&name, &ticket) {
@@ -3127,6 +3294,7 @@ mod tests {
             run: "gate".into(),
             kit: d.path().join("kit"),
             kit_hash: "kit1".into(),
+            stack_on: None,
         };
         let diff = d.path().join("fix.diff");
         fs::write(&diff, "diff --git a/g/model.toml b/g/model.toml\n").unwrap();
@@ -3194,7 +3362,13 @@ mod tests {
             pass_differs(&repo, &gone, &made, "gp", "k").as_deref(),
             Some("its commit is gone")
         );
-        assert!(pass_differs(&repo, &kept, &made, "another gp", "k").is_some());
+        // Another gp alone doesn't void a pass (a tool landing publishes
+        // one many times a day): it says what the same gp says. Another
+        // kit, the code a score is made with, does.
+        assert_eq!(
+            pass_differs(&repo, &kept, &made, "another gp", "k"),
+            pass_differs(&repo, &kept, &made, "gp", "k")
+        );
         assert!(pass_differs(&repo, &kept, &made, "gp", "another kit").is_some());
         assert!(
             fs::read_dir(home.join("passed")).unwrap().next().is_none(),
@@ -3450,6 +3624,99 @@ mod tests {
         assert_eq!(
             changed_parts(a, b).unwrap(),
             vec!["entities.player.jump".to_owned()]
+        );
+    }
+
+    /// The stack a dry run stands on: the cards its patch was made on,
+    /// each one's dry-run commit on the one before, the first on the tip.
+    /// A row per case.
+    #[test]
+    fn a_dry_run_is_stacked_on_the_cards_it_stands_on() {
+        let d = tempfile::tempdir().unwrap();
+        let (repo, gate_home, asks_home) = (
+            d.path().join("repo"),
+            d.path().join("gate"),
+            d.path().join("home"),
+        );
+        fs::create_dir_all(&repo).unwrap();
+        let g = |args: &[&str]| {
+            let o = Command::new("git")
+                .current_dir(&repo)
+                .args(args)
+                .env("GIT_AUTHOR_NAME", "t")
+                .env("GIT_AUTHOR_EMAIL", "t@t.invalid")
+                .env("GIT_COMMITTER_NAME", "t")
+                .env("GIT_COMMITTER_EMAIL", "t@t.invalid")
+                .output()
+                .unwrap();
+            assert!(o.status.success(), "git {args:?}");
+            String::from_utf8_lossy(&o.stdout).trim().to_owned()
+        };
+        g(&["init", "-q", "-b", "main"]);
+        let commit = |text: &str| {
+            fs::write(repo.join("a.txt"), text).unwrap();
+            g(&["add", "-A"]);
+            g(&["commit", "-q", "-m", text]);
+            g(&["rev-parse", "HEAD"])
+        };
+        let (tip, one, two) = (commit("tip"), commit("one"), commit("two"));
+        // A card with its patch file, and the pass its dry run kept.
+        let card = |id: &str, state: &str, on: Option<(&str, &str)>| {
+            let patch = d.path().join(format!("{id}.patch"));
+            fs::write(&patch, format!("the patch of {id}")).unwrap();
+            fs::create_dir_all(gp_mcp::asks::dir(&asks_home)).unwrap();
+            fs::write(
+                gp_mcp::asks::dir(&asks_home).join(format!("{id}.json")),
+                json!({"id": id, "state": state, "argv": ["--patch", patch, "-m", "m"]})
+                    .to_string(),
+            )
+            .unwrap();
+            if let Some((base, commit)) = on {
+                let kept = DryPass {
+                    tip: base.into(),
+                    gp: String::new(),
+                    kit_hash: "k".into(),
+                    commit: commit.into(),
+                    at: "then".into(),
+                    remeasured: false,
+                    tolerated: Vec::new(),
+                };
+                let f = pass_by_diff(&gate_home, &patch).unwrap();
+                fs::create_dir_all(f.parent().unwrap()).unwrap();
+                fs::write(f, serde_json::to_vec(&kept).unwrap()).unwrap();
+            }
+        };
+        let ids = |a: &[&str]| a.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
+        let base = |after: &[&str]| stack_base(&repo, &gate_home, &asks_home, &ids(after), &tip);
+        card("1000000000001-aaaaaaaa", "yes", Some((&tip, &one)));
+        card("1000000000002-bbbbbbbb", "open", Some((&one, &two)));
+        card("1000000000003-cccccccc", "open", None);
+        card("1000000000004-dddddddd", "open", Some((&tip, &two)));
+        card("1000000000005-eeeeeeee", "used", None);
+        // One card below: its commit. Two: the newer one's.
+        assert_eq!(base(&["1000000000001-aaaaaaaa"]), Ok(Some(one.clone())));
+        assert_eq!(
+            base(&["1000000000001-aaaaaaaa", "1000000000002-bbbbbbbb"]),
+            Ok(Some(two.clone()))
+        );
+        // A card that landed is in the tip: nothing to stand on.
+        assert_eq!(base(&["1000000000005-eeeeeeee"]), Ok(None));
+        // No pass kept, a pass on another base, a card not on file: not
+        // stacked, with why.
+        assert!(
+            base(&["1000000000003-cccccccc"])
+                .unwrap_err()
+                .contains("kept no pass")
+        );
+        assert!(
+            base(&["1000000000001-aaaaaaaa", "1000000000004-dddddddd"])
+                .unwrap_err()
+                .contains("passed on")
+        );
+        assert!(
+            base(&["1000000000009-ffffffff"])
+                .unwrap_err()
+                .contains("isn't on file")
         );
     }
 

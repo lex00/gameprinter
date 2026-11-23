@@ -46,6 +46,74 @@ const HELD_LONG: Duration = Duration::from_secs(30 * 60);
 
 static STOP: AtomicBool = AtomicBool::new(false);
 static WHY: Mutex<String> = Mutex::new(String::new());
+/// The steps file of the gate this process is, once it holds its lock.
+static STEPS: Mutex<Option<PathBuf>> = Mutex::new(None);
+/// When this gate last wrote a beat, so a beat is written at most every
+/// [`BEAT_EVERY_MS`].
+static BEAT_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+const BEAT_EVERY_MS: u64 = 15_000;
+
+fn steps_line(line: &Value) {
+    use std::io::Write as _;
+    let file = STEPS.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    if let Some(file) = file
+        && let Ok(mut f) = fs::OpenOptions::new().create(true).append(true).open(file)
+    {
+        let _ = f.write_all(format!("{line}\n").as_bytes());
+    }
+}
+
+/// Logs a step of the gate this process is: what it was, how long it took
+/// and whether it passed, with numbers of its own (`more`: clips scored,
+/// what was reused). The watch reads the file's time, so a gate that logs
+/// keeps its lock and one that stops logging gives it up after [`IDLE`];
+/// gp loop health reads the same lines.
+pub(crate) fn step(name: &str, secs: f64, ok: bool, more: Value) {
+    let mut line = json!({
+        "at": crate::open::now_rfc3339(),
+        "run": std::process::id(),
+        "step": name,
+        "secs": (secs * 10.0).round() / 10.0,
+        "ok": ok,
+    });
+    if let (Some(l), Some(m)) = (line.as_object_mut(), more.as_object()) {
+        for (k, v) in m {
+            l.insert(k.clone(), v.clone());
+        }
+    }
+    steps_line(&line);
+}
+
+/// Runs `f` as the step `name`, logged with its time.
+pub(crate) fn timed<T, E>(
+    name: &str,
+    f: impl FnOnce() -> std::result::Result<T, E>,
+) -> std::result::Result<T, E> {
+    let t = std::time::Instant::now();
+    let r = f();
+    step(name, t.elapsed().as_secs_f64(), r.is_ok(), json!({}));
+    r
+}
+
+/// A sign of work inside a long step (a clip scored): at most one line
+/// every [`BEAT_EVERY_MS`]. A step that hangs writes none, and the watch
+/// then ends the gate; one that only runs long keeps its lock.
+pub(crate) fn beat() {
+    let now = gp_mcp::asks::now_ms();
+    let last = BEAT_MS.load(Ordering::Relaxed);
+    if now.saturating_sub(last) < BEAT_EVERY_MS
+        || BEAT_MS
+            .compare_exchange(last, now, Ordering::Relaxed, Ordering::Relaxed)
+            .is_err()
+    {
+        return;
+    }
+    if STEPS.lock().unwrap_or_else(|e| e.into_inner()).is_some() {
+        steps_line(
+            &json!({"at": crate::open::now_rfc3339(), "run": std::process::id(), "beat": true}),
+        );
+    }
+}
 
 /// Whether this gate was told to stop by its watch.
 pub(crate) fn stopping() -> bool {
@@ -222,6 +290,10 @@ impl Hold {
             "steps": steps.map(|p| p.display().to_string()),
             "dry_run": dry_run,
         });
+        if let Some(s) = steps {
+            *STEPS.lock().unwrap_or_else(|e| e.into_inner()) = Some(s.to_owned());
+            step("lock", 0.0, true, json!({"what": what}));
+        }
         let file = holder_file(home, lane);
         let tmp = file.with_extension("tmp");
         if fs::write(&tmp, h.to_string()).is_ok() {

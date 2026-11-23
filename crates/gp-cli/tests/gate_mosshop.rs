@@ -240,4 +240,90 @@ fn a_one_line_model_patch_to_moss_hop_passes_the_model_gate_from_a_fresh_home() 
         "the patch wasn't scored against the tip: {lines:#?}"
     );
     assert_eq!(r.git(&["rev-parse", "main"]), tip, "a dry run moved main");
+
+    // The counts (the owner, 2026-11-22: the same slowness was fixed three
+    // times in a day and came back, since nothing counted the work). Each
+    // gate run says how many scoring passes it made, in its JSON and in the
+    // gate home's steps.jsonl; these numbers are the budget.
+    let scores = |v: &serde_json::Value| v["counts"]["scores"].as_u64();
+    let dry = scores(&v).expect("a gate run counts its scoring passes");
+    assert!(dry >= 1, "a model change is scored: {v:#}");
+
+    // The YES after a dry run that passed on this tip: its commit lands,
+    // and nothing is scored again.
+    let gate = |patch: &Path, msg: &str| {
+        let o = r.gp(&[
+            "--json",
+            "model",
+            "gate",
+            g,
+            "--patch",
+            patch.to_str().unwrap(),
+            "--onto",
+            "main",
+            "-m",
+            msg,
+        ]);
+        let v: serde_json::Value = serde_json::from_slice(&o.stdout)
+            .unwrap_or_else(|e| panic!("{e}: the gate gave no JSON: {}", said(&o)));
+        assert_eq!(v["verdict"], "PASS", "{}", said(&o));
+        v
+    };
+    let landed = gate(&patch, "mosshop: the player's description");
+    assert_eq!(
+        scores(&landed),
+        Some(0),
+        "a landing after its dry run passed scored again: {landed:#}"
+    );
+    let after_one = r.git(&["rev-parse", "main"]);
+    assert_ne!(after_one, tip, "the landing didn't move main");
+    r.git(&["checkout", "-q", "main", "--", "mosshop"]);
+
+    // A patch no score reads (the scoreboard, which says what the page
+    // shows) scores no clip.
+    let board_file = game.join("scoreboard.toml");
+    let had = std::fs::read_to_string(&board_file).unwrap_or_default();
+    std::fs::write(
+        &board_file,
+        format!("{had}\n[[line]]\nname = \"the jump\"\nclip = \"mosshop.jump.001\"\n"),
+    )
+    .unwrap();
+    r.git(&["add", "-N", "mosshop/scoreboard.toml"]);
+    let mut c = Command::new("git");
+    r.env(&mut c);
+    let board = String::from_utf8(ok(c.arg("diff").output().unwrap(), "git diff").stdout).unwrap();
+    assert!(board.contains("the jump"), "{board}");
+    let board_patch = root.join("scoreboard.patch");
+    std::fs::write(&board_patch, &board).unwrap();
+    if had.is_empty() {
+        r.git(&["rm", "-q", "--cached", "-f", "mosshop/scoreboard.toml"]);
+        std::fs::remove_file(&board_file).unwrap();
+    } else {
+        r.git(&["checkout", "-q", "--", "mosshop/scoreboard.toml"]);
+    }
+    assert_eq!(r.git(&["status", "--porcelain", "--", "mosshop"]), "");
+    let free = gate(&board_patch, "mosshop: a scoreboard line");
+    assert_eq!(
+        scores(&free),
+        Some(0),
+        "a scoreboard line alone was scored: {free:#}"
+    );
+    assert_ne!(r.git(&["rev-parse", "main"]), after_one, "it didn't land");
+
+    // And the steps file has a line for each run with the same count, which
+    // gp loop health and the gate's watch read.
+    let steps = std::fs::read_to_string(r.gate.join("steps.jsonl")).unwrap();
+    let runs: Vec<serde_json::Value> = steps
+        .lines()
+        .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+        .filter(|l| l["step"] == "gate")
+        .collect();
+    assert_eq!(runs.len(), 3, "one gate line per run: {steps}");
+    assert_eq!(
+        runs.iter()
+            .map(|l| l["scores"].as_u64().unwrap())
+            .collect::<Vec<_>>(),
+        vec![dry, 0, 0],
+        "{steps}"
+    );
 }

@@ -172,7 +172,9 @@ where
             .enumerate()
             .map(|(i, x)| {
                 started(i);
-                f(&mut s, i, x)
+                let r = f(&mut s, i, x);
+                crate::gate_hold::beat();
+                r
             })
             .collect();
     }
@@ -206,7 +208,10 @@ where
         for (i, r) in rx {
             match r {
                 None => started(i),
-                Some(r) => out[i] = Some(r),
+                Some(r) => {
+                    out[i] = Some(r);
+                    crate::gate_hold::beat();
+                }
             }
         }
     });
