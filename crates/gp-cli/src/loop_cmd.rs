@@ -238,18 +238,30 @@ fn settings_text(s: &gp_mcp::steps::Settings) -> String {
 
 /// The steps as JSON, for gp_run's check and the page.
 pub(crate) fn steps_json(paths: &gp_evidence::Paths, games: Option<&std::path::Path>) -> Value {
+    let t = std::time::Instant::now();
+    let timing = std::env::var_os("GP_TIME_STEPS").is_some();
     let answers = crate::steps::answers(paths, games);
+    if timing {
+        eprintln!("steps_json: answers {:?}", t.elapsed());
+    }
     // The runner's workers, newest first, with the live ones' steps.
     let mut workers = gp_mcp::steps::workers(&paths.home);
     workers.reverse();
-    match crate::wrong::halt(&paths.home) {
+    if timing {
+        eprintln!("steps_json: workers {:?} ({})", t.elapsed(), workers.len());
+    }
+    let v = match crate::wrong::halt(&paths.home) {
         Some(h) => json!({"open": [], "halted": crate::wrong::halted_json(&h), "workers": workers}),
         None => json!({
             "open": open_with_rows(paths, games, &answers),
             "halted": null,
             "workers": workers,
         }),
+    };
+    if timing {
+        eprintln!("steps_json: open rows {:?}", t.elapsed());
     }
+    v
 }
 
 /// The engine's open steps, then the quest-log items' steps that touch

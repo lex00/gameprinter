@@ -56,12 +56,40 @@ struct File {
 }
 
 /// The game's approved looks; none without the file.
+///
+/// The parsed file is kept while it doesn't change (its time and size):
+/// Tapper's, with 13 looks and 16,000 lines, takes 3 s to parse, the page
+/// asks for it through three calls a few seconds apart, and every lock adds
+/// a thousand lines to it.
 pub(crate) fn read(game: &Path) -> std::result::Result<Vec<Look>, String> {
-    let Ok(text) = fs::read_to_string(game.join(FILE)) else {
+    let file = game.join(FILE);
+    let Ok(meta) = fs::metadata(&file) else {
         return Ok(Vec::new());
     };
-    parse(&text)
+    let stamp = (meta.modified().ok(), meta.len());
+    {
+        let kept = KEPT.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some((s, looks)) = kept.get(&file)
+            && *s == stamp
+        {
+            return looks.clone();
+        }
+    }
+    let Ok(text) = fs::read_to_string(&file) else {
+        return Ok(Vec::new());
+    };
+    let looks = parse(&text);
+    KEPT.lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(file, (stamp, looks.clone()));
+    looks
 }
+
+type Stamp = (Option<std::time::SystemTime>, u64);
+type Read = std::result::Result<Vec<Look>, String>;
+static KEPT: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashMap<std::path::PathBuf, (Stamp, Read)>>,
+> = std::sync::LazyLock::new(Default::default);
 
 /// The looks of an `approved.toml` text.
 pub(crate) fn parse(text: &str) -> std::result::Result<Vec<Look>, String> {

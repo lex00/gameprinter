@@ -305,9 +305,14 @@ pub(crate) fn answers(paths: &gp_evidence::Paths, games: Option<&Path>) -> Vec<A
         .as_deref()
         .map(crate::next::games_in)
         .unwrap_or_default();
+    let timing = std::env::var_os("GP_TIME_STEPS").is_some();
     for g in &all {
+        let t = std::time::Instant::now();
         if let Ok(f) = crate::next::gather(paths, games, Some(g), None) {
             out.push(crate::next::answer(&f));
+        }
+        if timing {
+            eprintln!("answers: gather {g} {:?}", t.elapsed());
         }
     }
     if all.is_empty()

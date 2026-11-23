@@ -35,8 +35,12 @@ pub(crate) fn scored_queue(home: &Path, game: &str) -> Vec<Value> {
     let fps = fps_milli(game);
     // A row's target with where the scoreboard stands on it.
     if q.iter().any(|r| r["target"].is_string()) {
+        let __t = std::time::Instant::now();
         let board =
             crate::roms_cmd::games_dir(None).and_then(|g| crate::scoreboard::board(home, &g, game));
+        if std::env::var_os("GP_TIME_STEPS").is_some() {
+            eprintln!("scored_queue: board {:?}", __t.elapsed());
+        }
         for r in &mut q {
             if let Some(t) = r["target"].as_str().map(str::to_owned) {
                 r["target_says"] = json!(crate::scoreboard::target_says(board.as_ref(), &t));
