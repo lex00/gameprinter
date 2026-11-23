@@ -104,7 +104,7 @@ const LAYOUTS = {
     fps: 30,
     keys: [["Digit5"], ["Digit1"], ["ArrowRight", "KeyD"], ["ArrowLeft", "KeyA"], ["ArrowDown", "KeyS"], ["ArrowUp", "KeyW"], ["KeyX", "Space"]],
     keys2: [],
-    footer: "5 drops a coin and 1 starts. Arrows move, X or Space taps. On a controller: Select is the coin, Start starts, A taps. R records.",
+    footer: "5 drops a coin and 1 starts. Arrows move, X or Space taps. On a controller: Select is the coin, Start starts, A or the right stick taps. R records.",
   },
 };
 let LAYOUT = LAYOUTS.nes;
@@ -284,6 +284,24 @@ function secondPad() {
   for (const g of navigator.getGamepads?.() ?? []) if (g && g.connected && n++ === 1) return g;
   return null;
 }
+/** The second stick's axes that have been seen at rest near the middle, by
+ * gamepad: an axis that rests at an end (a trigger some controllers report
+ * as an axis) never counts as a pull. */
+const stickRested = new Map();
+/** Whether the gamepad's second stick is pushed any way: on the arcade
+ * layout that is the tap, as the cabinet's tap handle was a second stick. */
+function secondStick(g) {
+  let seen = stickRested.get(g.index);
+  if (!seen) stickRested.set(g.index, (seen = new Set()));
+  let pushed = false;
+  for (const i of [2, 3]) {
+    const v = g.axes[i];
+    if (typeof v !== "number") continue;
+    if (Math.abs(v) < 0.2) seen.add(i);
+    else if (Math.abs(v) > 0.5 && seen.has(i)) pushed = true;
+  }
+  return pushed;
+}
 /** A gamepad as the machine's bits (app.js's gamepadBits). */
 function gamepadBits(g) {
   let pad = 0;
@@ -297,7 +315,7 @@ function gamepadBits(g) {
     if (b(14) || ax < -0.5) pad |= 8;
     if (b(13) || ay > 0.5) pad |= 16;
     if (b(12) || ay < -0.5) pad |= 32;
-    if (b(0) || b(1) || b(2) || b(3)) pad |= 64;
+    if (b(0) || b(1) || b(2) || b(3) || secondStick(g)) pad |= 64;
   } else {
     if (b(0) || b(1)) pad |= 1;
     if (b(2) || b(3)) pad |= 2;
