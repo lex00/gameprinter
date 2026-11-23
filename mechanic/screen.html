@@ -35,23 +35,6 @@
     </div>
   </header>
   <main>
-    <!-- The game's scoreboard (docs/loop.md, "The scoreboard"): a line for
-         each part of the game worked on now, from GAME/scoreboard.toml, as
-         gp serve last measured it (GET /api/scoreboard/GAME), and under
-         them the held-out runs (sealed plays, scored by gp sealed score).
-         Hidden when the game has none. -->
-    <section id="scoreboard" hidden aria-label="The scoreboard">
-      <table>
-        <thead><tr>
-          <th>PART</th>
-          <th title="How much of the clip the model plays the same as the original, frame by frame, from its start">GAME STATE</th>
-          <th title="Frames whose background matches the original's, of the clip's frames">BACKGROUND</th>
-          <th title="Frames whose characters match the original's, of the clip's frames">SPRITES</th>
-          <th title="The looks you approved for this part">APPROVED</th>
-        </tr></thead>
-        <tbody id="score-lines"></tbody>
-      </table>
-    </section>
     <!-- While no agent connected to gp mcp this week (api/session's
          no_agent, gp_mcp::clients): how to connect one. -->
     <p id="no-agent" hidden></p>
@@ -98,6 +81,26 @@
       <div id="asks" class="asks"></div>
       <ol id="turn"></ol>
       <p id="turn-none">NOTHING NEEDS YOU</p>
+    </section>
+    <!-- Below YOUR TURN (the owner, 2026-11-22: "the table at the top of
+         the web page is pushing the screens down thats no good it has to
+         go below the your turn stuff"): the screens stay at the top. -->
+    <!-- The game's scoreboard (docs/loop.md, "The scoreboard"): a line for
+         each part of the game worked on now, from GAME/scoreboard.toml, as
+         gp serve last measured it (GET /api/scoreboard/GAME), and under
+         them the held-out runs (sealed plays, scored by gp sealed score).
+         Hidden when the game has none. -->
+    <section id="scoreboard" hidden aria-label="The scoreboard">
+      <table>
+        <thead><tr>
+          <th>PART</th>
+          <th title="How much of the clip the model plays the same as the original, frame by frame, from its start">GAME STATE</th>
+          <th title="Frames whose background matches the original's, of the clip's frames">BACKGROUND</th>
+          <th title="Frames whose characters match the original's, of the clip's frames">SPRITES</th>
+          <th title="The looks you approved for this part">APPROVED</th>
+        </tr></thead>
+        <tbody id="score-lines"></tbody>
+      </table>
     </section>
     <section id="now" aria-live="polite" aria-label="What the loop is doing">
       <div id="now-work"></div>
