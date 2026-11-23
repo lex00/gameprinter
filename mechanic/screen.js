@@ -2903,7 +2903,13 @@ function setView(v, by = "person") {
   // original it follows the original's presses: a change starts it again.
   if (mode === "live" && model.ready && (was === "solo") !== (v === "solo")) {
     model.say = "THE MODEL IS STARTING";
-    void startModel(++model.token);
+    // The model alone plays with the person's settings and beside the
+    // original it is the model as written: with switches kept, going to or
+    // from MODEL ONLY loads the model again in the right one. Before, the
+    // switches a person had kept only took after the settings screen
+    // itself started the model again.
+    if (profileName() !== "retro") void loadModel();
+    else void startModel(++model.token);
   }
   $("record").disabled = mode !== "live" || v === "solo" || sending;
   show.by = by;
