@@ -857,12 +857,33 @@ pub(crate) fn can_land(
             )));
         }
     }
-    if !lands || files.is_empty() {
-        return Ok(());
+    match lands
+        .then(|| checkout_in_the_way(repo, onto, files))
+        .flatten()
+    {
+        Some(why) => Err(ready(why)),
+        None => Ok(()),
     }
-    let Ok(Some(at)) = checked_out_at(repo, onto) else {
-        return Ok(());
-    };
+}
+
+/// What a dry run says first when its landing would stop at `ready` on
+/// the checkout as it is now: the checkout where `onto` is checked out
+/// has uncommitted changes to one of `files`. The dry run goes on (they
+/// may be gone by the YES), and the worker hears of it before the scoring.
+pub(crate) fn landing_note(repo: &Path, onto: &str, files: &[String]) -> Option<String> {
+    checkout_in_the_way(repo, onto, files).map(|why| {
+        format!("note: {why}; its landing waits, keeping the YES and this dry run's pass, until they are committed or taken out of that checkout")
+    })
+}
+
+/// Why the checkout where `onto` is checked out can't take a landing that
+/// changes `files`: its uncommitted changes to them, which `git merge
+/// --ff-only` would refuse (issue 45).
+fn checkout_in_the_way(repo: &Path, onto: &str, files: &[String]) -> Option<String> {
+    if files.is_empty() {
+        return None;
+    }
+    let at = checked_out_at(repo, onto).ok()??;
     // Changed against HEAD, staged or not; and a file the patch adds that
     // is there untracked, which the merge would refuse to overwrite.
     let mut changed = vec!["diff", "HEAD", "--name-only", "--"];
@@ -883,13 +904,13 @@ pub(crate) fn can_land(
     dirty.sort();
     dirty.dedup();
     if dirty.is_empty() {
-        return Ok(());
+        return None;
     }
-    Err(ready(format!(
+    Some(format!(
         "{} has uncommitted changes to {}, which the patch changes too: git merge --ff-only would refuse to land it there",
         at.display(),
         dirty.join(", ")
-    )))
+    ))
 }
 
 /// A failure's reason and the phase it failed in.
@@ -1867,6 +1888,21 @@ fn gate_batch(c: &Ctx, a: &GateArgs, items: &[Item], rom: &[u8]) -> Result<Vec<O
             ));
             crate::gate_hold::step("stacked", 0.0, true, json!({"on": tip, "tip": branch_tip}));
         }
+        // Before the tree is touched: a lock in it, or a checkout to land
+        // in with edits to the same files, keeps the yes (NotThePatch), and
+        // the kept pass too, so it is checked before reuse_pass tries the
+        // pass's merge (which forgets the pass when it fails). A dry run
+        // says first that its landing would wait on that checkout.
+        let files: Vec<String> = items.iter().flat_map(|i| i.files.clone()).collect();
+        can_land(&c.repo, &c.tree, &c.onto, &files, !a.dry_run)?;
+        if attempt == 1
+            && a.dry_run
+            && c.copy.is_none()
+            && let Some(note) = landing_note(&c.repo, &c.onto, &files)
+        {
+            eprintln!("gp model gate: {note}");
+            lines.push(note);
+        }
         // A YES to a patch whose dry run passed on this tip lands its commit
         // with no scoring again (DryPass).
         if attempt == 1
@@ -1878,10 +1914,6 @@ fn gate_batch(c: &Ctx, a: &GateArgs, items: &[Item], rom: &[u8]) -> Result<Vec<O
             return Ok(vec![o]);
         }
         let mut verdicts: Vec<Option<std::result::Result<(), Failed>>> = vec![None; n];
-        // Before the tree is touched: a lock in it, or a checkout to land
-        // in with edits to the same files, keeps the yes (NotThePatch).
-        let files: Vec<String> = items.iter().flat_map(|i| i.files.clone()).collect();
-        can_land(&c.repo, &c.tree, &c.onto, &files, !a.dry_run)?;
         // Before any scoring: a patch that doesn't apply on the tip, or
         // that the hook refuses, stops here in seconds.
         for (i, item) in items.iter().enumerate() {
@@ -4590,5 +4622,64 @@ mod kept_yes_tests {
         // A tree that isn't a checkout yet can always be used.
         let d = tempfile::tempdir().unwrap();
         assert!(can_land(d.path(), &d.path().join("tree"), "main", &[], true).is_ok());
+    }
+
+    /// A checkout where the branch is checked out, with an uncommitted
+    /// change to a file the patch changes: the landing stops at `ready`,
+    /// and a dry run goes on with a note saying so first.
+    #[test]
+    fn a_dirty_checkout_stops_the_landing_and_notes_the_dry_run() {
+        let d = tempfile::tempdir().unwrap();
+        let repo = d.path();
+        let g = |args: &[&str]| {
+            let o = Command::new("git")
+                .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+                .args(args)
+                .current_dir(repo)
+                .output()
+                .unwrap();
+            assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        };
+        g(&["init", "-q", "-b", "main"]);
+        fs::create_dir_all(repo.join("rooftop")).unwrap();
+        fs::write(repo.join("rooftop/triage.toml"), "").unwrap();
+        fs::write(repo.join("rooftop/model.toml"), "").unwrap();
+        g(&["add", "."]);
+        g(&["commit", "-q", "-m", "one"]);
+        let tree = repo.join("tree");
+        let both = [
+            "rooftop/model.toml".to_owned(),
+            "rooftop/triage.toml".to_owned(),
+        ];
+        let model = ["rooftop/model.toml".to_owned()];
+        assert!(can_land(repo, &tree, "main", &both, true).is_ok());
+        assert!(landing_note(repo, "main", &both).is_none());
+        fs::write(repo.join("rooftop/triage.toml"), "[[item]]\n").unwrap();
+        let stop = can_land(repo, &tree, "main", &both, true).unwrap_err();
+        assert_eq!(stop.phase, "ready");
+        assert!(
+            stop.why
+                .contains("uncommitted changes to rooftop/triage.toml"),
+            "{}",
+            stop.why
+        );
+        // A dry run isn't stopped; it hears of it.
+        assert!(can_land(repo, &tree, "main", &both, false).is_ok());
+        let note = landing_note(repo, "main", &both).unwrap();
+        assert!(
+            note.starts_with("note: ") && note.contains("rooftop/triage.toml"),
+            "{note}"
+        );
+        // A patch that leaves the changed file alone lands.
+        assert!(can_land(repo, &tree, "main", &model, true).is_ok());
+        assert!(landing_note(repo, "main", &model).is_none());
+        // A file the patch adds, there untracked, is in the way too.
+        fs::write(repo.join("rooftop/new.toml"), "").unwrap();
+        let added = ["rooftop/new.toml".to_owned()];
+        assert!(
+            landing_note(repo, "main", &added)
+                .unwrap()
+                .contains("rooftop/new.toml")
+        );
     }
 }

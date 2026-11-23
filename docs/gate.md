@@ -101,7 +101,7 @@ The person's yes to a gate card is used only by the patch's own failure: a check
 
 | Phase | What stopped it |
 |---|---|
-| `ready` | Before the tree is touched: git's `index.lock` is in the gate's tree (another git, or a gate of another gp, works there), or, for a run that lands, the checkout where the branch is checked out has uncommitted changes to a file the patch changes, which `git merge --ff-only` would refuse (issue 45) |
+| `ready` | Before the tree is touched: git's `index.lock` is in the gate's tree (another git, or a gate of another gp, works there), or, for a run that lands, the checkout where the branch is checked out has uncommitted changes to a file the patch changes, which `git merge --ff-only` would refuse (issue 45). The model gate checks this before it lands a kept dry run's pass, so the pass is kept too and the run after the checkout is clean lands it with no scoring again. A dry run of either gate isn't stopped by that checkout, but it says so in a `note:` line naming the files, printed to stderr before any scoring and kept in its lines |
 | `checkout` | The gate's tree couldn't be reset and checked out at the tip |
 | `land` | The checks passed and git refused the landing |
 | `tip` | The tip moved on every try |

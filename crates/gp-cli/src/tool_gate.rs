@@ -1456,6 +1456,10 @@ fn tries_in(
         };
         return Ok(fail(f, lines));
     }
+    if dry_run && let Some(note) = gate::landing_note(&c.repo, &c.onto, &files) {
+        eprintln!("gp tool gate: {note}");
+        lines.push(note);
+    }
     for _ in 0..TIP_TRIES {
         let tip = git(&c.repo, &["rev-parse", &c.onto])?;
         let out = c.steps.time(
