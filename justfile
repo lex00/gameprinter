@@ -97,13 +97,12 @@ release-on-main label="latest":
 # checks it would pass or refuse, and what would be published where. A dry
 # run of chant release cut: cuts, tags, pushes and publishes nothing. Asks
 # GitHub for the commit's checks with `gh auth token` when GH_TOKEN is unset.
+# The archives come from the run's build jobs: for each one dist/ lacks, the
+# dry run records a stand-in, removed after (scripts/release/plan.sh).
 #   just release-plan
 #   just release-plan 0.2.0
 release-plan label="auto":
-    #!/usr/bin/env bash
-    set -euo pipefail
-    if [ -z "${GH_TOKEN:-}" ] && command -v gh >/dev/null; then GH_TOKEN=$(gh auth token 2>/dev/null || true); export GH_TOKEN; fi
-    bash scripts/release/chant.sh release cut {{quote(label)}} --dry-run
+    bash scripts/release/plan.sh {{quote(label)}}
 
 # Render .github/workflows/release.yml from chant.config.ts. Never edit that
 # file by hand. The first render replaces the hand-written build-only file,

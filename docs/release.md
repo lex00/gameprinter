@@ -7,7 +7,7 @@ Only the owner starts a release. An agent or a loop worker never runs `just rele
 ## Starting one
 
 1. Add a section to `CHANGELOG.md` for the version, `## gp 0.1.2` (a date may follow the version), with what changed, and land it on main.
-2. `just release-plan` (or `just release-plan 0.2.0`) prints what the release would cut from this checkout's commit: the label, whether the commit is pushed and green, the CHANGELOG check, and what goes where. It is `chant release cut LABEL --dry-run`: it cuts, tags, pushes and publishes nothing.
+2. `just release-plan` (or `just release-plan 0.2.0`) prints what the release would cut from this checkout's commit: the label, whether the commit is pushed and green, the CHANGELOG check, and what goes where. It is `chant release cut LABEL --dry-run` (`scripts/release/plan.sh`): it cuts, tags, pushes and publishes nothing. The dry run records the archives as the cut does, from `dist/`, and only the run's build jobs write them, so for each one `dist/` lacks the script writes a stand-in, says so on its first line, and removes it (and the `dist/SHA256SUMS` the dry run writes) after. The digests it shows for those files are the stand-ins', not the release's; an archive already in `dist/` is used as it is.
 3. `just release` (or `just release 0.2.0`) dispatches the workflow from main. `auto` takes the next version from the commits since the last release: gp's commits aren't conventional commits, so on 0.x that is the next patch. A minor or major release names its version.
 4. `just release` then waits for the run. Once the run passes it puts the released version on main (below). A failed run leaves main alone. If the wait is cut short (Ctrl-C, a closed terminal), run `just release-on-main latest` once the run has passed.
 
