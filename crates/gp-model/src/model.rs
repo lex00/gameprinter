@@ -1005,6 +1005,31 @@ pub struct BoardSprite {
     /// entry free after every body's own.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub extra: Vec<BoardSpriteExtra>,
+    /// Feature `sprite.board.hidden`: the frames the board draws none of
+    /// the body's sprites (its own and its `extra`) while the body stays
+    /// where it is, as a program that empties its draw list for a frame
+    /// and so copies none of an object it still places: one arcade game's
+    /// bar setup ($4937 calls $5E99, which empties the list at $E11A)
+    /// leaves its player out of sprite RAM for a frame.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hidden: Option<BoardHidden>,
+}
+
+/// When a body's board sprites are left out (feature
+/// `sprite.board.hidden`): while bit `bit` of byte `byte` of the body's
+/// `ext` word `word` is set, or without `bit` while that byte isn't 0.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct BoardHidden {
+    /// The `ext` word (0 to 3) that holds it.
+    pub word: u32,
+    /// Which byte of the word, 0 the lowest. Default 0.
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub byte: u32,
+    /// Which bit of the byte (0 to 7): hidden while it is set. Without
+    /// it, hidden while the byte isn't 0.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bit: Option<u32>,
 }
 
 /// Another sprite a body is drawn with (feature `sprite.board.extra`): its

@@ -236,6 +236,23 @@ flags = { word = 1, byte = 2 }       # and its flags
 
 Once every body has its own entry, the k-th of a body's other sprites drawn (k from 0) takes the entry k+1 after the body's own, as the program copies it there, so it stacks with its body; when that entry is taken or past 127 it takes the lowest entry still free, in the bodies' order. A sprite is drawn over the entries below its own and under those above. The screen measure puts a box over it down to its body (`gp picture`), as it does the body's own sprite.
 
+### A frame without the body's sprites
+
+A program that empties its draw list for a frame copies none of an object it still places and compares: Tapper's bar setup ($4937 calls $5E99, which empties the list at $E11A and waits) leaves the bartender out of sprite RAM for a frame. `hidden` (feature `sprite.board.hidden`) says which frames, from a byte of the body's words:
+
+```toml
+[entities.player.board_sprite]
+hidden = { word = 3, byte = 1, bit = 2 }   # while bit 2 of byte 1 of ext[3] is set
+```
+
+| Key | Meaning |
+|---|---|
+| `word` | Required: the `ext` word, 0 to 3 |
+| `byte` | Which byte of it, 0 the lowest. Default 0 |
+| `bit` | Which bit of the byte, 0 to 7: hidden while it is set. Without it, hidden while the byte isn't 0 |
+
+On such a frame the board draws neither the body's own sprite nor its `extra`, and they take no entry of sprite RAM, so the frame is drawn as if the body weren't shown; the body stays where it is, in play and in the comparison. `present.hidden` hides a body by its rule state, `blink` on odd frames and a look's `sprites_off` every sprite; this one is the board's own, by the body's words.
+
 Each of `picture` and `flags` is `{ word = W, byte = B }`, byte B (0 the lowest, default 0) of the body's `ext[W]` (W 0 to 3), or `{ number = N }`, N 0 to 255. A state mapping that reads two bytes into one word (`ram = [flags, picture]`) puts the first at byte 0 and the second at byte 1, so one word holds both.
 
 The body's position gives the entry's x and y. With the mapping's `board_units = true` (feature `platform.board_units`) the position is the board's own units, from the screen's top left with y down, and the board draws the 32 by 32 picture with its top left there, each unit two screen pixels: the entry holds the bytes that draw it there, `(x + 3, 241 - y)` (`gp_arcade::video::sprite_bytes`). Without it the position is the sprite RAM's own bytes, as the mapping reads them from the game's object slots (Tapper's model today), the entry holds them as they are, and the board draws the picture with its top left at `(x - 3, 241 - y)` units (`gp_arcade::video::sprite_place`). The two draw the same picture of the same frame, and a theme's picture of a sprite lands in the same place either way. An entity with a `board_sprite` is drawn only by the board; a body of an entity without one is still drawn by tile kind over the board's picture, placed the board's way.

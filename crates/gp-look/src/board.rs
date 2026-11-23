@@ -170,6 +170,9 @@ struct KindSprite {
     flip_when_facing_left: bool,
     /// Its other sprites (`board_sprite.extra`).
     extra: Vec<ExtraSprite>,
+    /// The frames none of them is drawn (`board_sprite.hidden`): a byte
+    /// of the body's words, and the bit of it that hides them (None: any).
+    hidden: Option<(Byte, Option<u32>)>,
 }
 
 /// One of a body's other sprites: its place from the body's, its picture
@@ -183,6 +186,14 @@ struct ExtraSprite {
 }
 
 impl KindSprite {
+    /// Whether the board leaves the body's sprites out this frame.
+    fn hides(&self, body: &gp_sim::world::Body) -> bool {
+        self.hidden.is_some_and(|(byte, bit)| {
+            let v = byte.read(body);
+            bit.map_or(v != 0, |k| v >> k.min(7) & 1 == 1)
+        })
+    }
+
     /// The entry's position bytes for a body at (x, y) in its own units.
     fn bytes(board_units: bool, x: i64, y: i64) -> (i64, i64) {
         if board_units {
@@ -836,6 +847,10 @@ impl BoardArt {
                             flip_when_facing_left: e.flip_when_facing_left,
                         })
                         .collect(),
+                    hidden: b
+                        .hidden
+                        .as_ref()
+                        .map(|h| (Byte::Word(h.word as usize, h.byte), h.bit)),
                 }))
             })
             .collect::<Result<Vec<_>, String>>()?;
@@ -943,10 +958,13 @@ impl BoardArt {
         let mut later = Vec::new();
         for (i, b) in w.bodies.iter().enumerate() {
             // A look with its sprites off draws none: the bodies stay in
-            // play, the board shows only its tile layer.
+            // play, the board shows only its tile layer. A body whose
+            // sprite is hidden this frame takes no entry either, as a
+            // program that copies nothing of an object it still places.
             if look.sprites_off
                 || !shown.get(i).copied().unwrap_or(false)
                 || !self.draws_kind(b.kind)
+                || matches!(self.kinds.get(b.kind), Some(Some(k)) if k.hides(b))
             {
                 continue;
             }
@@ -2574,6 +2592,82 @@ asset = "stage2"
         let p = art.draw(&w, &[true, true], &[5, 6]).unwrap();
         let entries: Vec<_> = p.drawn.iter().map(|d| (d.body, d.extra, d.entry)).collect();
         assert_eq!(entries, [(0, None, 5), (0, Some(0), 0), (1, None, 6)]);
+    }
+
+    /// A body whose `hidden` bit is set draws none of its sprites, its
+    /// own or its other ones, and takes no entry, while it stays where it
+    /// is; another body keeps its entry; with the bit clear it is drawn
+    /// as before.
+    #[test]
+    fn a_body_hidden_by_its_word_draws_no_board_sprite_that_frame() {
+        let dir = tempfile::tempdir().unwrap();
+        lift(dir.path());
+        let text = MODEL.replace(
+            "flags = { word = 1 }\n",
+            "flags = { word = 1 }\nhidden = { word = 3, byte = 1, bit = 2 }\n\n[[entities.player.board_sprite.extra]]\noffset = [16, 0]\npicture = { word = 2 }\n",
+        );
+        let model = Model::parse(&text).unwrap();
+        let errs: Vec<_> = gp_model::validate::validate(&model)
+            .into_iter()
+            .filter(|p| p.message != "no evidence covers this fact")
+            .collect();
+        assert!(errs.is_empty(), "{errs:?}");
+        assert!(model.features_used().contains("sprite.board.hidden"));
+        let lifted = gp_interp::Lifted::read_dir(dir.path(), &model).unwrap();
+        let spec = gp_interp::compile::compile(&model, &lifted).unwrap();
+        let art = BoardArt::load(&model, &spec, dir.path()).unwrap().unwrap();
+        let body = gp_sim::world::Body {
+            x: gp_sim::Fx::from_int(53),
+            y: gp_sim::Fx::from_int(191),
+            alive: true,
+            ext: [0, 0x0203, 1, 0],
+            ..Default::default()
+        };
+        let mut w = World::default();
+        w.bodies.push(body);
+        w.bodies.push(body);
+        w.bodies[1].ext[2] = 0;
+        let seen = |w: &World| {
+            let p = art.draw(w, &[true, true], &[0, 1]).unwrap();
+            p.drawn
+                .iter()
+                .map(|d| (d.body, d.extra, d.entry))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(seen(&w), [(0, None, 0), (0, Some(0), 2), (1, None, 1)]);
+        // Another bit of the byte, or the bit in another byte, hides nothing.
+        w.bodies[0].ext[3] = 0x0300 | 0x04;
+        assert_eq!(seen(&w).len(), 3);
+        w.bodies[0].ext[3] = 0x0400;
+        assert_eq!(seen(&w), [(1, None, 1)]);
+        let hidden = art.draw(&w, &[true, true], &[0, 1]).unwrap();
+        let lone = art.draw(&w, &[false, true], &[0, 1]).unwrap();
+        assert_eq!(hidden.pens, lone.pens, "drawn as if the body weren't shown");
+        assert_eq!((w.bodies[0].x, w.bodies[0].y), (body.x, body.y));
+        // Without `bit`, any bit of the byte hides it.
+        let text = text.replace(
+            "hidden = { word = 3, byte = 1, bit = 2 }",
+            "hidden = { word = 3, byte = 1 }",
+        );
+        let model = Model::parse(&text).unwrap();
+        let art2 = BoardArt::load(&model, &spec, dir.path()).unwrap().unwrap();
+        w.bodies[0].ext[3] = 0x0100;
+        let p = art2.draw(&w, &[true, true], &[0, 1]).unwrap();
+        assert_eq!(p.drawn.len(), 1);
+        w.bodies[0].ext[3] = 0x00ff;
+        let p = art2.draw(&w, &[true, true], &[0, 1]).unwrap();
+        assert_eq!(p.drawn.len(), 3);
+        // A bit past 7 is refused.
+        let bad = Model::parse(&text.replace(
+            "hidden = { word = 3, byte = 1 }",
+            "hidden = { word = 3, bit = 8 }",
+        ))
+        .unwrap();
+        assert!(
+            gp_model::validate::validate(&bad)
+                .iter()
+                .any(|p| p.message == "`bit` is 0 to 7")
+        );
     }
 
     /// A string drawn while its counter test holds, a byte a cell up to

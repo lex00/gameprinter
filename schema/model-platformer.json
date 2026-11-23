@@ -305,6 +305,37 @@
       ],
       "type": "object"
     },
+    "BoardHidden": {
+      "additionalProperties": false,
+      "description": "When a body's board sprites are left out (feature\n`sprite.board.hidden`): while bit `bit` of byte `byte` of the body's\n`ext` word `word` is set, or without `bit` while that byte isn't 0.",
+      "properties": {
+        "bit": {
+          "description": "Which bit of the byte (0 to 7): hidden while it is set. Without\nit, hidden while the byte isn't 0.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "byte": {
+          "description": "Which byte of the word, 0 the lowest. Default 0.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "word": {
+          "description": "The `ext` word (0 to 3) that holds it.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "word"
+      ],
+      "type": "object"
+    },
     "BoardLook": {
       "additionalProperties": false,
       "description": "Feature `level.board`: a level drawn as an arcade board draws its\npicture: the board's background tile layer from a whole screen, and\nthe board's colours, which the bodies' board sprites are drawn in too\n(docs/formats/board-art.md). Presentation only.",
@@ -507,6 +538,17 @@
         "flip_when_facing_left": {
           "description": "Mirrored left to right, on top of the flags' flip, while the body\nfaces left.",
           "type": "boolean"
+        },
+        "hidden": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BoardHidden"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Feature `sprite.board.hidden`: the frames the board draws none of\nthe body's sprites (its own and its `extra`) while the body stays\nwhere it is, as a program that empties its draw list for a frame\nand so copies none of an object it still places: one arcade game's\nbar setup ($4937 calls $5E99, which empties the list at $E11A)\nleaves its player out of sprite RAM for a frame."
         },
         "picture": {
           "$ref": "#/$defs/BoardByte",

@@ -451,6 +451,12 @@ pub const FEATURES: &[Feature] = &[
         &["entities.*.board_sprite.extra"],
     ),
     core(
+        "sprite.board.hidden",
+        "",
+        "A body whose arcade board sprites are left out on the frames a bit or byte of its words says, while the body stays in play",
+        &["entities.*.board_sprite.hidden"],
+    ),
+    core(
         "level.board",
         "",
         "A level drawn as an arcade board draws its picture: its background tile layer from a whole screen, in the board's colours",

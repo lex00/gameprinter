@@ -735,6 +735,17 @@ pub fn validate(model: &Model) -> Vec<Problem> {
                     _ => {}
                 }
             }
+            // Feature `sprite.board.hidden`.
+            if let Some(h) = &b.hidden {
+                let here = format!("{bat}.hidden");
+                if h.word > 3 {
+                    c.add(here, "`word` is 0 to 3");
+                } else if h.byte > 7 {
+                    c.add(here, "`byte` is 0 to 7");
+                } else if h.bit.is_some_and(|b| b > 7) {
+                    c.add(here, "`bit` is 0 to 7");
+                }
+            }
         }
         if let Some(s) = &e.core.sprite {
             want_slot(
