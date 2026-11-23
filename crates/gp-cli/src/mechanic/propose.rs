@@ -2,9 +2,11 @@
 //! the picture check finds (`gp picture --propose`) and what a worker finds
 //! while it works become rows with no card: status next, a note that
 //! starts "Proposed by the loop:" and says where it came from. A worker
-//! that proposes a row gives its test too (`--goal`), written to the
-//! game's triage.toml in the same call, so the triage tries the new row
-//! before an agent or the person does (docs/loop.md).
+//! that proposes a row gives its test too (`--goal`), written in the same
+//! call to the home's triage.toml for the game (beside its quest log, never
+//! the games checkout, which takes changes only through a gate), so the
+//! triage tries the new row before an agent or the person does
+//! (docs/loop.md).
 
 use std::fs;
 use std::path::Path;
@@ -294,7 +296,8 @@ pub(crate) fn slug(words: &str, max: usize) -> String {
 
 /// Adds the row unless the quest log has it (any status: a row the person
 /// finished or put out of scope stays so, unless seen in a new clip), and
-/// its test to triage.toml in `game_dir` unless an item names the row. A
+/// its test to the home's triage.toml for the game (triage::home_file)
+/// unless an item there or in `game_dir`'s names the row. A
 /// failure an open row has already (a `FILE:LINE FIELD` in from whose file
 /// and field that row's from or note names) is that row's: the step is
 /// added to its note, and the test goes under its name. A done row seen in
@@ -356,9 +359,10 @@ pub(crate) fn propose(paths: &Paths, game_dir: Option<&Path>, p: &Proposal) -> R
         .unwrap_or(p.row)
         .to_owned();
     let mut had_test = false;
+    let tests = super::triage::home_file(paths, p.game)?;
     if let Some(t) = &p.test {
-        let dir = game_dir.context("a row's test goes in the game's triage.toml: no games checkout found (pass --games or set GP_GAMES_DIR)")?;
-        had_test = super::triage::check_test(dir, &row, t.goal)?;
+        let dir = game_dir.context("a row's test is read with the game's names (probes.toml, triage.toml): no games checkout found (pass --games or set GP_GAMES_DIR)")?;
+        had_test = super::triage::check_test(dir, &tests, &row, t.goal)?;
     }
     let archived = in_archive.is_some();
     if let Some(r) = &in_archive
@@ -464,8 +468,12 @@ pub(crate) fn propose(paths: &Paths, game_dir: Option<&Path>, p: &Proposal) -> R
     }
     let mut wrote_test = None;
     if let (Some(t), false) = (&p.test, had_test) {
-        let dir = game_dir.expect("checked above");
-        let file = dir.join("triage.toml");
+        // The home's file, not the games checkout's: a change there lands
+        // only through a gate (triage::home_file).
+        let file = tests;
+        if let Some(d) = file.parent() {
+            fs::create_dir_all(d)?;
+        }
         let mut text = fs::read_to_string(&file).unwrap_or_default();
         if !text.is_empty() && !text.ends_with('\n') {
             text.push('\n');
@@ -575,10 +583,11 @@ mod tests {
     }
 
     /// A proposed row is next with the mark and where it came from; its
-    /// test lands in triage.toml once; a second proposal of the row changes
+    /// test lands once in the home's triage.toml for the game, the games
+    /// checkout's left as it was; a second proposal of the row changes
     /// nothing, and a row the person finished stays done.
     #[test]
-    fn a_proposed_row_is_next_with_its_test() {
+    fn a_proposed_row_is_next_with_its_test_in_the_home() {
         let d = tempfile::tempdir().unwrap();
         let home = d.path().join("home");
         let game = d.path().join("games/made-up");
@@ -606,20 +615,34 @@ mod tests {
             q[0]["note"],
             "Proposed by the loop: no clip shows a life lost (from a worker on get-ready-screen)"
         );
-        let t = fs::read_to_string(game.join("triage.toml")).unwrap();
+        assert_eq!(
+            fs::read_to_string(game.join("triage.toml")).unwrap(),
+            "[watch]\nlives = 0x10\n",
+            "the games checkout's triage.toml is left as it was"
+        );
+        let home_tests = super::super::triage::home_file(&p, "made-up").unwrap();
+        assert_eq!(v["test"], json!(home_tests.display().to_string()));
+        let t = fs::read_to_string(&home_tests).unwrap();
         assert!(
-            t.contains(
+            t.starts_with(
                 "[[item]]\nrow = \"lose-a-life\"\ngoal = \"lives == 2\"\ndo = \"Lose a life\""
             ),
             "{t}"
         );
-        assert!(super::super::triage::check_test(&game, "lose-a-life", "lives == 2").unwrap());
+        assert!(
+            super::super::triage::check_test(&game, &home_tests, "lose-a-life", "lives == 2")
+                .unwrap()
+        );
+        assert_eq!(
+            super::super::triage::item_rows(&game, &home_tests),
+            ["lose-a-life"]
+        );
 
         let again = propose(&p, Some(&game), &prop).unwrap();
         assert_eq!(again["added"], json!(false));
         assert_eq!(again["test"], json!(null));
         assert_eq!(
-            fs::read_to_string(game.join("triage.toml")).unwrap(),
+            fs::read_to_string(&home_tests).unwrap(),
             t,
             "the test is written once"
         );
@@ -1087,5 +1110,10 @@ mod tests {
         assert!(propose(&p, Some(&game), &prop).is_err());
         assert!(read_queue(&queue_file(&p, "made-up").unwrap()).is_empty());
         assert!(!game.join("triage.toml").exists());
+        assert!(
+            !super::super::triage::home_file(&p, "made-up")
+                .unwrap()
+                .exists()
+        );
     }
 }

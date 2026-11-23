@@ -1775,10 +1775,10 @@ pub(crate) fn gather(
     f.rom_found = !accepts.is_empty()
         && crate::roms::find(&accepts, &[], &paths.roms).is_ok_and(|m| !m.is_empty());
     // A plan with no items (gp game new's) gives the triage nothing to try.
-    f.triage_plan = std::fs::read_to_string(gdir.join("triage.toml"))
-        .ok()
-        .and_then(|t| t.parse::<toml::Table>().ok())
-        .is_some_and(|t| t.get("item").is_some());
+    // The rows the loop proposed have their items in the home's file.
+    let home_tests = home.join("mechanics").join(&g).join("triage.toml");
+    let item_rows = crate::mechanic::triage::item_rows(&gdir, &home_tests);
+    f.triage_plan = !item_rows.is_empty();
 
     // The model and mapping the run plays: the working copy once there is one.
     let rdir = home.join("work/serve").join(&g);
@@ -1810,13 +1810,8 @@ pub(crate) fn gather(
         .filter(|r| r["scope"] == json!("out"))
         .filter_map(|r| r["mechanic"].as_str().map(str::to_owned))
         .collect();
-    f.triage_rows = std::fs::read_to_string(gdir.join("triage.toml"))
-        .ok()
-        .and_then(|t| t.parse::<toml::Table>().ok())
-        .and_then(|t| t.get("item").and_then(|i| i.as_array()).cloned())
+    f.triage_rows = item_rows
         .into_iter()
-        .flatten()
-        .filter_map(|i| i.get("row").and_then(|r| r.as_str()).map(str::to_owned))
         .filter(|r| !out_of_scope.contains(r))
         .collect();
     for r in &queue {

@@ -3,7 +3,9 @@
 //!
 //! What a row has to show is written in the game's package folder as
 //! `triage.toml` (the format is below): a test on RAM that comes to hold
-//! when a clip shows it. Each tool tries in turn, with a budget counted in
+//! when a clip shows it. The rows the loop proposes have theirs in the
+//! home's own `$GP_HOME/mechanics/GAME/triage.toml` (`home_file`), read
+//! after the game's. Each tool tries in turn, with a budget counted in
 //! plays and tries, never in seconds, so every machine gets the same result:
 //! the corpus, the script and autoplay's logs are played to their end, and
 //! the search makes `--tries` runs. Only autoplay's own program has a time
@@ -122,16 +124,70 @@ struct Item {
     stop: String,
 }
 
+/// The home's own triage items for a game, `$GP_HOME/mechanics/GAME/
+/// triage.toml` beside its quest log: the tests `gp mechanic propose` gives
+/// the rows it adds. They stay in the home so a proposal never changes the
+/// games checkout, which takes a change only through a gate (docs/loop.md:
+/// a tools step's proposal left a game's triage.toml changed there, and
+/// `gp loop health` reported it). The triage reads them after the game's
+/// own triage.toml, whose item for a row wins.
+pub(crate) fn home_file(paths: &Paths, game: &str) -> Result<PathBuf> {
+    Ok(super::session::game_dir(paths, game)?.join("triage.toml"))
+}
+
+/// A triage.toml as a plan; none there, an empty one.
+fn read_plan(file: &Path) -> Result<Plan> {
+    match fs::read_to_string(file) {
+        Ok(t) => toml::from_str(&t).with_context(|| file.display().to_string()),
+        Err(_) => Ok(Plan::default()),
+    }
+}
+
+/// The game's plan, with the home's items for rows it has none for after
+/// its own, and the home's names for addresses it doesn't name.
+fn plan_of(game_dir: &Path, home: &Path) -> Result<Plan> {
+    let mut plan = read_plan(&game_dir.join("triage.toml"))?;
+    let more = read_plan(home)?;
+    for (k, v) in more.watch {
+        plan.watch.entry(k).or_insert(v);
+    }
+    for i in more.item {
+        if !plan.item.iter().any(|x| x.row == i.row) {
+            plan.item.push(i);
+        }
+    }
+    Ok(plan)
+}
+
+/// The rows the game's triage.toml or the home's has an item for, the
+/// game's first, each once; a file that doesn't read gives none.
+pub(crate) fn item_rows(game_dir: &Path, home: &Path) -> Vec<String> {
+    let mut rows: Vec<String> = Vec::new();
+    for f in [game_dir.join("triage.toml"), home.to_path_buf()] {
+        let items = fs::read_to_string(&f)
+            .ok()
+            .and_then(|t| t.parse::<toml::Table>().ok())
+            .and_then(|t| t.get("item").and_then(|i| i.as_array()).cloned())
+            .unwrap_or_default();
+        for r in items
+            .iter()
+            .filter_map(|i| i.get("row").and_then(|r| r.as_str()))
+        {
+            if !rows.iter().any(|x| x == r) {
+                rows.push(r.to_owned());
+            }
+        }
+    }
+    rows
+}
+
 /// Checks a test the way the triage reads it, with the names of the
-/// game's probes.toml and triage.toml, and says whether triage.toml has an
-/// item for `row` already. A test with `@K` bytes needs slots, which a
-/// proposed row's test has none of.
-pub(crate) fn check_test(game_dir: &Path, row: &str, goal: &str) -> Result<bool> {
-    let file = game_dir.join("triage.toml");
-    let plan: Plan = match fs::read_to_string(&file) {
-        Ok(t) => toml::from_str(&t).with_context(|| file.display().to_string())?,
-        Err(_) => Plan::default(),
-    };
+/// game's probes.toml and triage.toml, and says whether the game's
+/// triage.toml or the home's (`home`, [`home_file`]) has an item for `row`
+/// already. A test with `@K` bytes needs slots, which a proposed row's
+/// test has none of.
+pub(crate) fn check_test(game_dir: &Path, home: &Path, row: &str, goal: &str) -> Result<bool> {
+    let plan = plan_of(game_dir, home)?;
     let mut watch = probe::load(game_dir, None)
         .map(|(_, f)| f.watch)
         .unwrap_or_default();
@@ -711,11 +767,13 @@ pub(crate) fn run(paths: &Paths, a: &Args) -> Result<Outcome> {
     };
     let board = Board::of_rom(&rom.bytes)?;
     let platform = Platform::of_file(&rom.bytes);
-    let plan_file = game_dir.join("triage.toml");
-    let mut plan: Plan = match fs::read_to_string(&plan_file) {
-        Ok(t) => toml::from_str(&t).with_context(|| plan_file.display().to_string())?,
-        Err(_) => Plan::default(),
-    };
+    let home_plan = home_file(paths, a.game)?;
+    let mut plan = plan_of(&game_dir, &home_plan)?;
+    let plan_file = format!(
+        "{} (and {})",
+        game_dir.join("triage.toml").display(),
+        home_plan.display()
+    );
     // probes.toml's names, and the plan's over them.
     let mut watch = probe::load(&game_dir, None)
         .map(|(_, f)| f.watch)
@@ -811,8 +869,7 @@ pub(crate) fn run(paths: &Paths, a: &Args) -> Result<Outcome> {
         .collect();
     if items.is_empty() {
         bail!(
-            "nothing to triage: {} has no [[item]] for {}",
-            plan_file.display(),
+            "nothing to triage: {plan_file} has no [[item]] for {}",
             if a.rows.is_empty() {
                 "any row".to_owned()
             } else {
@@ -853,7 +910,7 @@ pub(crate) fn run(paths: &Paths, a: &Args) -> Result<Outcome> {
             })
         })
         .collect::<Result<_>>()
-        .with_context(|| plan_file.display().to_string())?;
+        .with_context(|| plan_file.clone())?;
     for i in &items {
         if let Some(t) = i.tools.iter().find(|t| !TOOLS.contains(&t.as_str())) {
             bail!("{}: no tool {t}: the tools are {}", i.row, TOOLS.join(", "));

@@ -62,7 +62,7 @@ pub(crate) mod review;
 pub(crate) mod scores;
 pub(crate) mod server;
 pub(crate) mod session;
-mod triage;
+pub(crate) mod triage;
 pub(crate) mod waits;
 pub(crate) mod watch;
 pub(crate) mod watch_page;
@@ -195,8 +195,9 @@ pub enum MechanicCmd {
     /// next, its note "Proposed by the loop: WHAT (from FROM)". A worker
     /// that finds a problem outside its own row proposes it here, with its
     /// test (`--goal`, and the request the triage gives the person), which
-    /// goes in the game's triage.toml in the same call so the triage tries
-    /// the row first. A row the quest log has (any status) is left as it is.
+    /// goes in the same call in the home's triage.toml for the game, beside
+    /// its quest log (never the games checkout), so the triage tries the
+    /// row first. A row the quest log has (any status) is left as it is.
     Propose {
         game: String,
         /// The new row's name: lower-case letters, digits and dashes.
