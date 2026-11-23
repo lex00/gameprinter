@@ -923,44 +923,85 @@ fn own_numbers(v: &Value, clip: &str) -> Option<Numbers> {
 /// A failed measure is tried again after this long, though nothing changed.
 const RETRY_MS: u64 = 10 * 60 * 1000;
 
+/// A line last measured at this share or better on both pictures (on its
+/// own draws, for an `own_draws` line) is near full.
+const NEAR_PCT: u64 = 95;
+
+/// Where an out-of-date line comes in the measurer's order: 0, a line not
+/// locked whose last measure was near full ([`NEAR_PCT`]), the lines a
+/// landing most likely moves to full or off it; 1, any other line not
+/// locked (one never measured too); 2, a line the owner locked, which the
+/// model gate holds already.
+fn rank(l: &Line, e: Option<&Entry>, looks: &[crate::approved::Look]) -> u8 {
+    let now = e.and_then(|e| e.now);
+    let total = now.filter(|_| !l.own_draws).map(|n| n.background[1]);
+    if !locked(looks, &l.clip, total).is_null() {
+        return 2;
+    }
+    let near = |f: [u64; 2]| f[1] > 0 && f[0] * 100 >= NEAR_PCT * f[1];
+    let is_near = now.is_some_and(|n| match (l.own_draws, n.own) {
+        (true, Some(o)) => near(o),
+        (true, None) => false,
+        (false, _) => near(n.background) && near(n.sprites),
+    });
+    if is_near { 0 } else { 1 }
+}
+
 /// The lines out of date in the games checkout, as (game, line, key): each
 /// game with a scoreboard file, each line whose kept key differs, or whose
-/// last measure failed long enough ago.
+/// last measure failed long enough ago; in the order they are measured
+/// ([`rank`]), and in the games' and their files' order within a rank. A
+/// line whose key a landing didn't change (a landing of another game, or
+/// of the game's corpus, themes or looks) isn't out of date.
 pub(crate) fn out_of_date(home: &Path, games: &Path, gp: &Path) -> Vec<(String, Line, String)> {
     let now = gp_mcp::asks::now_ms();
-    let mut out: Vec<(String, Line, String)> = Vec::new();
+    let mut out: Vec<(u8, String, Line, String)> = Vec::new();
     for g in crate::next::games_in(games) {
-        let Some(Ok(lines)) = lines(&games.join(&g)) else {
+        let dir = games.join(&g);
+        let Some(Ok(lines)) = lines(&dir) else {
             continue;
         };
         let cache = read_cache(home, &g);
+        let keys = KeyBase::of(home, &dir, &g);
+        let looks = crate::approved::read(&dir).unwrap_or_default();
         for l in lines {
-            let key = key_of(home, &games.join(&g), &g, &l.clip, gp);
-            let due = cache.lines.get(&l.slot()).is_none_or(|e| {
+            let key = keys.key(&dir, &l.clip, gp);
+            let e = cache.lines.get(&l.slot());
+            let due = e.is_none_or(|e| {
                 e.key != key || (e.error.is_some() && now.saturating_sub(e.measured_ms) > RETRY_MS)
             });
             if due
                 && !out
                     .iter()
-                    .any(|(og, ol, _)| og == &g && ol.slot() == l.slot())
+                    .any(|(_, og, ol, _)| og == &g && ol.slot() == l.slot())
             {
-                out.push((g.clone(), l, key));
+                out.push((rank(&l, e, &looks), g.clone(), l, key));
             }
         }
     }
-    out
+    out.sort_by_key(|(r, ..)| *r);
+    out.into_iter().map(|(_, g, l, k)| (g, l, k)).collect()
 }
 
-/// Measures every line out of date once, one clip at a time, with
-/// `run` doing the measure; the state is the gate's at the time.
+/// Measures the lines out of date, one clip at a time, with `run` doing the
+/// measure; the state is the gate's at the time. It picks the first line of
+/// [`out_of_date`] again after each measure, so a landing while it measures
+/// puts the near-full lines first again on their new keys, rather than the
+/// rest of the old list being measured on keys already out of date. A line
+/// is measured once a call on each key.
 pub(crate) fn refresh(
     home: &Path,
     games: &Path,
     gp: &Path,
     mut run: impl FnMut(&str, &Line) -> Result<Numbers, String>,
 ) {
-    for (g, line, key) in out_of_date(home, games, gp) {
+    let mut done = std::collections::BTreeSet::new();
+    while let Some((g, line, key)) = out_of_date(home, games, gp)
+        .into_iter()
+        .find(|(g, l, k)| !done.contains(&format!("{g}/{}/{k}", l.slot())))
+    {
         let slot = line.slot();
+        done.insert(format!("{g}/{slot}/{key}"));
         if let Ok(mut m) = MEASURING.lock() {
             *m = Some(format!("{g}/{slot}"));
         }
@@ -1998,6 +2039,121 @@ level = "field"
             Some("the title")
         );
         assert_eq!(target_line("no target here"), None);
+    }
+
+    /// The measurer's order (docs/loop.md, "The scoreboard"): a line not
+    /// locked and last near full on both pictures first, then the other
+    /// lines not locked (never measured too), then the locked ones; file
+    /// order within each. A landing that doesn't change a line's key leaves
+    /// it as it was, and one while it measures sends it back to the first.
+    #[test]
+    fn stale_lines_are_measured_near_full_first_and_locked_last() {
+        let d = tempfile::tempdir().unwrap();
+        let g = d.path().join("hop");
+        put(&g.join("model.toml"), "# a model\n");
+        let ids = ["far", "locked", "near", "half", "new", "own"];
+        let mut corpus = String::from("[corpus]\nformat = \"1.0.0\"\n");
+        let mut board = String::new();
+        for id in ids {
+            corpus.push_str(&format!(
+                "\n[[clip]]\nid = \"hop.{id}.001\"\nframes = 100\nlevel = \"{id}\"\n"
+            ));
+            let own = if id == "own" {
+                "own_draws = true\n"
+            } else {
+                ""
+            };
+            board.push_str(&format!(
+                "[[line]]\nname = \"{id}\"\nclip = \"hop.{id}.001\"\n{own}\n"
+            ));
+        }
+        put(&g.join("corpus.toml"), &corpus);
+        board_file(d.path(), &board);
+        put(
+            &g.join(crate::approved::FILE),
+            "[[look]]\nrow = \"confirm-locked\"\nclip = \"hop.locked.001\"\nframes = [0, 99]\nlook = \"game\"\napproved = \"2026-11-23\"\napart = [[0, 0, 0]]\n",
+        );
+        let home = tempfile::tempdir().unwrap();
+        let h = home.path();
+        let status = |m: &str| {
+            put(
+                &h.join("work/refine/hop/status.json"),
+                &format!(r#"{{"model": {{"hash": "{m}"}}, "clips": []}}"#),
+            )
+        };
+        status("m1");
+        let gp = h.join("bin/gp");
+        put(&gp, "a gp");
+        // What each line measures: near is 96 of 100 on both pictures;
+        // half only on the background; own draws 99 of 100.
+        let numbers = |l: &Line| match l.name.as_str() {
+            "own" => Numbers {
+                own: Some([99, 100]),
+                ..Numbers::default()
+            },
+            "near" | "locked" => Numbers {
+                background: [96, 100],
+                sprites: [96, 100],
+                ..Numbers::default()
+            },
+            "half" => Numbers {
+                background: [100, 100],
+                sprites: [94, 100],
+                ..Numbers::default()
+            },
+            _ => Numbers {
+                background: [40, 100],
+                sprites: [30, 100],
+                ..Numbers::default()
+            },
+        };
+        let order = || -> Vec<String> {
+            out_of_date(h, d.path(), &gp)
+                .into_iter()
+                .map(|(_, l, _)| l.name)
+                .collect()
+        };
+        // Nothing measured yet: file order, the locked line last.
+        assert_eq!(order(), ["far", "near", "half", "new", "own", "locked"]);
+        let mut measured = Vec::new();
+        refresh(h, d.path(), &gp, |_, l| {
+            measured.push(l.name.clone());
+            Ok(numbers(l))
+        });
+        assert_eq!(measured, ["far", "near", "half", "new", "own", "locked"]);
+        // A landing that changes none of the keys (the status written again
+        // on the same model, a clip added to the corpus, a look locked):
+        // nothing out of date.
+        put(
+            &h.join("work/refine/hop/status.json"),
+            r#"{"version": 2, "model": {"hash": "m1"}, "clips": [], "merges": [{"title": "a theme"}]}"#,
+        );
+        put(
+            &g.join("corpus.toml"),
+            &format!("{corpus}\n[[clip]]\nid = \"hop.more.001\"\nframes = 100\nlevel = \"more\"\n"),
+        );
+        assert!(order().is_empty(), "{:?}", order());
+        refresh(h, d.path(), &gp, |_, l| panic!("{} measured again", l.name));
+        // A landing of the model: the near-full lines not locked first,
+        // then the rest, the locked one last.
+        status("m2");
+        assert_eq!(order(), ["near", "own", "far", "half", "new", "locked"]);
+        // Another landing while the first line is measured: it starts again
+        // from the first on the new keys, and measures nothing on a key
+        // already out of date after it.
+        let mut measured = Vec::new();
+        refresh(h, d.path(), &gp, |_, l| {
+            measured.push(l.name.clone());
+            if measured.len() == 1 {
+                status("m3");
+            }
+            Ok(numbers(l))
+        });
+        assert_eq!(
+            measured,
+            ["near", "near", "own", "far", "half", "new", "locked"]
+        );
+        assert!(order().is_empty());
     }
 
     #[test]
