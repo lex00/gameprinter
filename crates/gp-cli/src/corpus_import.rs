@@ -213,6 +213,9 @@ pub(crate) struct Excluded {
 /// Frames and their spans.
 type Spans = (u64, Vec<String>);
 
+/// The arcade layout a clip's presses files name (none for NES buttons).
+type Layout = Option<gp_evidence::input_log::ArcadeLayout>;
+
 /// Spans as an NES `.presses` file's contents.
 fn nes_presses(s: &Spans) -> cs::Presses {
     cs::Presses {
@@ -235,8 +238,9 @@ struct Taken {
     body: Spans,
     /// `played`, or `scripted` when its presses are `[import.script]`'s.
     source: &'static str,
-    /// The arcade layout its own presses carry (a script's).
-    arcade: Option<gp_evidence::input_log::ArcadeLayout>,
+    /// The arcade layout both its presses files carry: the session log's,
+    /// or a script's.
+    arcade: Layout,
 }
 
 impl Taken {
@@ -458,14 +462,21 @@ fn take(
                 });
                 continue;
             }
-            let spans = |f: &[gp_evidence::InputFrame]| gp_evidence::input_log::spans_of(f);
+            // An arcade session's clip names its set's buttons and carries
+            // its `arcade` line, so it plays on that set's board (the page's
+            // player refuses NES presses there).
+            let spans = |f: &[gp_evidence::InputFrame]| match &log.arcade {
+                Some(a) => gp_evidence::input_log::arcade_spans_of(f, a),
+                None => gp_evidence::input_log::spans_of(f),
+            };
             let (Some(lead), Some(body)) = (
                 spans(&log.frames[..start]),
                 spans(&log.frames[start..start + frames]),
             ) else {
                 left.push(Left {
                     what,
-                    why: "presses reset or a third or fourth controller".into(),
+                    why: "presses reset, a third or fourth controller, or a column with no button"
+                        .into(),
                 });
                 continue;
             };
@@ -481,26 +492,42 @@ fn take(
                 lead: (start as u64, lead),
                 body: (frames as u64, body),
                 source: "played",
-                arcade: None,
+                arcade: log.arcade.clone(),
             });
         }
     }
     Ok((taken, left))
 }
 
-/// A recipe's start presses and own presses as read from the game's folder.
-fn recipe_inputs(dir: &Path, r: &Recipe) -> Option<(Spans, Spans)> {
-    let read = |p: &str| {
-        cs::parse_presses(&fs::read_to_string(dir.join(p)).ok()?)
-            .ok()
-            .map(|p| (p.frames, p.spans))
-    };
+/// A recipe's start presses and own presses as read from the game's folder,
+/// with the arcade layout its start file names.
+fn recipe_inputs(dir: &Path, r: &Recipe) -> Option<(Spans, Spans, Layout)> {
+    let read = |p: &str| cs::parse_presses(&fs::read_to_string(dir.join(p)).ok()?).ok();
     let lead = read(r.start.presses_from_power_on.as_deref()?)?;
     let body = match &r.presses_file {
-        Some(p) => read(p)?.1,
+        Some(p) => read(p)?.spans,
         None => r.presses.clone(),
     };
-    Some((lead, (r.frames, body)))
+    Some(((lead.frames, lead.spans), (r.frames, body), lead.arcade))
+}
+
+/// Whether two clips' own presses hold the same buttons on every frame,
+/// each read in its own layout: NES names and an arcade set's name the same
+/// bits differently.
+fn same_presses(a: &Spans, la: &Layout, b: &Spans, lb: &Layout) -> bool {
+    let pads = |s: &Spans, l: &Layout| {
+        let log = gp_evidence::InputLog::parse(&cs::log_of(s.0, &s.1, l.as_ref()).ok()?).ok()?;
+        Some(log.frames.iter().map(|f| f.pads).collect::<Vec<_>>())
+    };
+    pads(a, la).is_some_and(|x| Some(x) == pads(b, lb))
+}
+
+/// A layout in words.
+fn layout_words(l: &Layout) -> String {
+    l.as_ref().map_or_else(
+        || "NES buttons".to_owned(),
+        |a| format!("the arcade set {}'s buttons ({})", a.system, a.columns),
+    )
 }
 
 /// Whether a plan's clip is one the import makes: `played` or `scripted`,
@@ -560,18 +587,24 @@ struct Held {
     /// Frames from power-on to its start, in the plan and from the session
     /// (none when the plan's start presses can't be read).
     start: [Option<u64>; 2],
-    /// Whether its own presses differ.
+    /// Whether its own presses hold other buttons.
     presses_differ: bool,
+    /// The layout its files would name, when it isn't the one they name
+    /// (an arcade session's clip written with NES names, say).
+    layout: Option<String>,
 }
 
 impl Held {
-    fn new(r: &Recipe, old: Option<&(Spans, Spans)>, t: &Taken) -> Self {
+    fn new(r: &Recipe, old: Option<&(Spans, Spans, Layout)>, t: &Taken) -> Self {
         Held {
             id: r.id.clone(),
             name: r.name.clone(),
             frames: [r.frames, t.body.0],
             start: [old.map(|o| o.0.0), Some(t.lead.0)],
-            presses_differ: old.is_none_or(|o| o.1.1 != t.body.1),
+            presses_differ: old.is_none_or(|o| !same_presses(&o.1, &o.2, &t.body, &t.arcade)),
+            layout: old
+                .filter(|o| o.2 != t.arcade)
+                .map(|_| layout_words(&t.arcade)),
         }
     }
 
@@ -595,6 +628,9 @@ impl Held {
             )),
             [None, _] => what.push(format!("its start presses {are} written again")),
             _ => {}
+        }
+        if let Some(l) = &self.layout {
+            what.push(format!("its presses files {are} written in {l}"));
         }
         if self.presses_differ {
             what.push(format!("its presses {are} other presses"));
@@ -695,7 +731,7 @@ fn merge(
             Some(t) => {
                 done.insert(r.id.clone());
                 let was = recipe_inputs(dir, r);
-                if was == Some((t.lead.clone(), t.body.clone())) {
+                if was == Some((t.lead.clone(), t.body.clone(), t.arcade.clone())) {
                     m.kept += 1;
                 } else if !named(replace, &r.id) {
                     // A clip already in the plan changes only when the
@@ -1036,7 +1072,7 @@ pub(crate) fn run(a: &Args<'_>, paths: &Paths) -> Result<Outcome> {
         "added": m.added, "changed": m.changed, "removed": m.removed, "kept": m.kept,
         "held": m.held.iter().map(|h| json!({
             "id": h.id, "name": h.name, "frames": h.frames, "start": h.start,
-            "presses_differ": h.presses_differ, "says": h.says(),
+            "presses_differ": h.presses_differ, "layout": h.layout, "says": h.says(),
         })).collect::<Vec<_>>(),
         "replaces": replaces,
         "kept_without_session": m.unsessioned,
@@ -1380,6 +1416,97 @@ mod tests {
             panic!("a button the controls don't have was taken");
         };
         assert!(format!("{e:#}").contains("`jump`"), "{e:#}");
+    }
+
+    /// A clip of an arcade session is written in its set's buttons with the
+    /// `arcade` line on both files, so the page's arcade player takes it; a
+    /// clip an older import wrote with NES names is held, saying so, and
+    /// --replace writes it again with the same buttons held on every frame.
+    #[test]
+    fn an_arcade_sessions_clip_keeps_its_set_and_buttons() {
+        let d = tempfile::tempdir().unwrap();
+        let home = d.path().join("home");
+        let tpl = d.path().join("tpl");
+        let dir = home.join("mechanics/g/clear");
+        fs::create_dir_all(dir.join("clips")).unwrap();
+        fs::write(
+            dir.join("session.toml"),
+            "game = \"g\"\nmechanic = \"clear\"\nrom = \"ab\"\n",
+        )
+        .unwrap();
+        // Coin, start, then tap and up held together, from frame 20.
+        fs::write(
+            dir.join("clips/001.log"),
+            "gp-arcade-input 0\nsystem madeupa\ncolumns CSRLDUT\n4 .......\n3 C......\n5 .......\n2 .S.....\n6 .......\n4 .....UT\n6 .......\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.join("clips/001.toml"),
+            "by = \"player\"\nstart = 20\nframes = 10\nnote = \"the end\"\n",
+        )
+        .unwrap();
+        plan(&tpl, "");
+        let p = paths(&home);
+        let o = run(&args(&tpl, &home, true), &p).unwrap();
+        assert_eq!(o.json["added"], json!(["g.clear.001"]), "{}", o.text);
+        let start = fs::read_to_string(tpl.join("inputs/g.clear.001.start.presses")).unwrap();
+        let own = fs::read_to_string(tpl.join("inputs/g.clear.001.presses")).unwrap();
+        assert_eq!(
+            start,
+            "gp-presses 0\nframes 20\narcade madeupa CSRLDUT\ncoin@4-6\nstart1@12-13\n"
+        );
+        assert_eq!(
+            own,
+            "gp-presses 0\nframes 10\narcade madeupa CSRLDUT\nup+tap@0-3\n"
+        );
+        // The page plays it: the log the corpus gives is an arcade log of
+        // the set.
+        let loaded = crate::plan::load(&tpl).unwrap().unwrap();
+        let (log, at) = cs::recipe_log(&tpl, &loaded.set.clips[0]).unwrap().unwrap();
+        assert_eq!(at, 20);
+        assert_eq!(log.arcade.as_ref().unwrap().system, "madeupa");
+        assert_eq!(log.frames[20].pads[0], 0b110_0000);
+
+        // An older import's files: NES names for the same bits, no line.
+        fs::write(
+            tpl.join("inputs/g.clear.001.start.presses"),
+            "gp-presses 0\nframes 20\na@4-6\nb@12-13\n",
+        )
+        .unwrap();
+        fs::write(
+            tpl.join("inputs/g.clear.001.presses"),
+            "gp-presses 0\nframes 10\nleft+down@0-3\n",
+        )
+        .unwrap();
+        let o = run(&args(&tpl, &home, false), &p).unwrap();
+        let held = &o.json["held"][0];
+        assert_eq!(held["id"], "g.clear.001", "{}", o.text);
+        assert_eq!(held["presses_differ"], false, "{held}");
+        assert!(
+            held["says"]
+                .as_str()
+                .unwrap()
+                .contains("would be written in the arcade set madeupa's buttons (CSRLDUT)"),
+            "{held}"
+        );
+        let replace = ["g.clear.*".to_owned()];
+        let o = run(
+            &Args {
+                replace: &replace,
+                ..args(&tpl, &home, true)
+            },
+            &p,
+        )
+        .unwrap();
+        assert_eq!(o.json["changed"], json!(["g.clear.001"]), "{}", o.text);
+        assert_eq!(
+            fs::read_to_string(tpl.join("inputs/g.clear.001.start.presses")).unwrap(),
+            start
+        );
+        assert_eq!(
+            fs::read_to_string(tpl.join("inputs/g.clear.001.presses")).unwrap(),
+            own
+        );
     }
 
     /// Clips whose sessions aren't in the home are kept, and an import of
