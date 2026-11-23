@@ -2298,13 +2298,24 @@ pub(crate) fn run(a: &GateArgs, paths: &Paths) -> Result<Outcome> {
                 game.display()
             );
         }
-        if a.dry_run {
-            crate::gate_queue::lock_after_landings(&lock, &lane.queue_home(&home))?;
+        let turn = if a.dry_run {
+            crate::gate_queue::take_turn(
+                &lock,
+                &lane.queue_home(&home),
+                crate::gate_queue::Comer::DryRun,
+            )?
         } else {
             lock.lock()?;
-        }
-        let hold =
-            crate::gate_hold::Hold::take(&home, lane, what, Some(&steps_file(&home)), a.dry_run);
+            crate::gate_queue::Turn::default()
+        };
+        let hold = crate::gate_hold::Hold::take(
+            &home,
+            lane,
+            what,
+            Some(&steps_file(&home)),
+            a.dry_run,
+            &turn,
+        );
         match crate::gate_copy::open(&game, &home, &gp, a.message.as_deref())? {
             crate::gate_copy::Opened::Done(outcome) => return Ok(outcome),
             crate::gate_copy::Opened::Gate { repo, tree, diff } => {
@@ -2367,18 +2378,36 @@ pub(crate) fn run(a: &GateArgs, paths: &Paths) -> Result<Outcome> {
                 &file,
             )?);
         }
-        if a.dry_run {
-            crate::gate_queue::lock_after_landings(&lock, &lane.queue_home(&home))?;
-        } else {
-            lock.lock()?;
-        }
+        // Landings before dry runs, each oldest first (gate_queue::take_turn).
+        let turn = match (&ticket, a.dry_run) {
+            (_, true) => crate::gate_queue::take_turn(
+                &lock,
+                &lane.queue_home(&home),
+                crate::gate_queue::Comer::DryRun,
+            )?,
+            (Some(t), false) => crate::gate_queue::take_turn(
+                &lock,
+                &lane.queue_home(&home),
+                crate::gate_queue::Comer::Landing(t),
+            )?,
+            (None, false) => {
+                lock.lock()?;
+                crate::gate_queue::Turn::default()
+            }
+        };
         if let Some(t) = &ticket
             && let Some(o) = t.result()
         {
             return Ok(o);
         }
-        let hold =
-            crate::gate_hold::Hold::take(&home, lane, what, Some(&steps_file(&home)), a.dry_run);
+        let hold = crate::gate_hold::Hold::take(
+            &home,
+            lane,
+            what,
+            Some(&steps_file(&home)),
+            a.dry_run,
+            &turn,
+        );
         (repo, rel, onto, tree, file, hold)
     };
 

@@ -274,13 +274,17 @@ pub(crate) struct Hold {
 impl Hold {
     /// Writes the holder file for the gate that just took `home`'s lock of
     /// `lane` and starts its watch. `what` names the gate ("tool gate dry
-    /// run"), `steps` is the file it logs its steps to.
+    /// run"), `steps` is the file it logs its steps to, and `turn` how it
+    /// came to hold the lock (crate::gate_queue::take_turn): its lock line
+    /// says how long it waited, how many were ahead of it when it came and
+    /// how often it gave the lock back to one of them.
     pub(crate) fn take(
         home: &Path,
         lane: Lane,
         what: &str,
         steps: Option<&Path>,
         dry_run: bool,
+        turn: &crate::gate_queue::Turn,
     ) -> Self {
         let h = json!({
             "pid": std::process::id(),
@@ -292,7 +296,9 @@ impl Hold {
         });
         if let Some(s) = steps {
             *STEPS.lock().unwrap_or_else(|e| e.into_inner()) = Some(s.to_owned());
-            step("lock", 0.0, true, json!({"what": what}));
+            let mut more = turn.json();
+            more["what"] = json!(what);
+            step("lock", 0.0, true, more);
         }
         let file = holder_file(home, lane);
         let tmp = file.with_extension("tmp");
@@ -485,7 +491,14 @@ mod tests {
         lock.lock().unwrap();
         let steps = home.join("steps.jsonl");
         fs::write(&steps, "{}\n").unwrap();
-        let hold = Hold::take(home, Lane::Tool, "tool gate dry run", Some(&steps), false);
+        let hold = Hold::take(
+            home,
+            Lane::Tool,
+            "tool gate dry run",
+            Some(&steps),
+            false,
+            &Default::default(),
+        );
         let me = std::process::id();
         let line = health_line(home, Lane::Tool, now).unwrap().unwrap();
         assert!(
@@ -518,13 +531,27 @@ mod tests {
         let home = t.path();
         let model = open_lock(home, Lane::Model).unwrap();
         model.lock().unwrap();
-        let _m = Hold::take(home, Lane::Model, "model gate", None, false);
+        let _m = Hold::take(
+            home,
+            Lane::Model,
+            "model gate",
+            None,
+            false,
+            &Default::default(),
+        );
         let tool = open_lock(home, Lane::Tool).unwrap();
         assert!(
             tool.try_lock().is_ok(),
             "a model gate holds back no tool gate"
         );
-        let _t = Hold::take(home, Lane::Tool, "tool gate", None, false);
+        let _t = Hold::take(
+            home,
+            Lane::Tool,
+            "tool gate",
+            None,
+            false,
+            &Default::default(),
+        );
         assert!(lock_held(home, Lane::Model) && lock_held(home, Lane::Tool));
         assert!(
             open_lock(home, Lane::Model).unwrap().try_lock().is_err(),

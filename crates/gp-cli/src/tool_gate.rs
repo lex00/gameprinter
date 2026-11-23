@@ -1215,15 +1215,18 @@ pub(crate) fn run(a: &ToolGateArgs, paths: &Paths) -> Result<Outcome> {
         return Ok(fail_before_the_lock(a, phase, &why));
     }
     let waited = lock.try_lock().is_err();
-    if a.dry_run {
-        // A dry run goes after every landing waiting (gate_queue).
-        if !waited {
-            lock.unlock()?;
-        }
-        crate::gate_queue::lock_after_landings(&lock, &lane.queue_home(&home))?;
-    } else if waited {
-        lock.lock()?;
+    if !waited {
+        lock.unlock()?;
     }
+    // Landings before dry runs, each oldest first (gate_queue::take_turn).
+    let turn = crate::gate_queue::take_turn(
+        &lock,
+        &lane.queue_home(&home),
+        match &ticket {
+            Some(t) => crate::gate_queue::Comer::Landing(t),
+            None => crate::gate_queue::Comer::DryRun,
+        },
+    )?;
     if let Some(o) = ticket.as_ref().and_then(|t| t.result()) {
         return Ok(o);
     }
@@ -1242,6 +1245,7 @@ pub(crate) fn run(a: &ToolGateArgs, paths: &Paths) -> Result<Outcome> {
         },
         Some(&tool.join("steps.jsonl")),
         a.dry_run,
+        &turn,
     );
     fs::create_dir_all(&tool)?;
     let patch_bytes = fs::read(&a.patch).with_context(|| a.patch.display().to_string())?;
