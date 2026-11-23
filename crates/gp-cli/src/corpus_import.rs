@@ -511,6 +511,26 @@ fn recipe_inputs(dir: &Path, r: &Recipe) -> Option<(Spans, Spans, Layout)> {
     Some(((lead.frames, lead.spans), (r.frames, body), lead.arcade))
 }
 
+/// A played clip the plan already has on an arcade set, as the session
+/// gives it on that set. A session log's `system` line names the set loaded
+/// when the clip was saved (the page's picker's, or an older triage's), and
+/// session.toml's `rom` only the set the session was first made on; the
+/// plan's set is the one the clip is scored and played on, chosen when it
+/// was imported or curated, so a log naming another set with the same
+/// button columns doesn't move it. None when the sets agree, the clip is
+/// scripted, or the columns differ (then the clip is held, saying so).
+fn in_plan_set(t: &Taken, was: Option<&(Spans, Spans, Layout)>) -> Option<Taken> {
+    let (Some(plan), Some(log)) = (was.and_then(|w| w.2.as_ref()), t.arcade.as_ref()) else {
+        return None;
+    };
+    (t.source == "played" && plan.system != log.system && plan.columns == log.columns).then(|| {
+        Taken {
+            arcade: Some(plan.clone()),
+            ..t.clone()
+        }
+    })
+}
+
 /// Whether two clips' own presses hold the same buttons on every frame,
 /// each read in its own layout: NES names and an arcade set's name the same
 /// bits differently.
@@ -572,6 +592,9 @@ struct Merged {
     /// Clips the sessions would change that `--replace` doesn't name:
     /// kept as they are.
     held: Vec<Held>,
+    /// Clips that keep the plan's arcade set though their session's log
+    /// names another ([`in_plan_set`]): ID, the plan's set, the log's.
+    other_set: Vec<(String, String, String)>,
     kept: usize,
     /// The plan's own clips no session gives, kept as they are.
     unsessioned: Vec<String>,
@@ -676,6 +699,7 @@ fn merge(
         changed: Vec::new(),
         removed: Vec::new(),
         held: Vec::new(),
+        other_set: Vec::new(),
         kept: 0,
         unsessioned: Vec::new(),
     };
@@ -731,6 +755,19 @@ fn merge(
             Some(t) => {
                 done.insert(r.id.clone());
                 let was = recipe_inputs(dir, r);
+                let other = in_plan_set(t, was.as_ref());
+                if let Some(o) = &other {
+                    m.other_set.push((
+                        r.id.clone(),
+                        o.arcade
+                            .as_ref()
+                            .map_or_else(String::new, |a| a.system.clone()),
+                        t.arcade
+                            .as_ref()
+                            .map_or_else(String::new, |a| a.system.clone()),
+                    ));
+                }
+                let t: &Taken = other.as_ref().unwrap_or(*t);
                 if was == Some((t.lead.clone(), t.body.clone(), t.arcade.clone())) {
                     m.kept += 1;
                 } else if !named(replace, &r.id) {
@@ -1015,6 +1052,19 @@ pub(crate) fn run(a: &Args<'_>, paths: &Paths) -> Result<Outcome> {
             h.id
         ));
     }
+    if !m.other_set.is_empty() {
+        let each: Vec<String> = m
+            .other_set
+            .iter()
+            .map(|(id, plan, log)| format!("{id} ({plan}; its log {log})"))
+            .collect();
+        text.push(format!(
+            "{} clip{} keep the plan's arcade set, though the session's log names the set loaded when it was saved: {}",
+            m.other_set.len(),
+            if m.other_set.len() == 1 { "" } else { "s" },
+            each.join(", ")
+        ));
+    }
     let left_of = |id: &str| {
         left.iter().find(|l| {
             id.ends_with(&format!(".{}", l.what)) || id.split('.').nth(1) == Some(l.what.as_str())
@@ -1056,7 +1106,11 @@ pub(crate) fn run(a: &Args<'_>, paths: &Paths) -> Result<Outcome> {
             .iter()
             .find(|r| &r.id == id)
             .zip(taken.iter().find(|t| &t.id == id))
-            .map(|(r, t)| Held::new(r, recipe_inputs(&dir, r).as_ref(), t));
+            .map(|(r, t)| {
+                let was = recipe_inputs(&dir, r);
+                let other = in_plan_set(t, was.as_ref());
+                Held::new(r, was.as_ref(), other.as_ref().unwrap_or(t))
+            });
         let says = h.map_or_else(
             || format!("{id}: its recipe is written again"),
             |h| h.says_as(true),
@@ -1075,6 +1129,9 @@ pub(crate) fn run(a: &Args<'_>, paths: &Paths) -> Result<Outcome> {
             "presses_differ": h.presses_differ, "layout": h.layout, "says": h.says(),
         })).collect::<Vec<_>>(),
         "replaces": replaces,
+        "other_set": m.other_set.iter().map(|(id, plan, log)| json!({
+            "id": id, "plan": plan, "log": log,
+        })).collect::<Vec<_>>(),
         "kept_without_session": m.unsessioned,
         "left_out": left.iter().map(|l| json!({"what": l.what, "why": l.why})).collect::<Vec<_>>(),
         "step": step, "written": false,
@@ -1506,6 +1563,106 @@ mod tests {
         assert_eq!(
             fs::read_to_string(tpl.join("inputs/g.clear.001.presses")).unwrap(),
             own
+        );
+    }
+
+    /// A session made on one set whose clip was saved with another loaded
+    /// (the page's picker, an older triage) gives a log naming that other
+    /// set. A clip the plan already has on its own set keeps it: a plain
+    /// import keeps the clip as it is, not held, and names the log's set;
+    /// --replace writes the session's new presses on the plan's set. A log
+    /// on a set with other button columns is held, saying so.
+    #[test]
+    fn a_clip_saved_on_another_set_keeps_the_plans_set() {
+        let d = tempfile::tempdir().unwrap();
+        let home = d.path().join("home");
+        let tpl = d.path().join("tpl");
+        let dir = home.join("mechanics/g/clear");
+        fs::create_dir_all(dir.join("clips")).unwrap();
+        // The session was made on the scored set, ab.
+        fs::write(
+            dir.join("session.toml"),
+            "game = \"g\"\nmechanic = \"clear\"\nrom = \"ab\"\n",
+        )
+        .unwrap();
+        let log = |system: &str, columns: &str, last: &str| {
+            fs::write(
+                dir.join("clips/001.log"),
+                format!(
+                    "gp-arcade-input 0\nsystem {system}\ncolumns {columns}\n4 .......\n3 C......\n13 .......\n{last}\n6 .......\n"
+                ),
+            )
+            .unwrap();
+        };
+        fs::write(
+            dir.join("clips/001.toml"),
+            "by = \"tools\"\nstart = 20\nframes = 10\nnote = \"the end\"\n",
+        )
+        .unwrap();
+        // First imported while the log said madeupa: the plan's set.
+        log("madeupa", "CSRLDUT", "4 .....UT");
+        plan(&tpl, "");
+        let p = paths(&home);
+        let o = run(&args(&tpl, &home, true), &p).unwrap();
+        assert_eq!(o.json["added"], json!(["g.clear.001"]), "{}", o.text);
+        let own = fs::read_to_string(tpl.join("inputs/g.clear.001.presses")).unwrap();
+        assert_eq!(
+            own,
+            "gp-presses 0\nframes 10\narcade madeupa CSRLDUT\nup+tap@0-3\n"
+        );
+
+        // The clip's log now names madeupb, the set loaded when it was
+        // saved: the plan's madeupa stays, and nothing is held.
+        log("madeupb", "CSRLDUT", "4 .....UT");
+        let o = run(&args(&tpl, &home, false), &p).unwrap();
+        assert_eq!(o.json["held"], json!([]), "{}", o.text);
+        assert_eq!(o.json["kept"], 1, "{}", o.text);
+        assert_eq!(
+            o.json["other_set"],
+            json!([{"id": "g.clear.001", "plan": "madeupa", "log": "madeupb"}])
+        );
+        assert!(
+            o.text.contains("g.clear.001 (madeupa; its log madeupb)"),
+            "{}",
+            o.text
+        );
+
+        // New presses from the session, replaced: still on madeupa.
+        log("madeupb", "CSRLDUT", "4 ......T");
+        let replace = ["g.clear.001".to_owned()];
+        let o = run(
+            &Args {
+                replace: &replace,
+                ..args(&tpl, &home, true)
+            },
+            &p,
+        )
+        .unwrap();
+        assert_eq!(o.json["changed"], json!(["g.clear.001"]), "{}", o.text);
+        let says = o.json["replaces"][0]["says"].as_str().unwrap();
+        assert!(!says.contains("written in"), "{says}");
+        assert_eq!(
+            fs::read_to_string(tpl.join("inputs/g.clear.001.presses")).unwrap(),
+            "gp-presses 0\nframes 10\narcade madeupa CSRLDUT\ntap@0-3\n"
+        );
+        assert!(
+            fs::read_to_string(tpl.join("inputs/g.clear.001.start.presses"))
+                .unwrap()
+                .contains("arcade madeupa CSRLDUT\n")
+        );
+
+        // A set with other button columns is another board: held.
+        log("madeupc", "CSRLDTU", "4 .....T.");
+        let o = run(&args(&tpl, &home, false), &p).unwrap();
+        assert_eq!(o.json["other_set"], json!([]), "{}", o.text);
+        let held = &o.json["held"][0];
+        assert_eq!(held["id"], "g.clear.001", "{}", o.text);
+        assert!(
+            held["says"]
+                .as_str()
+                .unwrap()
+                .contains("would be written in the arcade set madeupc's buttons (CSRLDTU)"),
+            "{held}"
         );
     }
 
