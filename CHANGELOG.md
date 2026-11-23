@@ -2,6 +2,14 @@
 
 Each release of gp has a section here, `## gp VERSION` (a date may follow), and its GitHub release's notes are that section. A release is refused before it is cut when its section is missing ([docs/release.md](docs/release.md)). Add the next one in a commit to main before `just release`.
 
+## gp 0.1.7
+
+The model gate stops scoring a tree it has just scored. It keeps the score of each commit it lands, and of each dry run that passes, so the next run reads the tip's score in place of measuring every clip again. On a game with 86 clips that step took about eight and a half minutes after every landing; now it takes none. The newest 32 scores are kept.
+
+`gp package scan` no longer reads gp's own score records as ROM data. A record holds thousands of frame counts, and ten of them in a row once matched a table by chance and refused a landing that added a clip. Numbers under any other key, and every other file, are compared as before.
+
+Windows builds are still to come.
+
 ## gp 0.1.6
 
 The controls feel like the cabinet's. The screen reads the controls at each game frame's own time, so a quick tap or a late release lands on the frame you made it. On an arcade layout the gamepad's right stick taps when pushed any way, read by how far it has travelled. Three timing settings sit under CONTROLS' TIMING for a controller that needs them, and play has a GAME SPEED.
