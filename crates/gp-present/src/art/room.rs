@@ -52,6 +52,12 @@
 //!   one of `<` `<=` `==` `!=` `>=` `>`, a whole number), that piece is
 //!   drawn instead of the cycle's; the first such line that holds wins. A
 //!   counter the model hasn't got holds no test.
+//! - `#+ room_react_drift VX VY PER`, after a `room_react`: the piece moves
+//!   `VX, VY` screen pixels (whole numbers, either may be negative or 0,
+//!   not both) every `PER` game frames from where it is placed, counted on
+//!   the game's frame number as its cycle is; once it has left the screen
+//!   by one edge it comes back in by the other. A cloud, a blimp, a bird.
+//!   Where its cell is mirrored it drifts the other way.
 //!
 //! - `#+ room_mask CLASS PIECE TEST...`: the piece laid on the class's
 //!   cells, cell by cell as a fill of one cell, but only on the cell's own
@@ -134,6 +140,9 @@ pub struct React {
     pub cycle: Vec<(String, u64)>,
     /// Each piece drawn instead while every test holds.
     pub when: Vec<(String, Vec<CounterTest>)>,
+    /// `#+ room_react_drift VX VY PER`: it moves `VX, VY` screen pixels
+    /// every `PER` game frames, wrapping round the screen.
+    pub drift: Option<([i64; 2], u64)>,
 }
 
 impl React {
@@ -179,14 +188,43 @@ impl React {
 pub struct Live {
     pub react: React,
     pub draws: Vec<Option<StageDraw>>,
+    /// The screen's size in stage pixels and the stage's scale, which a
+    /// drift moves in and wraps round.
+    pub screen: [i64; 2],
+    pub scale: i64,
 }
 
 impl Live {
-    /// Its draw on game frame `frame` ([`React::shown`]), if any.
-    pub fn draw(&self, frame: u64, holds: impl Fn(&str, &str, i64) -> bool) -> Option<&StageDraw> {
-        self.draws
+    /// Its draw on game frame `frame` ([`React::shown`]), if any, moved by
+    /// its drift: `VX, VY` screen pixels each `PER` frames from where it is
+    /// placed (`VX` the other way where its cell is mirrored), and once it
+    /// has left the screen by one edge, coming back in by the other.
+    pub fn draw(&self, frame: u64, holds: impl Fn(&str, &str, i64) -> bool) -> Option<StageDraw> {
+        let mut d = self
+            .draws
             .get(self.react.shown(frame, holds))
-            .and_then(Option::as_ref)
+            .and_then(Option::as_ref)?
+            .clone();
+        let Some(([vx, vy], per)) = self.react.drift else {
+            return Some(d);
+        };
+        let vx = if d.flip_x { -vx } else { vx };
+        let f = i64::try_from(frame).unwrap_or(i64::MAX / 2);
+        let per = i64::try_from(per.max(1)).unwrap_or(1);
+        // Whole frames of the step, at the stage's own pixels, so a piece
+        // at scale 2 moves a stage pixel at a time rather than two.
+        let go = |v: i64| (v * self.scale).saturating_mul(f).div_euclid(per);
+        // From just off one edge to just off the other, then round again.
+        let wrap = |at: i64, size: i64, room: i64| (at + size).rem_euclid(room + size) - size;
+        if vx != 0 {
+            d.x = wrap(d.x + go(vx), d.w, self.screen[0]);
+        }
+        if vy != 0 {
+            d.y = wrap(d.y + go(vy), d.h, self.screen[1]);
+        }
+        // Half off an edge, it shows only its part on the screen.
+        d.clip = Some([0, 0, self.screen[0], self.screen[1]]);
+        Some(d)
     }
 }
 
@@ -328,6 +366,22 @@ impl RoomRules {
                 }
                 r.when.push(((*p).to_owned(), when));
             }
+            ["room_react_drift", vx, vy, per] => {
+                let room = rooms.last_mut().ok_or(())?;
+                let Some(Place {
+                    lay: Lay::React(r, _),
+                    ..
+                }) = room.places.last_mut()
+                else {
+                    return Err(());
+                };
+                let v: [i64; 2] = [vx.parse().map_err(|_| ())?, vy.parse().map_err(|_| ())?];
+                let per: u64 = per.parse().map_err(|_| ())?;
+                if r.drift.is_some() || per == 0 || v == [0, 0] || v.iter().any(|n| n.abs() > 64) {
+                    return Err(());
+                }
+                r.drift = Some((v, per));
+            }
             [
                 k
                 @ ("room_fill" | "room_run" | "room_box" | "room_at" | "room_mask" | "room_react"),
@@ -376,7 +430,7 @@ impl RoomRules {
                         Lay::React(
                             React {
                                 cycle,
-                                when: Vec::new(),
+                                ..React::default()
                             },
                             [dx.parse().map_err(|_| ())?, dy.parse().map_err(|_| ())?],
                         )
@@ -745,6 +799,8 @@ pub fn build_seeded(st: &StageRules, r: &RoomRules, cells: &Cells, seed: u64) ->
                             .iter()
                             .map(|p| Some(at(i, piece(p)?, *d)))
                             .collect(),
+                        screen: [cols as i64 * side, rows as i64 * side],
+                        scale: s,
                     });
                 }
             }
@@ -1001,6 +1057,108 @@ mod tests {
             let w: Vec<&str> = bad.split_whitespace().collect();
             assert_ne!(
                 RoomRules::line(&mut rooms, Some(&st), &w, 5),
+                Ok(true),
+                "{bad}"
+            );
+        }
+    }
+
+    /// `#+ room_react_drift` moves its piece by the game's frame from where
+    /// `room_react` places it, the other way where the cell is mirrored,
+    /// out by one edge of the screen and back in by the other, cut to the
+    /// screen; it keeps the cycle's pictures. Lines it can't read are
+    /// refused.
+    #[test]
+    fn a_drifting_piece_crosses_the_screen_and_wraps_round() {
+        let (st, r) = rules(&[
+            "room s",
+            "room_cells door tile=3",
+            "room_react door 0 0 top:4 end:4",
+            "room_react_drift 1 0 2",
+        ]);
+        let Lay::React(react, _) = &r.places[0].lay else {
+            panic!("{:?}", r.places[0].lay)
+        };
+        assert_eq!(react.drift, Some(([1, 0], 2)));
+        let mut sc = screen();
+        sc.cells[16].flip[0] = true;
+        let room = build(&st, &r, &sc);
+        let (a, b) = (&room.live[0], &room.live[1]);
+        let none = |_: &str, _: &str, _: i64| false;
+        // One screen pixel each 2 frames is one stage pixel a frame at
+        // scale 2; the screen is 8 cells of 32 stage pixels, 256 wide; the
+        // top is 32 wide.
+        let at = |l: &Live, f: u64| {
+            let d = l.draw(f, none).unwrap();
+            (d.x, d.y)
+        };
+        assert_eq!(at(a, 0), (0, 32));
+        assert_eq!(at(a, 3), (3, 32));
+        // Its last pixel on the right edge, then just off the left, then
+        // coming in by it.
+        assert_eq!(at(a, 255), (255, 32));
+        assert_eq!(at(a, 256), (-32, 32));
+        assert_eq!(at(a, 257), (-31, 32));
+        // Round in 256 + 32 frames, back where it started.
+        assert_eq!(at(a, 288), (0, 32));
+        assert_eq!(at(a, 290), at(a, 2));
+        // The cycle runs as it would standing still: end on frame 4.
+        assert_eq!(a.draw(4, none).unwrap().src, StageSrc::Piece(2));
+        assert_eq!(a.draw(4, none).unwrap().x, 4);
+        // Cut to the screen, in stage pixels.
+        assert_eq!(a.draw(257, none).unwrap().clip, Some([0, 0, 256, 192]));
+        // The mirrored cell's goes left.
+        assert_eq!(at(b, 0), (0, 64));
+        assert_eq!(at(b, 10), (-10, 64));
+        assert_eq!(at(b, 33), (256 - 1, 64));
+        // Up the screen (192 high), the top 16 high: off the top, in at
+        // the bottom.
+        let (st, r) = rules(&[
+            "room s",
+            "room_cells door tile=3",
+            "room_react door 0 0 top:1",
+            "room_react_drift 0 -2 1",
+        ]);
+        let room = build(&st, &r, &screen());
+        let l = &room.live[0];
+        assert_eq!(at(l, 4), (0, 32 - 16));
+        assert_eq!(at(l, 12), (0, 32 - 48));
+        // At -20 it would be 4 past just off the top (-16), so it stands 4
+        // above just off the bottom (192).
+        assert_eq!(at(l, 13), (0, 192 - 4));
+        // Without a drift, where room_react places it, and not cut.
+        let (st, r) = rules(&[
+            "room s",
+            "room_cells door tile=3",
+            "room_react door 0 0 top:1",
+        ]);
+        let room = build(&st, &r, &screen());
+        let d = room.live[0].draw(500, none).unwrap();
+        assert_eq!((d.x, d.y, d.clip), (0, 32, None));
+        // Refused: no react before it, a second drift, no frames, no
+        // motion, a word that isn't a number, too fast.
+        let mut rooms = Vec::new();
+        for l in ["room s", "room_cells c", "room_at c wall 0 0"] {
+            let w: Vec<&str> = l.split_whitespace().collect();
+            RoomRules::line(&mut rooms, Some(&st), &w, 1).unwrap();
+        }
+        let w: Vec<&str> = "room_react_drift 1 0 1".split_whitespace().collect();
+        assert_eq!(RoomRules::line(&mut rooms, Some(&st), &w, 4), Err(()));
+        for l in ["room_react c 0 0 wall:3", "room_react_drift 1 0 1"] {
+            let w: Vec<&str> = l.split_whitespace().collect();
+            RoomRules::line(&mut rooms, Some(&st), &w, 5).unwrap();
+        }
+        for bad in [
+            "room_react_drift 1 0 1",
+            "room_react_drift 1 0 0",
+            "room_react_drift 0 0 3",
+            "room_react_drift x 0 3",
+            "room_react_drift 99 0 3",
+            "room_react_drift 1 0",
+        ] {
+            let w: Vec<&str> = bad.split_whitespace().collect();
+            assert_ne!(
+                RoomRules::line(&mut rooms, Some(&st), &w, 6),
                 Ok(true),
                 "{bad}"
             );

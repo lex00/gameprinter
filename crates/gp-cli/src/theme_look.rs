@@ -1475,8 +1475,9 @@ fn added_checks(
             "room_run" => "`#+ room_run` takes a class its room gives and three pieces, left, middle and right, `-` for none".to_owned(),
             "room_react" => "`#+ room_react` takes a class its room gives, its offset DX DY in screen pixels, then each piece of its cycle with the game frames it holds, PIECE:FRAMES (1 or more), and no pick=".to_owned(),
             "room_react_when" => "`#+ room_react_when` comes after a `#+ room_react` and takes a piece and one or more tests, COUNTER CMP VALUE, CMP one of < <= == != >= >".to_owned(),
+            "room_react_drift" => "`#+ room_react_drift` comes once after a `#+ room_react` and takes VX VY, the screen pixels it moves (whole numbers from -64 to 64, not both 0), and PER, the game frames each move takes (1 or more)".to_owned(),
             "" => "it says nothing after `#+`".to_owned(),
-            w => format!("no page knows `#+ {w}`; the lines are `#+ hud_over`, `#+ in`, `#+ on` and the room lines (`#+ room`, `room_cells`, `room_fill`, `room_run`, `room_box`, `room_at`, `room_react`, `room_react_when`, `room_front`, `room_mask`), and `#+ recolor`"),
+            w => format!("no page knows `#+ {w}`; the lines are `#+ hud_over`, `#+ in`, `#+ on` and the room lines (`#+ room`, `room_cells`, `room_fill`, `room_run`, `room_box`, `room_at`, `room_react`, `room_react_when`, `room_react_drift`, `room_front`, `room_mask`), and `#+ recolor`"),
         };
         r.add(
             Group::Files,

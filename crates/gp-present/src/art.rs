@@ -1215,7 +1215,8 @@ impl Art {
     }
 
     /// The `#+ room_react` pieces of the room over screen picture `pic` as
-    /// shown on game frame `frame`, `holds` answering each `when` test
+    /// shown on game frame `frame` (and where a `#+ room_react_drift` has
+    /// moved them by then), `holds` answering each `when` test
     /// (a counter's name, its comparison and the value): each one's draw
     /// in the window, its top left at the screen's `[ox, oy]` (window
     /// pixels), to paint over the room and under the bodies.
@@ -1244,6 +1245,15 @@ impl Art {
                     d.h * u / s,
                 );
                 a.flip_x = d.flip_x;
+                // A drifting piece is cut to its screen.
+                a.clip = d.clip.map(|[x, y, w, h]| {
+                    [
+                        origin[0] * u + x * u / s,
+                        origin[1] * u + y * u / s,
+                        w * u / s,
+                        h * u / s,
+                    ]
+                });
                 Some(a)
             })
             .collect()
