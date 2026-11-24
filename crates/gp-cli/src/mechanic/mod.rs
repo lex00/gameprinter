@@ -527,8 +527,10 @@ pub enum MechanicCmd {
         /// in a loop) or A (stood still there).
         #[arg(long, requires = "clip")]
         frames: Option<String>,
-        /// The pictures to judge it in: a theme of the game (last-call), or
-        /// game for the game's own.
+        /// The pictures to judge it in: a theme of the game (last-call), a
+        /// theme's folder (rooftop/themes/last-call, ~/my-theme: gp serve's
+        /// screen draws it as it is on disk, no other server), or game for
+        /// the game's own.
         #[arg(long, requires = "clip")]
         look: Option<String>,
         /// Take the clip off the row.
@@ -1642,12 +1644,47 @@ fn row_clip(clip: &str, frames: Option<&str>, look: Option<&str>) -> Result<Valu
         v["to"] = json!(b);
     }
     if let Some(l) = look.map(str::trim).filter(|l| !l.is_empty()) {
-        if !name_ok(l) {
-            bail!("--look is a theme's name or game: {l}");
+        if let Some((id, dir)) = look_folder(l) {
+            v["look"] = json!(id);
+            v["look_dir"] = json!(dir.display().to_string());
+        } else if name_ok(l) {
+            v["look"] = json!(l);
+        } else {
+            bail!(
+                "--look is a theme's name, game, or a theme's folder (holding theme/look.txt or look.txt): {l}"
+            );
         }
-        v["look"] = json!(l);
     }
     Ok(v)
+}
+
+/// A `--look` that is a theme's folder (its package folder holding
+/// theme/look.txt, or the folder holding look.txt): the id the screen
+/// offers it by, its folder's name made one (the package folder's for a
+/// theme/ folder), and the folder made absolute. gp serve reads the folder
+/// on each load, so LOOK AT IT shows the theme as it is on disk.
+fn look_folder(l: &str) -> Option<(String, std::path::PathBuf)> {
+    if l == "game" {
+        return None;
+    }
+    let dir = std::fs::canonicalize(l).ok()?;
+    crate::journeys::look_dir(&dir)?;
+    let named = if dir.ends_with("theme") && dir.join(gp_present::looks::LOOK_FILE).is_file() {
+        dir.parent()?
+    } else {
+        &dir
+    };
+    let mut id: String = named
+        .file_name()?
+        .to_string_lossy()
+        .chars()
+        .map(|c| match c.to_ascii_lowercase() {
+            c @ ('a'..='z' | '0'..='9' | '_') => c,
+            _ => '-',
+        })
+        .collect();
+    id.truncate(64);
+    (name_ok(&id) && id != "game").then_some((id, dir))
 }
 
 /// A letter of a corpus clip's id: rooftop.l1.001.
@@ -2708,6 +2745,35 @@ mod tests {
                 .contains("what would measure it: a scoreboard line for the jump"),
             "{}",
             o.text
+        );
+    }
+
+    /// `--look DIR` names a theme's folder: the row's clip keeps the id
+    /// gp serve's screen offers it by and the folder, which the screen
+    /// reads as it is; a folder with no look is refused.
+    #[test]
+    fn a_rows_look_can_be_a_theme_folder() {
+        let d = tempfile::tempdir().unwrap();
+        let pkg = d.path().join("Last Call");
+        std::fs::create_dir_all(pkg.join("theme")).unwrap();
+        std::fs::write(pkg.join("theme/look.txt"), "gp-look 1\nid last-call\n").unwrap();
+        let abs = std::fs::canonicalize(&pkg).unwrap();
+        for given in [pkg.clone(), pkg.join("theme")] {
+            let v = row_clip("3", Some("0-10"), Some(given.to_str().unwrap())).unwrap();
+            assert_eq!(v["look"], json!("last-call"), "{}", given.display());
+            let kept = std::path::PathBuf::from(v["look_dir"].as_str().unwrap());
+            assert_eq!(crate::journeys::look_dir(&kept), Some(abs.join("theme")));
+        }
+        assert_eq!(
+            clip_words(&row_clip("3", None, Some(pkg.to_str().unwrap())).unwrap()),
+            "clip 3, in last-call"
+        );
+        let bare = d.path().join("no-look");
+        std::fs::create_dir_all(&bare).unwrap();
+        assert!(row_clip("3", None, Some(bare.to_str().unwrap())).is_err());
+        assert_eq!(
+            row_clip("3", None, Some("game")).unwrap()["look"],
+            json!("game")
         );
     }
 

@@ -400,8 +400,10 @@ screen for a person who talks to their agent and watches: no tabs, no
 graphs. At the top, centred, THE ORIGINAL (their ROM, played by the page's
 player as CLIPS plays it) and THE MODEL (the rebuild's preview in a frame
 off screen, driven as CLIPS's PLAY THE MODEL drives it). The header has the
-PICTURES picker (the game's own, or each of the person's themes for the
-game), the view (SIDE BY SIDE; ON TOP, the model over the original at the
+PICTURES picker (the game's own; each theme in the game's folder,
+`GAME/themes/NAME` with its kit left out, published or not; each of the
+person's theme copies made from the game; and each theme folder a row of
+the quest log names with `--look DIR`, below), the view (SIDE BY SIDE; ON TOP, the model over the original at the
 transparency the slider sets; DIFFERENCE, black where they match; MODEL
 ONLY, the model alone at its own size, played live from its own start, as
 `gp theme look play` played a theme) and RECORD. Right under the header,
@@ -619,6 +621,22 @@ any of them (or on the row itself) sets it up on the screens: the original
 beside the model, in that theme (game for the game's own pictures), at
 those frames, played in a loop (one frame: stood still there). The person
 judges and answers in the same item.
+
+`--look` also takes a theme's folder (its package folder holding
+`theme/look.txt`, or the folder holding `look.txt`, such as
+`tapper/themes/last-call` or `~/my-theme`): the row's clip keeps the id
+the screen offers it by (the folder's name, the package folder's for a
+`theme/` folder) as `look` and the folder as `look_dir`, and gp serve
+offers that folder under that id for as long as the row names it, ahead of
+a copy or a game's theme of the same id. A theme row then has LOOK AT IT
+like a model row, with no server of its own: on 2026-11-23 a tapper theme
+was shown to the owner through `gp theme look play --background` on a port
+of its own ("you shouldn't need to be giving me a separate preview server
+like that, the web page should handle this"). The server finds every theme
+folder again on each request (`rebuild/themes/index.json` and its files,
+`api/screen`'s file times), so an edit shows on the next load, and the
+screen adds a theme the server offers since it opened to PICTURES, opening
+the model's page again when one is picked that it didn't list.
 
 A model gate's card plays its own change. Its LOOK AT IT, and the LOOK AT
 IT of a row that borrows the card's clip, set the clip up beside the model

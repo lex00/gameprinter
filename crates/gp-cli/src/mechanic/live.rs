@@ -562,15 +562,77 @@ pub(crate) fn opened(paths: &Paths, rb: &Rebuild, rom: &[u8]) -> Result<Opened> 
 
 /// A file of the preview: the page's scripts from the repo (so a build
 /// made before a fix still runs it), the rest from the build.
-/// The person's theme copies made from `game`, each by its name with the
-/// folder its look.txt is in.
+/// The themes the screen offers for `game`, each by the id the page picks
+/// it by with the folder its look.txt is in, found again on every request
+/// so a theme's edit shows on the next load ([`themes_of`] with the game's
+/// folder).
 fn own_themes(paths: &Paths, game: &str) -> Vec<(String, PathBuf)> {
+    themes_of(paths, game, game_folder(game).as_deref())
+}
+
+/// The game's folder, `GAME` in the games checkout or in gameprinter's
+/// own templates/, looked up without reading any template (the screen asks
+/// every second).
+fn game_folder(game: &str) -> Option<PathBuf> {
+    if !super::name_ok(game) {
+        return None;
+    }
+    [
+        crate::theme_template::games_root(),
+        Some(crate::serve::repo_root().join("templates")),
+    ]
+    .into_iter()
+    .flatten()
+    .map(|r| r.join(game))
+    .find(|d| d.join("template.toml").is_file() || d.join("roms.toml").is_file())
+}
+
+/// The themes of [`own_themes`], the first of an id kept: each folder a
+/// row of the quest log names for its clip's look (`gp mechanic queue
+/// --look DIR`, kept as the clip's `look_dir`), the person's theme copies
+/// made from `game`, then the game folder's own themes, published or not
+/// (`GAME/themes/NAME`, the kit left out), with no server of its own
+/// (docs/mechanic-page.md, the screen).
+fn themes_of(paths: &Paths, game: &str, folder: Option<&Path>) -> Vec<(String, PathBuf)> {
     use crate::journeys::{Kind, list, look_dir};
-    list(&paths.home, None)
-        .into_iter()
-        .filter(|c| c.kind == Kind::Theme && c.from.as_ref().is_some_and(|o| o.name == game))
-        .filter_map(|c| Some((c.name.clone(), look_dir(&c.dir)?)))
-        .collect()
+    let mut out: Vec<(String, PathBuf)> = Vec::new();
+    let mut add = |id: &str, dir: Option<PathBuf>| {
+        if let Some(d) = dir
+            && super::name_ok(id)
+            && id != "game"
+            && !out.iter().any(|(i, _)| i == id)
+        {
+            out.push((id.to_owned(), d));
+        }
+    };
+    if let Ok(f) = super::session::queue_file(paths, game) {
+        for r in super::session::read_queue(&f) {
+            let c = &r["clip"];
+            if let (Some(id), Some(d)) = (c["look"].as_str(), c["look_dir"].as_str()) {
+                add(id, look_dir(Path::new(d)));
+            }
+        }
+    }
+    for c in list(&paths.home, None) {
+        if c.kind == Kind::Theme && c.from.as_ref().is_some_and(|o| o.name == game) {
+            add(&c.name, look_dir(&c.dir));
+        }
+    }
+    if let Some(g) = folder {
+        let mut dirs: Vec<PathBuf> = std::fs::read_dir(g.join("themes"))
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.is_dir() && !p.ends_with("kit"))
+            .collect();
+        dirs.sort();
+        for d in dirs {
+            let id = d.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            add(id, look_dir(&d));
+        }
+    }
+    out
 }
 
 /// Each of the person's themes for `game` with the time, in ms since 1970,
@@ -693,6 +755,49 @@ mod tests {
         assert_eq!(spare(&p, "mosshop").1, "b");
         std::fs::write(out_dir(&p, "mosshop").join("current"), "b").unwrap();
         assert!(current(&p, "mosshop").ends_with("b"));
+    }
+
+    /// The screen offers the game folder's own themes (the kit and a folder
+    /// with no look left out) and the folder a row names for its look,
+    /// which wins over a theme of the same id; each is read from disk as it
+    /// is, so an edit shows on the next load.
+    #[test]
+    fn the_screen_offers_the_games_themes_and_a_rows_theme_folder() {
+        let d = tempfile::tempdir().unwrap();
+        let p = paths(d.path());
+        let look = |dir: &Path, id: &str| {
+            std::fs::create_dir_all(dir.join("theme")).unwrap();
+            std::fs::write(dir.join("theme/look.txt"), format!("gp-look 1\nid {id}\n")).unwrap();
+        };
+        let game = d.path().join("games/rooftop");
+        look(&game.join("themes/last-call"), "last-call");
+        look(&game.join("themes/kit"), "kit");
+        std::fs::create_dir_all(game.join("themes/half-made")).unwrap();
+        let ids = |v: &[(String, PathBuf)]| v.iter().map(|(i, _)| i.clone()).collect::<Vec<_>>();
+        let found = themes_of(&p, "rooftop", Some(&game));
+        assert_eq!(ids(&found), ["last-call"]);
+        assert_eq!(found[0].1, game.join("themes/last-call/theme"));
+
+        let work = d.path().join("work/last-call");
+        look(&work, "last-call");
+        let other = d.path().join("elsewhere/neon");
+        look(&other, "neon");
+        let q = super::super::session::queue_file(&p, "rooftop").unwrap();
+        std::fs::create_dir_all(q.parent().unwrap()).unwrap();
+        std::fs::write(
+            &q,
+            serde_json::to_vec(&json!([
+                {"mechanic": "a", "clip": {"n": 1, "look": "last-call", "look_dir": work}},
+                {"mechanic": "b", "clip": {"n": 2, "look": "neon", "look_dir": other}},
+                {"mechanic": "c", "clip": {"n": 3, "look": "game"}},
+            ]))
+            .unwrap(),
+        )
+        .unwrap();
+        let found = themes_of(&p, "rooftop", Some(&game));
+        assert_eq!(ids(&found), ["last-call", "neon"]);
+        assert_eq!(found[0].1, work.join("theme"));
+        assert_eq!(found[1].1, other.join("theme"));
     }
 
     #[test]

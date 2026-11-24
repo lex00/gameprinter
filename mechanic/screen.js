@@ -673,6 +673,7 @@ async function loadModel(why) {
       model.name = typeof pj.model === "string" ? pj.model : model.name ?? "";
     } catch (e) { model.visible = null; }
     const f = $("model-frame");
+    modelLooks = new Set([...modelLooks, ...Object.keys(themeTimes)]);
     await new Promise((resolve, reject) => {
       const t = setTimeout(() => reject(new Error("the model didn't load in 30 s")), 30000);
       model.onReady = () => { clearTimeout(t); resolve(); };
@@ -2995,14 +2996,38 @@ function setOpacity(o, by = "person") {
 /** The model drawn in the game's own pictures or a theme: at once, no restart. */
 function setPictures(p, by = "person") {
   const sel = $("pictures");
-  if (![...sel.options].some((o) => o.value === p)) { note(`No theme ${p} for this game.`); return false; }
+  if (![...sel.options].some((o) => o.value === p) && !(p in themeTimes && addPictures([p]))) {
+    note(`No theme ${p} for this game.`);
+    return false;
+  }
   show.pictures = p;
   show.by = by;
   sel.value = p;
   themeSeen = themeTimes[p] ?? null;
-  modelPost({ gp: "theme", id: p === "game" ? "original" : p });
+  // The model's page lists the themes as it opens: one the server offered
+  // only since (a row naming its folder) needs the page opened again.
+  if (p !== "game" && !modelLooks.has(p)) void loadModel(`The theme ${p}.`);
+  else modelPost({ gp: "theme", id: p === "game" ? "original" : p });
   keep();
   return true;
+}
+
+/** The themes the model's page was opened with (api/screen's, then). */
+let modelLooks = new Set();
+
+/** Adds to PICTURES each theme it hasn't got; true when one was added. */
+function addPictures(ids) {
+  const sel = $("pictures");
+  let added = false;
+  for (const id of ids) {
+    if (id === "game" || [...sel.options].some((o) => o.value === id)) continue;
+    const o = document.createElement("option");
+    o.value = id;
+    o.textContent = `THEME: ${id.toUpperCase()}`;
+    sel.append(o);
+    added = true;
+  }
+  return added;
 }
 
 function keep() {
@@ -3067,6 +3092,7 @@ async function poll() {
   try {
     const s = await api("api/screen");
     themeTimes = s.themes ?? {};
+    addPictures(Object.keys(themeTimes));
     const a = s.ask;
     if (a && typeof a.seq === "number" && a.seq > applied) await applyAsk(a);
     void followWork(s.work);
@@ -3275,13 +3301,8 @@ function wire() {
 async function setUpPictures() {
   let themes = [];
   try { themes = (await api("rebuild/themes/index.json")).themes ?? []; } catch (e) { /* the game's own only */ }
-  const sel = $("pictures");
-  for (const t of themes) {
-    const o = document.createElement("option");
-    o.value = t.id;
-    o.textContent = `THEME: ${t.id.toUpperCase()}`;
-    sel.append(o);
-  }
+  addPictures(themes.map((t) => t.id));
+  modelLooks = new Set(themes.map((t) => t.id));
 }
 
 async function main() {
