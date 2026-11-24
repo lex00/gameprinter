@@ -2753,6 +2753,13 @@ asset = "stage2"
             .collect();
         assert!(errs.is_empty(), "{errs:?}");
         assert!(model.features_used().contains("sprite.board.gone_next"));
+        // The bundle gp theme look sheet builds reads the model back with
+        // it: the bundle's reader is this same board sprite.
+        let read = crate::bundle(&model, dir.path())
+            .unwrap()
+            .parse_model()
+            .unwrap();
+        assert_eq!(read, model);
         let lifted = gp_interp::Lifted::read_dir(dir.path(), &model).unwrap();
         let spec = gp_interp::compile::compile(&model, &lifted).unwrap();
         let art = BoardArt::load(&model, &spec, dir.path()).unwrap().unwrap();

@@ -59,24 +59,19 @@ pub(crate) fn game_of(dir: &Path) -> String {
 }
 
 /// The module a model folder's game runs through, if there is one:
-/// `GP_THEME_MODULE`, the game's module by name in
-/// `$GP_HOME/work/modules`, else, for a game package with hook code, its
-/// module built from this gp's kit (or reused). A package whose module
-/// fails to build has none here, and its hooks are named as not run.
+/// `GP_THEME_MODULE`; else, for a game package with hook code of its own,
+/// its module built from this gp's kit (or reused), so a stale
+/// `$GP_HOME/work/modules/GAME.wasm` (one built before the model took a
+/// field, which its own model reader then refuses) is never run, as
+/// gp serve's scoreboard picks it; else the game's module by name in
+/// `$GP_HOME/work/modules`. A package whose module fails to build has
+/// none here, and its hooks are named as not run.
 pub(crate) fn module_for(dir: &Path, paths: &Paths) -> Option<PathBuf> {
     if let Some(m) = std::env::var_os("GP_THEME_MODULE").filter(|v| !v.is_empty()) {
         return Some(PathBuf::from(m));
     }
-    let f = paths
-        .home
-        .join("work")
-        .join("modules")
-        .join(format!("{}.wasm", game_of(dir)));
-    if f.is_file() {
-        return Some(f);
-    }
-    if !dir.join("package.toml").is_file() {
-        return None;
+    if !own_hooks(dir) {
+        return named_module(dir, &paths.home);
     }
     match crate::module::built_for(&paths.home, dir) {
         Ok(found) => found.map(|m| m.0),
@@ -85,6 +80,22 @@ pub(crate) fn module_for(dir: &Path, paths: &Paths) -> Option<PathBuf> {
             None
         }
     }
+}
+
+/// Whether `dir` is a game package with hook code of its own, whose
+/// module is built from it.
+fn own_hooks(dir: &Path) -> bool {
+    dir.join("package.toml").is_file() && matches!(crate::package::hook_code(dir), Ok(Some(_)))
+}
+
+/// The game's module by name, `home/work/modules/GAME.wasm`, when it is
+/// there.
+fn named_module(dir: &Path, home: &Path) -> Option<PathBuf> {
+    let f = home
+        .join("work")
+        .join("modules")
+        .join(format!("{}.wasm", game_of(dir)));
+    f.is_file().then_some(f)
 }
 
 /// What one frame gave: the simulation's events and the sound driver's
@@ -221,5 +232,29 @@ mod tests {
         assert_eq!(module_for(dir.path(), &paths), None);
         let run = Run::open_with(&bundle, dir.path(), &paths, None).unwrap();
         assert_eq!(run.not_run, vec!["bird".to_owned()]);
+    }
+
+    /// A game package with hook code of its own runs on its module built
+    /// from its hooks, never on `$GP_HOME/work/modules/GAME.wasm`: a
+    /// GAME.wasm built before the model took `board_sprite.gone_next`
+    /// refuses the model with its own reader (unknown field gone_next), so
+    /// gp theme look sheet stopped. A folder with no hook code still gets
+    /// the module kept by name.
+    #[test]
+    fn a_game_with_hooks_never_runs_a_module_kept_by_name() {
+        let home = tempfile::tempdir().unwrap();
+        let games = tempfile::tempdir().unwrap();
+        let g = games.path().join("rooftop");
+        std::fs::create_dir_all(g.join("ext/src")).unwrap();
+        std::fs::write(g.join("package.toml"), "[package]\nname = \"rooftop\"\n").unwrap();
+        let named = home.path().join("work/modules/rooftop.wasm");
+        std::fs::create_dir_all(named.parent().unwrap()).unwrap();
+        std::fs::write(&named, "an old module").unwrap();
+        // No hook code yet: the module kept by name.
+        assert!(!own_hooks(&g));
+        assert_eq!(named_module(&g, home.path()), Some(named.clone()));
+        // Hook code of its own: built from it, so the old one isn't run.
+        std::fs::write(g.join("ext/src/lib.rs"), "// hooks\n").unwrap();
+        assert!(own_hooks(&g));
     }
 }
