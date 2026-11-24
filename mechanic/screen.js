@@ -276,6 +276,16 @@ async function api(path, body) {
   return r.json();
 }
 
+/** A file's text from the page's server, a refusal thrown as `api` throws. */
+async function apiText(path) {
+  const r = await fetch(path);
+  if (!r.ok) throw Object.assign(new Error(`${path}: ${r.status}`), { away: r.status === 503 });
+  return r.text();
+}
+
+/** Says a clip waits for the page's server, away moving onto a new build. */
+const clipAway = (w) => note(`The page's server is away, moving onto a new build most likely: the clip waits for it (${Math.round(w / 1000)} s).`, 3000);
+
 // The model's start through a server that moves onto a new build: run on
 // its own by mechanic/reach.test.mjs, between the markers.
 // <reach>
@@ -351,6 +361,18 @@ async function buildModel(api, ask, { say = () => {}, away = () => {}, sleep = (
   }
   if (st.error || !st.built) throw new Error(st.error ?? "the build didn't finish");
   return st;
+}
+
+/** A clip's pieces from the page's server, each asked for again while the
+ * server moves onto a new build (every one is a GET, safe to send twice):
+ * a corpus clip's (`id`) as { meta }, a row's clip `n` of `mechanic` as
+ * { meta, log }. `text(path)` gives a file's text, throwing as `api` does. */
+async function fetchClip(api, text, { id, n, mechanic }, opts = {}) {
+  if (id != null) return { meta: await reach(() => api(`api/screen/work-clip?id=${encodeURIComponent(id)}`), opts) };
+  const q = mechanic ? `&mechanic=${encodeURIComponent(mechanic)}` : "";
+  const meta = await reach(() => api(`api/screen/clip?n=${n}${q}`), opts);
+  const log = await reach(() => text(`api/clips/${n}.log?mechanic=${encodeURIComponent(meta.mechanic)}`), opts);
+  return { meta, log };
 }
 // </reach>
 
@@ -950,12 +972,8 @@ async function openClip(n, mechanic, f) {
     if (back) void loadModel();
     return;
   }
-  const q = mechanic ? `&mechanic=${encodeURIComponent(mechanic)}` : "";
-  const meta = await api(`api/screen/clip?n=${n}${q}`);
+  const { meta, log } = await fetchClip(api, apiText, { n, mechanic }, { away: clipAway });
   if (mode === "clip" && clip) backToClipless();
-  const r = await fetch(`api/clips/${n}.log?mechanic=${encodeURIComponent(meta.mechanic)}`);
-  if (!r.ok) throw new Error(`clip ${n}: ${r.status}`);
-  const log = await r.text();
   await showClipLog({ key, n, mechanic: meta.mechanic, work: null, name: `CLIP ${n} OF ${meta.mechanic.toUpperCase()}`, says: `clip ${n} of ${meta.mechanic}`, note: meta.note ?? "", start: meta.start, frames: meta.frames, log, draws: meta.draws ?? null, drawSites: meta.draw_sites ?? null }, f);
 }
 
@@ -964,7 +982,7 @@ async function openClip(n, mechanic, f) {
 async function openWorkClip(id, lo, hi, name) {
   // It loads the model again below, on main's unless a gate card opens it.
   if (!cardOpening) toMainModel();
-  const meta = await api(`api/screen/work-clip?id=${encodeURIComponent(id)}`);
+  const { meta } = await fetchClip(api, apiText, { id }, { away: clipAway });
   if (mode === "clip" && clip) backToClipless();
   await showClipLog({ key: `work/${id}`, n: null, mechanic: null, work: id, name: name ?? `THE CLIP YOUR AGENT REFINES: ${id.toUpperCase()}`, says: `corpus clip ${id}`, note: meta.name ?? "", start: meta.start, frames: meta.frames, log: meta.log, draws: meta.draws ?? null, drawSites: meta.draw_sites ?? null }, lo);
   if (clip?.work === id) { clip.loop = [lo, Math.max(lo, hi)]; playClip(true); }

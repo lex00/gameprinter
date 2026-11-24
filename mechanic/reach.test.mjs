@@ -12,6 +12,7 @@ const { reach, buildModel, sendTalk, unsaved } = new Function(`${block}; return 
 
 const sleep = async () => {};
 const away = () => { throw new TypeError("Failed to fetch"); };
+const { fetchClip } = new Function(`${block}; return { fetchClip };`)();
 
 /** A page's server: `answer(path, body, n)` answers the nth request; every
  * request is kept in `sent`. */
@@ -85,6 +86,29 @@ test("an answer from the server is thrown at once; a server away too long is giv
   await assert.rejects(reach(async () => { n++; away(); }, { sleep, within: 5000, every: 1000 }), TypeError);
   assert.equal(n, 6);
   assert.equal(await reach(async () => (++n < 9 ? away() : "ok"), { sleep }), "ok");
+});
+
+test("a row's clip set up while the server moves onto a new build is asked for again", async () => {
+  // LOOK AT IT on a corpus clip: the server drops the request twice.
+  const s = server((path, body, n) => (n < 3 ? away() : { frames: 400, log: "L" }));
+  const waited = [];
+  const w = await fetchClip(s.api, null, { id: "game.l11.001" }, { sleep, away: (ms) => waited.push(ms) });
+  assert.equal(w.meta.frames, 400);
+  assert.deepEqual(s.sent, Array(3).fill("api/screen/work-clip?id=game.l11.001"));
+  assert.deepEqual(waited, [0, 1000]);
+  // A row's own clip: its meta, then its log, each through the move.
+  const r = server((path, body, n) => (n === 1 ? away() : { mechanic: "bar", frames: 9 }));
+  const texts = [];
+  const text = async (path) => { texts.push(path); if (texts.length < 3) away(); return "LOG"; };
+  const c = await fetchClip(r.api, text, { n: 2, mechanic: "bar" }, { sleep });
+  assert.equal(c.log, "LOG");
+  assert.equal(c.meta.mechanic, "bar");
+  assert.deepEqual(r.sent, ["api/screen/clip?n=2&mechanic=bar", "api/screen/clip?n=2&mechanic=bar"]);
+  assert.deepEqual(texts, Array(3).fill("api/clips/2.log?mechanic=bar"));
+  // A refusal is the server's answer: thrown at once.
+  const no = server(() => { throw new Error("no clip game.x"); });
+  await assert.rejects(fetchClip(no.api, null, { id: "game.x" }, { sleep }), /no clip game.x/);
+  assert.equal(no.sent.length, 1);
 });
 
 test("a 503 from a server moving onto a new gp is waited through as a server away", async () => {
