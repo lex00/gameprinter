@@ -297,27 +297,24 @@ impl LevelBoard {
             return (std::borrow::Cow::Borrowed(videoram), Vec::new());
         }
         let mut v = videoram.to_vec();
-        let mut drawn = Vec::new();
+        // Every cell written this frame, in the order written: a counter's
+        // digits, a repeat's tiles, a text's letters.
+        let mut puts: Vec<(usize, [u8; 2], CellDrawn)> = Vec::new();
         let mut put = |cell: usize,
                        word: [u8; 2],
                        name: String,
                        text: Option<(usize, usize)>,
                        counter: Option<usize>| {
-            let left = omit.is_some_and(|o| o.get(drawn.len()).copied().unwrap_or(false));
-            if !left && let Some(c) = v.get_mut(cell * 2..cell * 2 + 2) {
-                c.copy_from_slice(&word);
-            }
-            if cell < 960 {
-                // A cell written again shows its last word, as the board's
-                // video RAM does: only that one is drawn.
-                drawn.retain(|d: &CellDrawn| d.cell != cell);
-                drawn.push(CellDrawn {
+            puts.push((
+                cell,
+                word,
+                CellDrawn {
                     name,
                     cell,
                     text,
                     counter,
-                });
-            }
+                },
+            ));
         };
         let value = |counter: usize, plus: i64| {
             w.counters
@@ -373,6 +370,30 @@ impl LevelBoard {
         {
             for (ci, &(cell, word)) in t.cells.iter().enumerate() {
                 put(cell, word, letter_name(word), Some((ti, ci)), None);
+            }
+        }
+        // A cell written again shows its last word, as the board's video
+        // RAM does: only that write is drawn and named, in the order of
+        // those last writes. `omit` goes by that order, so it is asked of
+        // the last write alone: an earlier write to the cell is never laid
+        // in the video RAM, where a later write left to the theme would
+        // otherwise leave the earlier one's word showing.
+        let mut last = std::collections::HashMap::new();
+        for (k, (cell, ..)) in puts.iter().enumerate() {
+            last.insert(*cell, k);
+        }
+        let mut drawn = Vec::new();
+        for (k, (cell, word, d)) in puts.into_iter().enumerate() {
+            if last.get(&cell) != Some(&k) {
+                continue;
+            }
+            let left =
+                cell < 960 && omit.is_some_and(|o| o.get(drawn.len()).copied().unwrap_or(false));
+            if !left && let Some(c) = v.get_mut(cell * 2..cell * 2 + 2) {
+                c.copy_from_slice(&word);
+            }
+            if cell < 960 {
+                drawn.push(d);
             }
         }
         (std::borrow::Cow::Owned(v), drawn)
@@ -3542,6 +3563,56 @@ asset = "stage2"
             .map(|c| c.name.as_str())
             .collect();
         assert_eq!(here, ["letter-Q"]);
+    }
+
+    /// A later text's space blanks an earlier text's letter in a themed
+    /// draw too: the cells a theme draws are left out of the video RAM by
+    /// the order of the last writes, so an earlier write to a cell is never
+    /// laid there when the later one is the theme's or a space.
+    #[test]
+    fn a_later_space_blanks_an_earlier_letter_when_a_theme_draws_the_letters() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_, spec, art) = with_looks_and_counters(dir.path());
+        let mut w = World {
+            counters: vec![0; spec.counters.len()],
+            ..Default::default()
+        };
+        w.counters[spec.counters.index_of("bar").unwrap()] = 2;
+        let level = art.levels[0].as_ref().unwrap();
+        let mut twice = level.clone();
+        let again = twice.texts[0].clone();
+        let at = again.cells[0].0;
+        // The same line again, later, with a space where its first letter was.
+        twice.texts.push(Text {
+            cells: again
+                .cells
+                .iter()
+                .enumerate()
+                .map(|(k, &(c, w))| (c, if k == 0 { [b' ', 0x30] } else { w }))
+                .collect(),
+            ..again
+        });
+        let ram = &level.look(&w).videoram;
+        let (_, cells) = twice.cells_with(ram, &w, None);
+        let space = letter_name([b' ', 0x30]);
+        // A theme with a picture for every letter and none for a space.
+        let omit: Vec<bool> = cells.iter().map(|c| c.name != space).collect();
+        let (v, drawn) = twice.cells_with(ram, &w, Some(&omit));
+        assert_eq!(drawn, cells);
+        assert_eq!(
+            &v[at * 2..at * 2 + 2],
+            &[b' ', 0x30],
+            "the space, not the earlier letter"
+        );
+        // And each letter the theme draws is left as the screen has it.
+        for c in cells.iter().filter(|c| c.name != space) {
+            assert_eq!(
+                &v[c.cell * 2..c.cell * 2 + 2],
+                &ram[c.cell * 2..c.cell * 2 + 2],
+                "{}",
+                c.name
+            );
+        }
     }
 
     /// A text's letters are named by the character each stands for, so one
