@@ -1477,7 +1477,7 @@ fn added_checks(
             "room_react" => "`#+ room_react` takes a class its room gives, its offset DX DY in screen pixels, then each piece of its cycle with the game frames it holds, PIECE:FRAMES (1 or more), and no pick=".to_owned(),
             "room_react_when" => "`#+ room_react_when` comes after a `#+ room_react` and takes a piece and one or more tests, COUNTER CMP VALUE, CMP one of < <= == != >= >".to_owned(),
             "room_react_drift" => "`#+ room_react_drift` comes once after a `#+ room_react` and takes VX VY, the screen pixels it moves (whole numbers from -64 to 64, not both 0), and PER, the game frames each move takes (1 or more)".to_owned(),
-            "room_react_stagger" => "`#+ room_react_stagger` comes once after a `#+ room_react` and takes N, the game frames (1 or more) each placement's cycle is further on than the one before it".to_owned(),
+            "room_react_stagger" => "`#+ room_react_stagger` comes once after a `#+ room_react` and takes N, the game frames (1 or more) each placement's cycle is further on than the one before it, then nothing or the word `rows`, for N frames further on for each row of cells down the screen instead".to_owned(),
             "room_scroll" => "`#+ room_scroll` takes one piece (no `a|b` list) after a `#+ room` line, the stage pixels it slides, DX (negative for left), and the game frames each slide takes, EVERY (1 or more), once for a piece in a room".to_owned(),
             "" => "it says nothing after `#+`".to_owned(),
             w => format!("no page knows `#+ {w}`; the lines are `#+ hud_over`, `#+ in`, `#+ on`, `#+ under` and the room lines (`#+ room`, `room_cells`, `room_fill`, `room_run`, `room_box`, `room_at`, `room_react`, `room_react_when`, `room_react_drift`, `room_react_stagger`, `room_scroll`, `room_front`, `room_mask`), and `#+ recolor`"),
@@ -4103,7 +4103,7 @@ mod tests {
         let game = game(g.path());
         let t = tempfile::tempdir().unwrap();
         let art = "gp-art 1\nscale 4\npic frame-0-0.png art/roll.png 16 16 0 0\npic frame-1-0.png art/roll.png 16 16 0 0\n\
-                   #+ under cab 0 0\n#+ room_react_stagger 0\n";
+                   #+ under cab 0 0\n#+ room_react_stagger 0\n#+ room_react_stagger 2 cols\n";
         theme(t.path(), GOOD_PACKAGE, GOOD_LOOK, art);
         put(
             t.path(),
@@ -4112,7 +4112,7 @@ mod tests {
         );
         let o = report(t.path(), &game, Ok(built()), None).unwrap();
         let problems = levels(&o, "problem");
-        assert_eq!(problems.len(), 2, "{}", o.text);
+        assert_eq!(problems.len(), 3, "{}", o.text);
         assert!(
             problems[0].starts_with(
                 "theme/art.txt 5 the page can't read this line (`#+ under` comes after the `stage` line and takes an entity"
@@ -4124,6 +4124,13 @@ mod tests {
             problems[1].starts_with(
                 "theme/art.txt 6 the page can't read this line (`#+ room_react_stagger` comes once after a `#+ room_react` and takes N"
             ),
+            "{}",
+            o.text
+        );
+        assert!(
+            problems[2].starts_with(
+                "theme/art.txt 7 the page can't read this line (`#+ room_react_stagger`"
+            ) && problems[2].contains("then nothing or the word `rows`"),
             "{}",
             o.text
         );

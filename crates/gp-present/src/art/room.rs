@@ -67,6 +67,13 @@
 //!   picture on the same frame. Only the cycle is moved on: a
 //!   `room_react_when` test holds for every placement alike, and a drift
 //!   moves each by the game's own frame.
+//! - `#+ room_react_stagger N rows`, the same line with the word `rows`
+//!   last: a placement's cycle is `N` game frames further on for each row
+//!   of cells its anchor cell is below the screen's top row, whatever its
+//!   place among the placements. The placements of one row stay in step
+//!   with each other, and each row is `N` frames on from the row above
+//!   it: a long counter of many cells in a row changes as one, another
+//!   row's at another time.
 //!
 //! - `#+ room_mask CLASS PIECE TEST...`: the piece laid on the class's
 //!   cells, cell by cell as a fill of one cell, but only on the cell's own
@@ -169,6 +176,9 @@ pub struct React {
     /// frames further on than the one before it; 0, the default, keeps
     /// them all in step.
     pub stagger: u64,
+    /// The line's last word `rows`: `N` frames further on for each row of
+    /// cells down the screen instead, the placements of a row in step.
+    pub stagger_rows: bool,
 }
 
 /// A cycle's steps as a line gives them, `PIECE:FRAMES...`: each piece and
@@ -245,7 +255,8 @@ pub struct Live {
     pub scale: i64,
     /// The game frames its cycle runs ahead of the frame shown (`#+
     /// room_react_stagger`): its place among the rule's placements times
-    /// the rule's `N`.
+    /// the rule's `N`, or with the line's `rows` its anchor cell's row on
+    /// the screen (0 at the top) times `N`.
     pub ahead: u64,
 }
 
@@ -502,7 +513,12 @@ impl RoomRules {
                 }
                 r.drift = Some((v, per));
             }
-            ["room_react_stagger", n] => {
+            ["room_react_stagger", n, by @ ..] => {
+                let rows = match by {
+                    [] => false,
+                    ["rows"] => true,
+                    _ => return Err(()),
+                };
                 let room = rooms.last_mut().ok_or(())?;
                 let Some(Place {
                     lay: Lay::React(r, _),
@@ -516,6 +532,7 @@ impl RoomRules {
                     return Err(());
                 }
                 r.stagger = n;
+                r.stagger_rows = rows;
             }
             [
                 k
@@ -994,6 +1011,7 @@ pub fn build_seeded(st: &StageRules, r: &RoomRules, cells: &Cells, seed: u64) ->
                 // draws the piece it shows.
                 let cells = grid.iter().enumerate().filter(|(_, c)| **c);
                 for (k, (i, _)) in cells.enumerate() {
+                    let k = if r.stagger_rows { i / cols } else { k };
                     live.push(Live {
                         react: r.clone(),
                         draws: r
@@ -1357,8 +1375,37 @@ mod tests {
         let s = shown(&room, 4);
         assert_eq!([s[0].0, s[1].0], [4, 4]);
         assert_eq!([s[0].2, s[1].2], [wall, top]);
+        // With `rows`, a placement is its row on the screen times N on:
+        // cells 8 and 16 are in rows 1 and 2, cells 42 and 45 both in row
+        // 5, so those two show one picture on every frame.
+        let by_rows = [lines[0], lines[1], lines[2], "room_react_stagger 1 rows"];
+        let (st, r) = rules(&by_rows);
+        let Lay::React(react, _) = &r.places[0].lay else {
+            panic!("{:?}", r.places[0].lay)
+        };
+        assert!(react.stagger == 1 && react.stagger_rows);
+        let room = build(&st, &r, &sc);
+        let ahead: Vec<u64> = room.live.iter().map(|l| l.ahead).collect();
+        assert_eq!(ahead, [1, 2, 5, 5]);
+        assert_eq!(
+            shown(&room, 0).iter().map(|d| d.2).collect::<Vec<_>>(),
+            [wall, top, end, end]
+        );
+        let mut apart = false;
+        for f in 0..12 {
+            let s = shown(&room, f);
+            assert_eq!(s[2].2, s[3].2, "frame {f}");
+            apart |= s[0].2 != s[2].2;
+        }
+        assert!(apart);
+        // The plain line has no `rows`.
+        let (_, r) = rules(&lines);
+        let Lay::React(react, _) = &r.places[0].lay else {
+            panic!("{:?}", r.places[0].lay)
+        };
+        assert!(!react.stagger_rows);
         // Refused: no react before it, no frames, a word that isn't a
-        // number, a second one.
+        // number, a last word that isn't `rows`, a second one.
         let mut rooms = Vec::new();
         for l in ["room s", "room_cells c", "room_at c wall 0 0"] {
             let w: Vec<&str> = l.split_whitespace().collect();
@@ -1373,6 +1420,10 @@ mod tests {
             "room_react_stagger x",
             "room_react_stagger",
             "room_react_stagger 1 2",
+            "room_react_stagger 1 row",
+            "room_react_stagger 1 rows 2",
+            "room_react_stagger rows",
+            "room_react_stagger 0 rows",
         ] {
             let w: Vec<&str> = bad.split_whitespace().collect();
             assert_ne!(
