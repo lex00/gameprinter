@@ -110,6 +110,10 @@ pub struct Place {
     pub class: String,
     pub lay: Lay,
     pub line: usize,
+    /// `pick=NAME` on the rule: its alternatives are picked by NAME in
+    /// place of their own text ([`pick_named`]), so lists of the same
+    /// length with the same NAME, in any room, pick the same one.
+    pub pick: Option<String>,
 }
 
 impl Place {
@@ -218,6 +222,16 @@ impl RoomRules {
                 pieces @ ..,
             ] => {
                 let room = rooms.last_mut().ok_or(())?;
+                let (pieces, pick) = match pieces.split_last() {
+                    Some((p, rest)) if p.starts_with("pick=") => {
+                        let n = &p["pick=".len()..];
+                        if !name_ok(n) {
+                            return Err(());
+                        }
+                        (rest, Some(n.to_owned()))
+                    }
+                    _ => (pieces, None),
+                };
                 if !room.classes.iter().any(|c| c.name == *class) {
                     return Err(());
                 }
@@ -249,6 +263,7 @@ impl RoomRules {
                     class: (*class).to_owned(),
                     lay,
                     line,
+                    pick,
                 });
             }
             _ => return Ok(false),
@@ -394,12 +409,21 @@ fn rects(grid: &[bool], cols: usize, rows: usize) -> Vec<[usize; 4]> {
 /// several screens shows the same piece on each.
 #[must_use]
 pub fn pick(name: &str, seed: u64) -> &str {
+    pick_named(name, None, seed)
+}
+
+/// [`pick`], hashing `key` (a rule's `pick=NAME`) in place of the name's
+/// text when given: two lists of the same length with the same key pick
+/// the same place in each for every seed, as a bar's painting and the
+/// bonus room's painting of it.
+#[must_use]
+pub fn pick_named<'a>(name: &'a str, key: Option<&str>, seed: u64) -> &'a str {
     let alts: Vec<&str> = name.split('|').collect();
     if alts.len() < 2 {
         return name;
     }
     let mut h = seed ^ 0x9e37_79b9_7f4a_7c15;
-    for b in name.bytes() {
+    for b in key.unwrap_or(name).bytes() {
         h = (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3);
     }
     h ^= h >> 33;
@@ -442,16 +466,16 @@ pub fn build_seeded(st: &StageRules, r: &RoomRules, cells: &Cells, seed: u64) ->
             })
             .collect(),
     };
-    let piece = |name: &str| {
-        let name = pick(name, seed);
-        st.pieces
-            .iter()
-            .position(|p| p.0 == name)
-            .map(|i| (i as u32, st.pieces[i].2))
-    };
     let classes = classify(r, cells);
     let mut counts = Vec::with_capacity(r.places.len());
     for place in &r.places {
+        let piece = |name: &str| {
+            let name = pick_named(name, place.pick.as_deref(), seed);
+            st.pieces
+                .iter()
+                .position(|p| p.0 == name)
+                .map(|i| (i as u32, st.pieces[i].2))
+        };
         let Some(k) = r.classes.iter().position(|c| c.name == place.class) else {
             counts.push(0);
             continue;
@@ -668,6 +692,43 @@ mod tests {
         assert_eq!(pick("one", 7), "one");
         let (_, r) = rules(&["room s", "room_cells c", "room_box c wall|door"]);
         assert_eq!(r.places[0].pieces(), ["wall", "door"]);
+    }
+
+    /// Two rooms' rules with the same `pick=NAME` and lists of the same
+    /// length pick the same place in each for every seed (a bar's
+    /// painting and the bonus room's painting of it), where the lists'
+    /// own text alone picks them apart; a bad name is refused.
+    #[test]
+    fn rules_with_the_same_pick_name_pick_in_step() {
+        let (_, bar) = rules(&[
+            "room bar",
+            "room_cells c",
+            "room_at c a0|a1|a2|a3 0 0 pick=art",
+        ]);
+        let (_, bonus) = rules(&[
+            "room bonus",
+            "room_cells c",
+            "room_box c b0|b1|b2|b3 pick=art",
+        ]);
+        assert_eq!(bar.places[0].pick.as_deref(), Some("art"));
+        assert_eq!(bar.places[0].lay, Lay::At("a0|a1|a2|a3".into(), [0, 0]));
+        let (a, b) = ("a0|a1|a2|a3", "b0|b1|b2|b3");
+        let mut apart = 0;
+        for seed in 0..2_000u64 {
+            let x = pick_named(a, bar.places[0].pick.as_deref(), seed);
+            let y = pick_named(b, bonus.places[0].pick.as_deref(), seed);
+            assert_eq!(x[1..], y[1..], "seed {seed}");
+            apart += usize::from(pick(a, seed)[1..] != pick(b, seed)[1..]);
+        }
+        assert!(apart > 0);
+        let mut rooms = Vec::new();
+        let (st, _) = rules(&["room s", "room_cells c"]);
+        for l in ["room s", "room_cells c"] {
+            let w: Vec<&str> = l.split_whitespace().collect();
+            RoomRules::line(&mut rooms, Some(&st), &w, 1).unwrap();
+        }
+        let w: Vec<&str> = "room_box c a|b pick=A!".split_whitespace().collect();
+        assert!(RoomRules::line(&mut rooms, Some(&st), &w, 3).is_err());
     }
     use crate::art::stage::StageSrc;
 
