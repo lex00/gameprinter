@@ -115,6 +115,28 @@ struct Number {
     when: Vec<Test>,
 }
 
+impl Number {
+    /// The name a theme gives the cell this counter draws for digit `d`:
+    /// [`counter_name`], except that a one-digit counter holding the
+    /// character code of a letter it draws through that letter's tile
+    /// (a high score's initials: the counter is 65 for A, its `plus`
+    /// takes it to the table's first cell, and the tile drawn is A's) is
+    /// named by the letter, as a text's letters are ([`letter_name`]), so
+    /// a theme's letter pictures draw it too.
+    fn digit_name(&self, d: u8) -> String {
+        let code = self.codes[usize::from(d) % 10];
+        let word = [code, self.high];
+        if self.digits == 1
+            && i64::from(code) == i64::from(d) - self.plus
+            && (word[1] & 3) == 0
+            && code.is_ascii_uppercase()
+        {
+            return letter_name(word);
+        }
+        counter_name(&self.name, Some(d))
+    }
+}
+
 /// A string drawn while counters say so: each character's cell and word.
 #[derive(Clone)]
 struct Text {
@@ -299,7 +321,7 @@ impl LevelBoard {
                 put(
                     n.cell + k,
                     [n.codes[*d as usize], n.high],
-                    counter_name(&n.name, Some(*d)),
+                    n.digit_name(*d),
                     None,
                 );
             }
@@ -1201,7 +1223,7 @@ impl BoardArt {
         for l in self.levels.iter().flatten() {
             for n in &l.numbers {
                 for d in 0..10 {
-                    add(counter_name(&n.name, Some(d)), CELL_SIZE, &mut out);
+                    add(n.digit_name(d), CELL_SIZE, &mut out);
                 }
             }
             for r in &l.repeats {
@@ -3437,6 +3459,79 @@ asset = "stage2"
                 .draws
                 .iter()
                 .any(|d| [d.x, d.y] == [4 * 16 * u, 5 * 16 * u])
+        );
+    }
+
+    /// A one-digit counter that holds a letter's character code and draws
+    /// it through that letter's tile (a high score's initials: 65 for
+    /// A, plus -65, a table of A to J) is named by the letter, as a text's
+    /// letters are, so a theme's letter pictures draw it; one whose value
+    /// isn't the tile's code keeps its digit names.
+    #[test]
+    fn a_counter_of_letters_is_named_by_its_letters() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_, spec, mut art) = with_looks_and_counters(dir.path());
+        let bar = spec.counters.index_of("bar").unwrap();
+        let mut codes = [0u8; 10];
+        for (d, c) in codes.iter_mut().enumerate() {
+            *c = b'A' + d as u8;
+        }
+        let letters = Number {
+            counter: bar,
+            name: "table_1_a".into(),
+            plus: -65,
+            cell: 2 * 32 + 10,
+            digits: 1,
+            codes,
+            high: 0x30,
+            zeros: false,
+            when: Vec::new(),
+        };
+        // The same tiles counted from 0: not the letters' codes.
+        let digits = Number {
+            name: "level".into(),
+            plus: 0,
+            cell: 3 * 32 + 10,
+            ..letters.clone()
+        };
+        {
+            let level = art.levels[0].as_mut().unwrap();
+            level.numbers.push(letters);
+            level.numbers.push(digits);
+        }
+        let mut w = World {
+            counters: vec![0; spec.counters.len()],
+            ..Default::default()
+        };
+        w.counters[bar] = i64::from(b'C');
+        let level = art.levels[0].as_ref().unwrap();
+        let (_, cells) = level.cells_with(&level.look(&w).videoram, &w, None);
+        let at = |cell: usize| {
+            cells
+                .iter()
+                .find(|c| c.cell == cell)
+                .map(|c| c.name.clone())
+        };
+        assert_eq!(at(2 * 32 + 10).as_deref(), Some("letter-C"));
+        let names: Vec<String> = art.names().into_iter().map(|(n, _)| n).collect();
+        for n in ["letter-A", "letter-J", "counter-level-0", "counter-level-9"] {
+            assert!(names.contains(&n.to_owned()), "{n}: {names:?}");
+        }
+        assert!(
+            !names.iter().any(|n| n.starts_with("counter-table_1_a")),
+            "{names:?}"
+        );
+        // The theme's letter C draws the initial's cell.
+        let mut theme = art
+            .theme("gp-art 1\npic letter-C c.png 16 16 0 0\n")
+            .unwrap();
+        let t = art.themed(&mut theme, &w, &[], &[]).unwrap();
+        let u = gp_present::art::ART_SUB;
+        assert!(
+            t.frame
+                .draws
+                .iter()
+                .any(|d| [d.x, d.y] == [10 * 16 * u, 2 * 16 * u])
         );
     }
 
