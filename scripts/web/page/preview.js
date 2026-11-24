@@ -39,7 +39,10 @@
 //                                the same start, stepped to the same frame
 //                                (`retro` is the model as written); it
 //                                answers {gp: "profile", name, frame}
-// It posts {gp: "ready"} once loaded, {gp: "at", frame, of, draws} after
+// It posts {gp: "loading", step} at each step of its load (the page's
+// time limit runs from the last, mechanic/model-load.js), {gp: "ready"}
+// once loaded, {gp: "failed", message} when its start throws,
+// {gp: "at", frame, of, draws} after
 // each seek (draws: how the model took the original's, or null) and
 // {gp: "snap", id, url} with each picture.
 //
@@ -86,8 +89,15 @@ import { openStorage } from "./storage.js";
 import { ModuleHost } from "./module-host.js";
 
 const t = (window.__gp = { marks: {}, hashes: [], results: null, error: null });
+// In control mode each step of the load is told to the page around the
+// frame ({gp: "loading", step}), whose time limit runs from the last one
+// (mechanic/model-load.js): a load that is slow but moving isn't called
+// failed, and one that stops says where.
+const telling = new URLSearchParams(location.search).has("control") && parent !== window;
 const mark = (n) => {
-  if (!(n in t.marks)) t.marks[n] = performance.now();
+  if (n in t.marks) return;
+  t.marks[n] = performance.now();
+  if (telling) parent.postMessage({ gp: "loading", step: n }, location.origin);
 };
 mark("script");
 addEventListener("error", (e) => {
@@ -1267,6 +1277,7 @@ async function main() {
   // An arcade cabinet's controls when the model reads them.
   if (cfg.device === "arcade") LAYOUT = ARCADE_LAYOUT;
   const host = await openHost(gameModule);
+  mark("opened");
   host.frameLimit = (10000 * cfg.frame_rate[1]) / cfg.frame_rate[0];
   // Which module runs, and each frame's times, for the checks.
   t.module = moduleSource;
@@ -1281,6 +1292,7 @@ async function main() {
     profile = "retro";
     bundle = await fetchBundle(profile, p);
   }
+  mark("bundle");
 
   if (q.has("test")) {
     const names = await (await fetch("runs/index.json")).json();
@@ -1325,6 +1337,7 @@ async function main() {
     boardPresent = presentText;
     boardUnits = !!cfg.board_unit;
     boardDraw = await BoardDraw.open(await fetch("gp_board.wasm").then((r) => r.arrayBuffer()));
+    mark("board");
   }
   t.board = loadBoard(bundle);
   // The model's sound (docs/sound.md): played by the same synthesizer as
@@ -1352,6 +1365,7 @@ async function main() {
       boardSound = null;
       console.warn(`gp: the arcade game plays silent: ${e.message ?? e}`);
     }
+    mark("board-sound");
   }
   t.boardSound = !!boardSound;
   // The game has sound to play: the model's own or the board's.
@@ -1481,6 +1495,7 @@ async function main() {
   mark("model-loaded");
   // Every picture the presentation names, by number (gp_present).
   const pics = await Promise.all(cfg.pictures.map((f) => image(`assets/${f}`)));
+  mark("pictures");
   const ownPics = pics.slice();
   // Themes found beside the bundle (docs/formats/theme.md, "Themes found
   // at run time"): themes/index.json lists looks, each a folder of the
@@ -1488,6 +1503,7 @@ async function main() {
   // them; a change draws the next frame in it, with no restart.
   const catalogue = await themeCatalogue(cfg, p, q);
   const looks = await findLooks(cfg, catalogue);
+  mark("looks");
   t.catalogue = () => ({
     source: catalogue.source,
     store: catalogue.cache?.kind ?? null,
@@ -1689,6 +1705,7 @@ async function main() {
   // The ids the settings screen's theme line offers, for the page check.
   t.looks = () => looks.choices().map(([id]) => id);
   await applyRoles(null);
+  mark("roles");
   // `own-look` (the public page, when a person's ROM starts) opens in the
   // build's own look whatever look was kept from an earlier visit: a kept
   // Paper over a ROM's game looks like the paper version, as if the ROM
@@ -1701,6 +1718,7 @@ async function main() {
       // A kept theme that is no longer downloaded and can't be fetched.
       console.warn(`theme ${wantLook} not drawn (${boardDraw ? (boardDraw.on ? "by the board" : "the board not open") : "no board"}): ${e.message}`);
     }
+    mark("theme");
   }
   t.theme = looks.current;
   const theme = cfg.theme ?? { particles: [] };
@@ -2004,6 +2022,7 @@ async function main() {
     // A second model for still pictures, so asking for one never moves the
     // one being watched (seeking back starts a model over from power-on).
     const stills = new Preview(await openHost(gameModule));
+    mark("stills");
     // The look drawn now, read when the control's models start again: its
     // present text, large art and stages live in this function.
     const lookNow = () => ({ present: lookPresent, art: lookArt, stages: artStages });

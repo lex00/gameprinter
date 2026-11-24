@@ -14,6 +14,7 @@
 // and #rule-card is the slot it draws in.
 
 import { NesPlayer } from "./nesplayer.js";
+import { waitForModel } from "./model-load.js";
 import { RefineView } from "./rebuild-card.js";
 import { startShell } from "./shell.js";
 import { startNext } from "./next.js";
@@ -920,15 +921,17 @@ async function rbPlay(kind = "beside") {
       if (!liveRb) return;
       liveRb.profile = profileName();
     }
-    await new Promise((resolve, reject) => {
-      const t = setTimeout(() => reject(new Error("the model didn't load in 30 s")), 30000);
-      liveRb.onReady = () => { clearTimeout(t); resolve(); };
-      liveRb.onFailed = (why) => { clearTimeout(t); reject(new Error(`its preview didn't start: ${why}`)); };
+    // 30 s from the preview's last word, not from the start (model-load.js).
+    const w = waitForModel(() => {
       const prof = kind === "free" && liveRb.profile !== (profiles?.base ?? "retro") ? `&profile=${encodeURIComponent(liveRb.profile)}` : "";
       // files=here: the preview reads the build beside it, not the
       // browser's store of installed games.
       f.src = `rebuild/index.html?control=1&files=here${prof}${lookParam()}&t=${Date.now()}`;
     });
+    liveRb.onReady = w.ready;
+    liveRb.onFailed = w.failed;
+    liveRb.onLoading = w.step;
+    await w.done;
     if (kind === "free") rbStartFree(); else await rbStart();
   } catch (e) {
     const why = `The model couldn't start: ${e.message ?? e}`;
@@ -1141,6 +1144,7 @@ window.addEventListener("message", (e) => {
   const m = e.data;
   if (m?.gp === "ready") { liveRb.ready = true; liveRb.onReady?.(); }
   else if (m?.gp === "failed") liveRb.onFailed?.(m.message);
+  else if (m?.gp === "loading") liveRb.onLoading?.(m.step);
   else if (m?.gp === "settings") onSettings(m);
   else if (m?.gp === "error") toast(`The model: ${m.message}`, 6000);
 });

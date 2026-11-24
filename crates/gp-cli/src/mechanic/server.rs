@@ -1034,6 +1034,10 @@ fn handle(s: &Server, req: &Request) -> Result<Response> {
             page("rebuild-card.js", "text/javascript; charset=utf-8")
         }
         ("GET" | "HEAD", "/nesplayer.js") => page("nesplayer.js", "text/javascript; charset=utf-8"),
+        // app.js and screen.js import it: the wait for the model's frame.
+        ("GET" | "HEAD", "/model-load.js") => {
+            page("model-load.js", "text/javascript; charset=utf-8")
+        }
         ("GET" | "HEAD", "/style.css") => page("style.css", "text/css; charset=utf-8"),
         // The refinement view: the rule `gp rule` found and the last
         // `gp model refine` run on this game.
@@ -2932,6 +2936,38 @@ mod tests {
             ),
             Err(_) => eprintln!("skipped: no node"),
         }
+    }
+
+    /// The wait for the model's frame (mechanic/model-load.test.mjs): its
+    /// time limit runs from the preview's last step, and a load that stops
+    /// says the step it reached. Skipped where there is no node.
+    #[test]
+    fn the_page_waits_for_the_model_from_its_last_step() {
+        let test = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../mechanic/model-load.test.mjs");
+        match std::process::Command::new("node")
+            .arg("--test")
+            .arg(&test)
+            .output()
+        {
+            Ok(o) => assert!(
+                o.status.success(),
+                "{}{}",
+                String::from_utf8_lossy(&o.stdout),
+                String::from_utf8_lossy(&o.stderr)
+            ),
+            Err(_) => eprintln!("skipped: no node"),
+        }
+    }
+
+    /// The page's scripts each have a route: a module app.js or screen.js
+    /// imports that the server doesn't give stops the page's script whole.
+    #[test]
+    fn the_page_serves_the_model_wait() {
+        let d = tempfile::tempdir().unwrap();
+        let srv = server(d.path());
+        fs::write(d.path().join("repo/mechanic/model-load.js"), "the wait").unwrap();
+        let (status, _, body) = call(&srv, "GET", "/model-load.js", None);
+        assert_eq!((status, body.as_str()), (200, "the wait"));
     }
 
     /// The model's start (mechanic/reach.test.mjs): a request that can't

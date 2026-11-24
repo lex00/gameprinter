@@ -47,6 +47,7 @@
 // shown gives the model its draws, kept or recorded again from its replay.
 
 import { NesPlayer } from "./nesplayer.js";
+import { waitForModel } from "./model-load.js";
 import { InputTimeline, StickPull, settings as inputSettings } from "./input-timeline.js";
 
 const $ = (id) => document.getElementById(id);
@@ -527,6 +528,7 @@ window.addEventListener("message", (e) => {
   const m = e.data;
   if (m?.gp === "ready") { model.ready = true; model.onReady?.(); }
   else if (m?.gp === "failed") model.onFailed?.(m.message);
+  else if (m?.gp === "loading") model.onLoading?.(m.step);
   else if (m?.gp === "at") {
     model.draws = m.draws ?? null;
     document.body.dataset.draws = m.draws ? JSON.stringify(m.draws) : "";
@@ -677,14 +679,16 @@ async function loadModel(why) {
     } catch (e) { model.visible = null; }
     const f = $("model-frame");
     modelLooks = new Set([...modelLooks, ...Object.keys(themeTimes)]);
-    await new Promise((resolve, reject) => {
-      const t = setTimeout(() => reject(new Error("the model didn't load in 30 s")), 30000);
-      model.onReady = () => { clearTimeout(t); resolve(); };
-      model.onFailed = (why) => { clearTimeout(t); reject(new Error(`its preview didn't start: ${why}`)); };
+    // 30 s from the preview's last word, not from the start (model-load.js).
+    const w = waitForModel(() => {
       // files=here: the preview reads the build beside it, not the
       // browser's store of installed games.
       f.src = `${base}index.html?control=1&files=here${lookParam()}${profileParam()}&t=${Date.now()}`;
     });
+    model.onReady = w.ready;
+    model.onFailed = w.failed;
+    model.onLoading = w.step;
+    await w.done;
     if (mine !== model.token) return;
     await startModel(mine);
     if (why && mine === model.token) note(why);
