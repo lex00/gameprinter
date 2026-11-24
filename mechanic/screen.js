@@ -268,7 +268,9 @@ async function api(path, body) {
     const t = await r.text();
     let why = `${path}: ${r.status} ${t}`;
     try { why = JSON.parse(t).error ?? why; } catch (e) { /* not JSON: the status says it */ }
-    throw new Error(why);
+    // 503: gp serve moving onto a new gp refused it unread (serve/mod.rs
+    // moving); reach waits through it as through a server away.
+    throw Object.assign(new Error(why), { away: r.status === 503 });
   }
   return r.json();
 }
@@ -278,9 +280,10 @@ async function api(path, body) {
 // <reach>
 /** Whether an error is the browser failing to reach the page's server
  * (fetch's TypeError: "Failed to fetch" in Chrome, "Load failed" in
- * Safari), not an answer from it. */
+ * Safari), or the server refusing it unread while it moves onto a new gp
+ * (api's 503, marked `away`), not an answer from it. */
 function unreached(e) {
-  return e instanceof TypeError;
+  return e instanceof TypeError || e?.away === true;
 }
 
 /** fn() again while the page's server can't be reached: gp serve moves

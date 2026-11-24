@@ -100,6 +100,7 @@ const FILES: &[&str] = &[
     "journeys/start.js",
     "journeys/journey.js",
     "journeys/tabs.js",
+    "journeys/reach.js",
     "journeys/journeys.css",
 ];
 
@@ -962,6 +963,31 @@ fn shared(ctx: &Ctx, _req: &Request, params: &Params) -> Result<Response, Fail> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The first screen's calls (mechanic/journeys/reach.test.mjs): a
+    /// copy's PLAY read while gp serve moves onto a new gp says it waits in
+    /// words, then shows the game; a POST that can't reach the server isn't
+    /// sent twice. The file is one /start/ serves. Skipped where there is no
+    /// node.
+    #[test]
+    fn the_first_screen_waits_for_a_server_moving_onto_a_new_gp() {
+        assert!(FILES.contains(&"journeys/reach.js"));
+        let test = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../mechanic/journeys/reach.test.mjs");
+        match std::process::Command::new("node")
+            .arg("--test")
+            .arg(&test)
+            .output()
+        {
+            Ok(o) => assert!(
+                o.status.success(),
+                "{}{}",
+                String::from_utf8_lossy(&o.stdout),
+                String::from_utf8_lossy(&o.stderr)
+            ),
+            Err(_) => eprintln!("skipped: no node"),
+        }
+    }
 
     #[test]
     fn a_look_link_answers_only_while_something_listens_on_this_computer() {

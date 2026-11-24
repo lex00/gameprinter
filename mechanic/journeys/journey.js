@@ -68,11 +68,10 @@ export function mountJourney(box, kind, name, nav) {
 
   async function load() {
     try {
-      const r = await fetch(base);
-      const j = await r.json().catch(() => ({}));
-      if (!r.ok) throw new Error(j.error ?? `the page's server answered ${r.status}`);
-      v = j;
+      // Through start.js's wait for a server moving onto a new gp.
+      v = await nav.api(base);
     } catch (e) {
+      if (stopped) return;
       box.textContent = "";
       box.append(el("p", "jr-err", `This copy can't be read: ${e.message ?? e}`));
       const back = el("button", "jr-btn", "BACK TO THE FIRST SCREEN");

@@ -36,6 +36,7 @@ body.start .jr-btn:disabled { opacity: 0.5; cursor: default; }
 .jr-template { display: block; overflow-wrap: anywhere; }
 .jr-err { color: var(--nes-26); }
 .jr-err:empty { display: none; }
+#away { margin: 0; padding: 6px 16px; color: var(--nes-28); }
 .jr-ok { color: var(--nes-2a); }
 
 /* Whose turn: you in yellow, your agent in blue, the tools in green. */

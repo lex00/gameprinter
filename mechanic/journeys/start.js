@@ -8,6 +8,7 @@
 
 import { WHO, when } from "./journey.js";
 import { mountCopy, FIRST_TAB } from "./tabs.js";
+import { call, awayWords } from "./reach.js";
 
 const $ = (id) => document.getElementById(id);
 const el = (tag, cls, text) => {
@@ -17,15 +18,22 @@ const el = (tag, cls, text) => {
   return e;
 };
 
-async function api(path, body) {
-  const r = await fetch(path, body === undefined ? {} : {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  const v = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(v.error ?? `the page's server answered ${r.status}`);
-  return v;
+// Every call of the page (this file's, journey.js's and tabs.js's, through
+// nav.api) waits through gp serve moving onto a new gp, saying so in the
+// line under the tabs; what the page shows stays as it is meanwhile.
+const waits = new Set();
+function waitLine() {
+  const p = $("away");
+  if (!p) return;
+  p.hidden = !waits.size;
+  if (waits.size) p.textContent = awayWords(Math.max(...[...waits].map((w) => w.ms)));
+}
+function api(path, body) {
+  const w = { ms: 0 };
+  return call(path, body, {
+    away: (ms) => { w.ms = ms; waits.add(w); waitLine(); },
+    back: () => { waits.delete(w); waitLine(); },
+  }).finally(() => { waits.delete(w); waitLine(); });
 }
 
 let all = null;

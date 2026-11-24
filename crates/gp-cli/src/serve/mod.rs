@@ -652,17 +652,42 @@ fn serve_one(ctx: &Ctx, conn: &TcpStream) -> std::io::Result<()> {
     }
     // Counted while answered, so a move onto a new gp waits for it.
     let Some(_answering) = reload::Answering::begin() else {
-        return http::write_response(
-            conn,
-            &Response::error(
-                503,
-                "gp serve is moving onto a newly published gp; try again in a second",
-            ),
-            false,
-        );
+        return http::write_response(conn, &moving(&req), req.method == "HEAD");
     };
     let res = handle(ctx, &req);
     http::write_response(conn, &res, req.method == "HEAD")
+}
+
+/// The words of a request refused while gp serve moves onto a new gp: the
+/// pages' calls (mechanic/screen.js, mechanic/journeys/reach.js) know them
+/// by the 503 and wait.
+pub(crate) const MOVING: &str =
+    "gp serve is moving onto a newly published gp; try again in a second";
+
+/// The answer to a request that came while gp serve moves onto a new gp
+/// (reload.rs): a page the browser opens (a tab, or a frame such as a
+/// copy's PLAY, even one passed through /api/journeys/.../look/) gets a
+/// line in words that opens the page again by itself in a second; a page's
+/// own call (fetch: Sec-Fetch-Dest empty, Accept */*) gets
+/// `{"error": MOVING}`, which it waits through.
+fn moving(req: &Request) -> Response {
+    let page = match req.headers.get("sec-fetch-dest") {
+        Some(d) => matches!(d.as_str(), "document" | "iframe" | "frame"),
+        None => req
+            .headers
+            .get("accept")
+            .is_some_and(|a| a.contains("text/html")),
+    };
+    if !page {
+        return Response::error(503, MOVING);
+    }
+    Response {
+        status: 503,
+        ..Response::bytes(
+            "text/html; charset=utf-8",
+            b"<!doctype html><meta charset=utf-8><meta http-equiv=refresh content=1><title>Game Printer</title><body style=\"margin:0;background:#000;color:#fcfcfc;font:15px/1.45 ui-monospace,Menlo,monospace\"><p id=moving style=\"padding:12px 16px\">gp serve is moving onto a newly published gp. This opens again by itself in a second.</p>".to_vec(),
+        )
+    }
 }
 
 /// `GET /api/capture/{run}/stream?after=SEQ`: the run's events as
@@ -783,6 +808,66 @@ pub(crate) mod tests {
             matches("/api/capture/{run}/game", "/api/capture/roof%2Dtop/game").unwrap()["run"],
             "roof-top"
         );
+    }
+
+    /// A copy's PLAY frame opened while gp serve moves onto a new gp
+    /// (2026-11-23, the owner saw `{"error": ...}` there): the frame gets a
+    /// line in words that opens it again; a page's own call keeps the JSON
+    /// its wait knows.
+    #[test]
+    fn a_page_opened_while_serve_moves_says_so_and_opens_again() {
+        let req = |path: &str, headers: &[(&str, &str)]| Request {
+            method: "GET".into(),
+            path: path.into(),
+            headers: headers
+                .iter()
+                .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+                .collect(),
+            ..Request::default()
+        };
+        const HTML: &str = "text/html,application/xhtml+xml,*/*;q=0.8";
+        for page in [
+            req(
+                "/mechanic/rooftop/",
+                &[("accept", HTML), ("sec-fetch-dest", "iframe")],
+            ),
+            req(
+                "/api/journeys/theme/last-call/look/index.html",
+                &[("accept", HTML), ("sec-fetch-dest", "iframe")],
+            ),
+            req(
+                "/start/",
+                &[("accept", HTML), ("sec-fetch-dest", "document")],
+            ),
+            req("/start/", &[("accept", HTML)]),
+        ] {
+            let r = moving(&page);
+            assert_eq!(r.status, 503);
+            assert!(r.content_type.starts_with("text/html"), "{}", page.path);
+            let body = String::from_utf8(r.body).unwrap();
+            assert!(body.contains("http-equiv=refresh"), "{body}");
+            assert!(body.contains("opens again by itself"), "{body}");
+            assert!(!body.contains("\"error\""), "{body}");
+        }
+        for call in [
+            req(
+                "/api/journeys/theme/last-call",
+                &[("accept", "*/*"), ("sec-fetch-dest", "empty")],
+            ),
+            req("/api/journeys/theme/last-call", &[("accept", "*/*")]),
+            req(
+                "/start/journeys/tabs.js",
+                &[("accept", "*/*"), ("sec-fetch-dest", "script")],
+            ),
+        ] {
+            let r = moving(&call);
+            assert_eq!(r.status, 503);
+            assert_eq!(r.content_type, "application/json");
+            assert_eq!(
+                serde_json::from_slice::<serde_json::Value>(&r.body).unwrap()["error"],
+                MOVING
+            );
+        }
     }
 
     #[test]

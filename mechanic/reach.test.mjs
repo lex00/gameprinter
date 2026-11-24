@@ -86,3 +86,11 @@ test("an answer from the server is thrown at once; a server away too long is giv
   assert.equal(n, 6);
   assert.equal(await reach(async () => (++n < 9 ? away() : "ok"), { sleep }), "ok");
 });
+
+test("a 503 from a server moving onto a new gp is waited through as a server away", async () => {
+  let n = 0;
+  const moving = () => { throw Object.assign(new Error("gp serve is moving onto a newly published gp; try again in a second"), { away: true }); };
+  const waited = [];
+  assert.equal(await reach(async () => (++n < 4 ? moving() : "ok"), { sleep, away: (w) => waited.push(w) }), "ok");
+  assert.deepEqual(waited, [0, 1000, 2000]);
+});

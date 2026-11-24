@@ -87,10 +87,9 @@ function playPane(box, kind, name, nav) {
 
   async function load() {
     try {
-      const r = await fetch(base);
-      const j = await r.json().catch(() => ({}));
-      if (!r.ok) throw new Error(j.error ?? `the page's server answered ${r.status}`);
-      v = j;
+      // Through start.js's wait for a server moving onto a new gp: the
+      // game stays in its frame meanwhile.
+      v = await nav.api(base);
     } catch (e) {
       v = null;
       err = `This copy can't be read: ${e.message ?? e}`;

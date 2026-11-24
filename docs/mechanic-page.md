@@ -439,7 +439,14 @@ while the model builds and starts, the screen page sends such a request
 again every second for up to a minute, saying it waits for the server,
 and asks for the build again if the server came back having lost it
 (neither built nor building); it says the model couldn't start only
-when the server stays away or answers with an error.
+when the server stays away or answers with an error. While it moves, gp
+serve refuses what comes in with 503, unread: a page's call gets
+`{"error": "gp serve is moving onto a newly published gp; ..."}`, which
+the screen page waits through as above, and the first screen's calls
+(mechanic/journeys/reach.js: a copy's steps, its PLAY and its buttons)
+the same way, with a line under the tabs saying it waits; a page the
+browser opens (a tab, or the game in a copy's PLAY frame) gets a line in
+words that opens it again by itself a second later.
 
 On the loop's page, the quest log is grouped by state, each group a heading
 in words with its count: NEEDS YOU (triage asks the person, or the row is
