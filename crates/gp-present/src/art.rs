@@ -200,6 +200,11 @@ pub struct ArtRules {
     /// in the theme's letters as these words instead, in its own cells: a
     /// line the theme words its own way.
     pub text_say: Vec<(String, String)>,
+    /// `#+ counter_off COUNTER [when COUNTER CMP VALUE...]`: a board game's
+    /// counter (by the model's name for it) drawn by neither the theme nor
+    /// the board while every test holds, always with none: a second
+    /// player's score left off while no second player plays.
+    pub counter_off: Vec<CounterOff>,
     /// `#+ in REGION pic ...`: a picture drawn only while the body is in a
     /// named region of the stage.
     pub region_pics: Vec<(String, ArtPic)>,
@@ -233,12 +238,31 @@ impl Default for ArtRules {
             text_center: Vec::new(),
             recolor: Vec::new(),
             text_say: Vec::new(),
+            counter_off: Vec::new(),
             region_pics: Vec::new(),
             region_timed: Vec::new(),
             rooms: Vec::new(),
             skipped: Vec::new(),
         }
     }
+}
+
+/// `#+ counter_off`: a counter the board draws, left out while its tests
+/// hold. Each test is a counter's name, its comparison (one of [`CMPS`])
+/// and the value.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CounterOff {
+    pub counter: String,
+    pub when: Vec<(String, String, i64)>,
+}
+
+/// The comparisons a `counter_off` test takes, as a model's `when` has
+/// them.
+pub const CMPS: [&str; 6] = ["<", "<=", "==", "!=", ">=", ">"];
+
+/// A model counter's name as a rule gives it: letters, digits and `_`.
+fn counter_word(n: &str) -> bool {
+    !n.is_empty() && n.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
 }
 
 fn inside(f: &str) -> bool {
@@ -370,6 +394,29 @@ impl ArtRules {
             }
             ["text_say", slot, words @ ..] if !words.is_empty() => {
                 self.text_say.push(((*slot).to_owned(), words.join(" ")));
+            }
+            ["counter_off", counter, rest @ ..] if counter_word(counter) => {
+                let tests = match rest {
+                    [] => &[][..],
+                    ["when", t @ ..] if !t.is_empty() && t.len() % 3 == 0 => t,
+                    _ => return Err(()),
+                };
+                let mut when = Vec::new();
+                for t in tests.chunks(3) {
+                    let [c, cmp, v] = t else { return Err(()) };
+                    if !counter_word(c) || !CMPS.contains(cmp) {
+                        return Err(());
+                    }
+                    when.push((
+                        (*c).to_owned(),
+                        (*cmp).to_owned(),
+                        v.parse().map_err(|_| ())?,
+                    ));
+                }
+                self.counter_off.push(CounterOff {
+                    counter: (*counter).to_owned(),
+                    when,
+                });
             }
             ["in", region, rest @ ..] if region_name(region) => {
                 let mut one = ArtRules::default();

@@ -323,6 +323,7 @@ A reader takes a line whose first word starts with `#` for a note. So a page bui
 | `#+ room_run CLASS LEFT MID RIGHT` | On each group of the class's cells, the two end pieces at its ends and the middle one repeated between, as tall as the group | |
 | `#+ room_box CLASS PIECE` | The piece over each group of the class's cells | |
 | `#+ room_at CLASS PIECE DX DY` | The piece at its own size at each of the class's cells, moved `DX DY` screen pixels | |
+| `#+ counter_off COUNTER [when COUNTER CMP VALUE ...]` | An arcade game's counter (the model's name) drawn by neither the theme nor the board while every test of the model's counters holds, always with none: `#+ counter_off score_2 when score_2 == 0` leaves Tapper's second score off through a one-player game (docs/formats/board-art.md, "Themes") | The board draws the counter as its model says |
 
 In a region a body's `in` rules come first, its timed ones that hold now and then its picture, before its other `timed` rules and its `pic`. A region's name is lowercase letters, digits, `-` and `_`; the regions are named in the game's level kit (docs/level-kit.md, "Regions of a stage"), never by coordinates in the theme. `gp theme look check` refuses an `in` line whose region the kit doesn't name; the build carries the kit's regions in `preview.json` and the page gives them to the module (`Art::set_regions`). Moss Hop's kit names one, `start`; Donkey Kong's and Tapper's name none yet. The art an `in` line names is numbered after every other art file, so a look without the lines numbers its files as before.
 

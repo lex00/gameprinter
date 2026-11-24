@@ -99,6 +99,8 @@ An arcade game such as Tapper is drawn by its board, and its theme uses the same
 
 Two rules change how a board game's texts are drawn in your letters: `#+ text_center X0 X1 [Y0 Y1]` centres each text line that lies within columns X0 to X1 (cells of 16 pixels) between them, its spaces at either end left out, so lines the game padded unevenly sit in the middle (with Y0 Y1, only the lines in those rows, so a panel's lines move and another screen's lines in the same columns stay where the game put them); `#+ text_say SLOT WORDS...` draws the text with that slot in your letters as those words instead, in its own cells, for a line you word your own way (a space your letters lack is drawn by neither, so the room shows).
 
+`#+ counter_off COUNTER [when COUNTER CMP VALUE ...]` leaves one of the game's counters off the screen while the game's own counters say so, `CMP` one of `<`, `<=`, `==`, `!=`, `>=`, `>`: in Tapper, `#+ counter_off score_2 when score_2 == 0` hides the second player's score until it has points, where a picture for its 0 would also blank the 0s of a real score. With no `when` the counter is never drawn.
+
 Sizes and places are the board's picture's pixels, 512 by 480; `scale 2` draws the art at twice that. Which codes each entity shows comes from your own romset, never from the theme or the game's package:
 
 ```sh

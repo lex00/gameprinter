@@ -41,6 +41,9 @@ pub struct BoardArt {
     kinds: Vec<Option<KindSprite>>,
     /// The spec's kind names, by index.
     kind_names: Vec<String>,
+    /// The spec's counter names, by index, as a theme's `counter_off`
+    /// names them.
+    counter_names: Vec<String>,
     /// Whether the model's positions are the board's own units (its state
     /// mapping's `board_units`): top left, y down, each unit
     /// [`video::UNIT`] screen pixels, so a body's sprite entry holds the
@@ -87,6 +90,20 @@ struct Test {
     counter: usize,
     cmp: gp_model::model::Cmp,
     value: i64,
+}
+
+/// A comparison as a rule writes it (`==`), as the model's `when` reads it.
+fn cmp_of(s: &str) -> Option<gp_model::model::Cmp> {
+    use gp_model::model::Cmp;
+    Some(match s {
+        "<" => Cmp::Lt,
+        "<=" => Cmp::Le,
+        "==" => Cmp::Eq,
+        "!=" => Cmp::Ne,
+        ">=" => Cmp::Ge,
+        ">" => Cmp::Gt,
+        _ => return None,
+    })
 }
 
 impl Test {
@@ -281,7 +298,11 @@ impl LevelBoard {
         }
         let mut v = videoram.to_vec();
         let mut drawn = Vec::new();
-        let mut put = |cell: usize, word: [u8; 2], name: String, text: Option<(usize, usize)>| {
+        let mut put = |cell: usize,
+                       word: [u8; 2],
+                       name: String,
+                       text: Option<(usize, usize)>,
+                       counter: Option<usize>| {
             let left = omit.is_some_and(|o| o.get(drawn.len()).copied().unwrap_or(false));
             if !left && let Some(c) = v.get_mut(cell * 2..cell * 2 + 2) {
                 c.copy_from_slice(&word);
@@ -290,7 +311,12 @@ impl LevelBoard {
                 // A cell written again shows its last word, as the board's
                 // video RAM does: only that one is drawn.
                 drawn.retain(|d: &CellDrawn| d.cell != cell);
-                drawn.push(CellDrawn { name, cell, text });
+                drawn.push(CellDrawn {
+                    name,
+                    cell,
+                    text,
+                    counter,
+                });
             }
         };
         let value = |counter: usize, plus: i64| {
@@ -323,13 +349,20 @@ impl LevelBoard {
                     [n.codes[*d as usize], n.high],
                     n.digit_name(*d),
                     None,
+                    Some(n.counter),
                 );
             }
         }
         for r in self.repeats.iter().filter(|r| Test::all(&r.when, w)) {
             let count = value(r.counter, r.plus) as usize;
             for &cell in r.cells.iter().take(count) {
-                put(cell, r.word, counter_name(&r.name, None), None);
+                put(
+                    cell,
+                    r.word,
+                    counter_name(&r.name, None),
+                    None,
+                    Some(r.counter),
+                );
             }
         }
         for (ti, t) in self
@@ -339,7 +372,7 @@ impl LevelBoard {
             .filter(|(_, t)| Test::all(&t.when, w))
         {
             for (ci, &(cell, word)) in t.cells.iter().enumerate() {
-                put(cell, word, letter_name(word), Some((ti, ci)));
+                put(cell, word, letter_name(word), Some((ti, ci)), None);
             }
         }
         (std::borrow::Cow::Owned(v), drawn)
@@ -355,6 +388,8 @@ pub struct CellDrawn {
     /// For a text's letter: the text (its place in the level's texts) and
     /// the letter's place in it.
     pub text: Option<(usize, usize)>,
+    /// For a counter's digit or tile: the counter (the spec's index).
+    pub counter: Option<usize>,
 }
 
 /// The name a theme gives a sprite of the board: its entity and its
@@ -928,6 +963,7 @@ impl BoardArt {
             levels,
             kinds,
             kind_names: spec.kinds.iter().map(|k| k.name.clone()).collect(),
+            counter_names: spec.counters.names().map(str::to_owned).collect(),
             board_units: false,
         }))
     }
@@ -1495,6 +1531,10 @@ pub struct BoardTheme {
     /// The rooms the theme built (`#+ room`), each over a screen the board
     /// shows, from the screen's cells in the player's lift.
     pub rooms: Vec<BuiltRoom>,
+    /// The counters the theme leaves out (`#+ counter_off`), each with
+    /// the tests that must hold, by the spec's counter indices. A rule
+    /// naming a counter the model hasn't got is passed over.
+    counter_off: Vec<(usize, Vec<Test>)>,
 }
 
 impl BoardTheme {
@@ -1581,6 +1621,26 @@ impl BoardArt {
             .enumerate()
             .map(|(i, p)| (p.file.clone(), i as u32))
             .collect();
+        let counter = |name: &str| self.counter_names.iter().position(|n| n == name);
+        let counter_off = art
+            .rules
+            .counter_off
+            .iter()
+            .filter_map(|r| {
+                let when = r
+                    .when
+                    .iter()
+                    .map(|(c, cmp, value)| {
+                        Some(Test {
+                            counter: counter(c)?,
+                            cmp: cmp_of(cmp)?,
+                            value: *value,
+                        })
+                    })
+                    .collect::<Option<Vec<_>>>()?;
+                Some((counter(&r.counter)?, when))
+            })
+            .collect();
         Ok(BoardTheme {
             art,
             present,
@@ -1588,6 +1648,7 @@ impl BoardArt {
             painter: gp_present::art::Painter::new(),
             last: None,
             rooms,
+            counter_off,
         })
     }
 
@@ -1809,10 +1870,21 @@ impl BoardArt {
                 }
             }
         }
+        // The counters the theme leaves off this frame (`#+ counter_off`):
+        // their cells drawn by neither, so the screen under them shows.
+        let off: Vec<usize> = theme
+            .counter_off
+            .iter()
+            .filter(|(_, when)| Test::all(when, w))
+            .map(|(c, _)| *c)
+            .collect();
         let mut cells = Vec::new();
         let mut cell_of = Vec::new();
         let mut unnamed = vec![false; full.cells.len()];
         for (k, (c, (name, own_words))) in full.cells.iter().zip(&names).enumerate() {
+            if c.counter.is_some_and(|i| off.contains(&i)) {
+                continue;
+            }
             let Some(p) = pic(name) else {
                 // A worded line's letter the theme has no picture for (a
                 // space) is drawn by neither.
@@ -3300,6 +3372,47 @@ asset = "stage2"
         let at = |p: &Picture, x: usize, y: usize| p.pens[y * video::WIDTH + x];
         assert_eq!(at(&t.picture, 4 * 16, 16), 16 + 5);
         assert_eq!(at(&t.picture, 3 * 16, 16), at(&plain, 3 * 16, 16));
+    }
+
+    /// `#+ counter_off COUNTER when ...` leaves a counter's cells to the
+    /// screen, drawn by neither the theme nor the board, while its tests
+    /// hold (a second player's score while there is none), and draws them
+    /// as before when they don't. A rule naming a counter the model hasn't
+    /// got is passed over; one that can't be read is skipped.
+    #[test]
+    fn a_counter_the_theme_turns_off_is_drawn_by_neither() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_, spec, art) = with_looks_and_counters(dir.path());
+        let c = |n: &str| spec.counters.index_of(n).unwrap();
+        let mut w = World {
+            counters: vec![0; spec.counters.len()],
+            ..Default::default()
+        };
+        w.counters[c("score")] = 120;
+        let plain = art.draw(&w, &[], &[]).unwrap();
+        let rules = "gp-art 1\npic counter-score-2 two.png 16 16 0 0\n\
+                     #+ counter_off score when lives == 0\n\
+                     #+ counter_off nothing_like_it\n\
+                     #+ counter_off score when lives =\n";
+        let mut theme = art.theme(rules).unwrap();
+        assert_eq!(theme.art.rules.counter_off.len(), 2);
+        assert_eq!(theme.art.rules.skipped.len(), 1);
+        let at = |p: &Picture, x: usize, y: usize| p.pens[y * video::WIDTH + x];
+        // No lives: the score's three digits are the screen's tile 1 in
+        // bank 1, and the theme draws no digit.
+        let t = art.themed(&mut theme, &w, &[], &[]).unwrap();
+        assert!(t.frame.draws.is_empty());
+        for x in 3..=5 {
+            assert_eq!(at(&t.picture, x * 16, 16), 16 + 5, "cell ({x}, 1)");
+        }
+        assert_ne!(at(&plain, 3 * 16, 16), 16 + 5);
+        // Lives again: the theme's 2 and the board's 1 and 0.
+        w.counters[c("lives")] = 3;
+        w.frame = 1;
+        let t = art.themed(&mut theme, &w, &[], &[]).unwrap();
+        assert_eq!(t.frame.draws.len(), 1);
+        assert_eq!(at(&t.picture, 3 * 16, 16), at(&plain, 3 * 16, 16));
+        assert_eq!(at(&t.picture, 5 * 16, 16), at(&plain, 5 * 16, 16));
     }
 
     /// `#+ text_center` moves a text line so its letters sit centred
