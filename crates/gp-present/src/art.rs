@@ -60,6 +60,13 @@
 //!   elsewhere the picture's other rules, as before. The regions are named
 //!   in the game's kit and given with [`Art::set_regions`]; until then no
 //!   `in` rule holds.
+//! - `#+ on SCREEN... pic ...`, `#+ on SCREEN... timed ...` and `#+ on
+//!   SCREEN... also ...`: a `pic`, `timed` or `also` rule that holds only
+//!   while the level picture is one of those screens (or a board's stage
+//!   of one, `SCREEN-N`). There its `on` rules come first, after any `in`
+//!   rule that holds (its timed ones that hold, then its picture), and its
+//!   `on` `also` pictures are drawn in place of its plain ones; on any
+//!   other screen the plain rules hold, as before.
 //! - `#+ room SCREEN...`, `#+ room_cells`, `#+ room_fill`, `#+ room_run`,
 //!   `#+ room_box`, `#+ room_at` and `#+ room_react`: an arcade game's screens built from the stage's
 //!   pieces on the cells of the screen the player's lift gives
@@ -210,6 +217,9 @@ pub struct ArtRules {
     pub region_pics: Vec<(String, ArtPic)>,
     /// `#+ in REGION timed ...`, likewise.
     pub region_timed: Vec<(String, Timed)>,
+    /// `#+ on SCREEN... pic|timed|also ...`: rules that hold only on those
+    /// screens.
+    pub on_screen: Vec<OnScreen>,
     /// `#+ room SCREEN...` and the lines after it: screens built from the
     /// stage's pieces ([`room`]).
     pub rooms: Vec<RoomRules>,
@@ -241,10 +251,53 @@ impl Default for ArtRules {
             counter_off: Vec::new(),
             region_pics: Vec::new(),
             region_timed: Vec::new(),
+            on_screen: Vec::new(),
             rooms: Vec::new(),
             skipped: Vec::new(),
         }
     }
+}
+
+/// `#+ on SCREEN... RULE`: a `pic`, `timed` or `also` rule that holds only
+/// while the level picture is one of `screens`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OnScreen {
+    pub screens: Vec<String>,
+    pub rule: OnRule,
+}
+
+/// The rule of an [`OnScreen`] line.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OnRule {
+    Pic(ArtPic),
+    Timed(Timed),
+    Also(ArtPic),
+}
+
+impl OnRule {
+    fn build(&self) -> &str {
+        match self {
+            OnRule::Pic(p) | OnRule::Also(p) => &p.build,
+            OnRule::Timed(t) => &t.build,
+        }
+    }
+
+    fn art(&self) -> &str {
+        match self {
+            OnRule::Pic(p) | OnRule::Also(p) => &p.art.art,
+            OnRule::Timed(t) => &t.art.art,
+        }
+    }
+}
+
+/// Whether the level picture `file` is the screen `screen`: that screen's
+/// picture, or a board's stage of it (`SCREEN-N`, a look's own stage).
+fn of_screen(file: &str, screen: &str) -> bool {
+    file == screen
+        || file
+            .strip_prefix(screen)
+            .and_then(|r| r.strip_prefix('-'))
+            .is_some_and(|k| !k.is_empty() && k.bytes().all(|b| b.is_ascii_digit()))
 }
 
 /// `#+ counter_off`: a counter the board draws, left out while its tests
@@ -434,6 +487,25 @@ impl ArtRules {
                     _ => return Err(()),
                 }
             }
+            ["on", rest @ ..] => {
+                let k = rest
+                    .iter()
+                    .position(|x| matches!(*x, "pic" | "timed" | "also"))
+                    .filter(|k| *k > 0)
+                    .ok_or(())?;
+                let (screens, line) = rest.split_at(k);
+                let mut one = ArtRules::default();
+                one.rule(line)?;
+                let rule = match line[0] {
+                    "pic" => OnRule::Pic(one.pics.pop().ok_or(())?),
+                    "timed" => OnRule::Timed(one.timed.pop().ok_or(())?),
+                    _ => OnRule::Also(one.also.pop().ok_or(())?),
+                };
+                self.on_screen.push(OnScreen {
+                    screens: names(screens),
+                    rule,
+                });
+            }
             _ => return Err(()),
         }
         Ok(())
@@ -609,6 +681,13 @@ impl ArtRules {
         for r in &self.rooms {
             named.extend(r.screens.iter().map(String::as_str));
         }
+        for o in &self.on_screen {
+            named.push(o.rule.build());
+            if let OnRule::Timed(Timed { after: Some(a), .. }) = &o.rule {
+                named.push(a);
+            }
+            named.extend(o.screens.iter().map(String::as_str));
+        }
         let mut seen = std::collections::BTreeSet::new();
         named.retain(|n| seen.insert(*n));
         named
@@ -652,6 +731,7 @@ impl ArtRules {
         // An `also` picture is loaded too: without it in the list, its
         // number fell to the first file's, and that picture was drawn.
         self.also.iter().for_each(|a| add(&a.art.art));
+        self.on_screen.iter().for_each(|o| add(o.rule.art()));
         out
     }
 }
@@ -757,6 +837,12 @@ pub struct Art {
     /// once [`Art::set_regions`] gives it, else None (its rules never
     /// hold).
     regions: Vec<(String, RegionAt)>,
+    /// By the build's picture: its `#+ on` `pic` and `timed` rules, each
+    /// with the level pictures (the screens and their stages) it holds on,
+    /// in the order given.
+    on_screen: Vec<Vec<(Vec<u32>, InRegion)>>,
+    /// By the build's picture: its `#+ on` `also` pictures, likewise.
+    on_also: Vec<Vec<(Vec<u32>, Placed)>>,
 }
 
 /// The drift's level and each art's number and size.
@@ -877,6 +963,41 @@ impl Art {
                 also[i as usize].push(placed(&a.art));
             }
         }
+        let mut on_screen = vec![Vec::new(); n];
+        let mut on_also = vec![Vec::new(); n];
+        for o in &rules.on_screen {
+            let Some(i) = pic(o.rule.build()) else {
+                continue;
+            };
+            // The screens' pictures and the board's stages of them; a
+            // screen the build hasn't got matches none.
+            let on: Vec<u32> = p
+                .pictures
+                .iter()
+                .enumerate()
+                .filter(|(_, x)| o.screens.iter().any(|s| of_screen(&x.file, s)))
+                .map(|(k, _)| k as u32)
+                .collect();
+            match &o.rule {
+                OnRule::Pic(a) => on_screen[i as usize].push((on, InRegion::Pic(placed(&a.art)))),
+                OnRule::Also(a) => on_also[i as usize].push((on, placed(&a.art))),
+                OnRule::Timed(t) => {
+                    let after = t.after.as_ref().map(|a| pic(a).unwrap_or(u32::MAX));
+                    on_screen[i as usize].push((
+                        on,
+                        InRegion::Timed(TimedAt {
+                            from: t.from,
+                            to: t.to,
+                            every: t.every,
+                            after,
+                            wait: t.wait,
+                            hide: t.hide,
+                            art: placed(&t.art),
+                        }),
+                    ));
+                }
+            }
+        }
         let mut hud_layers = vec![false; n];
         for l in p.levels.iter().filter_map(|l| l.hud_layer) {
             if let Some(v) = hud_layers.get_mut(l as usize) {
@@ -918,8 +1039,27 @@ impl Art {
             sizes,
             in_region,
             regions,
+            on_screen,
+            on_also,
             rules,
         })
+    }
+
+    /// The `also` pictures of build picture `pic` on level `level`: its
+    /// `#+ on` ones for that screen when it has any, else its plain ones.
+    fn also_on(&self, pic: u32, level: Option<u32>) -> Vec<Placed> {
+        let on: Vec<Placed> = self
+            .on_also
+            .get(pic as usize)
+            .into_iter()
+            .flatten()
+            .filter(|(at, _)| level.is_some_and(|l| at.contains(&l)))
+            .map(|(_, a)| *a)
+            .collect();
+        if !on.is_empty() {
+            return on;
+        }
+        self.also.get(pic as usize).cloned().unwrap_or_default()
     }
 
     /// Gives the regions the game's kit names: a `#+ in` line whose region
@@ -1313,7 +1453,8 @@ impl Painter {
         let base = art.pics.get(pic as usize).copied().flatten();
         let timed = art.timed.get(pic as usize).filter(|r| !r.is_empty());
         let here = art.in_region.get(pic as usize).filter(|r| !r.is_empty());
-        if timed.is_none() && here.is_none() {
+        let on = art.on_screen.get(pic as usize).filter(|r| !r.is_empty());
+        if timed.is_none() && here.is_none() && on.is_none() {
             return (base, false);
         }
         let a = self.ages.get(i).filter(|a| a.pic == Some(pic));
@@ -1332,6 +1473,16 @@ impl Painter {
         };
         for (k, rule) in here.into_iter().flatten() {
             if !art.in_region(*k, d, level) {
+                continue;
+            }
+            match rule {
+                InRegion::Timed(r) if holds(r) => return (Some(r.art), r.hide),
+                InRegion::Pic(a) => return (Some(*a), false),
+                InRegion::Timed(_) => {}
+            }
+        }
+        for (at, rule) in on.into_iter().flatten() {
+            if !level.is_some_and(|l| at.contains(&l)) {
                 continue;
             }
             match rule {
@@ -1466,7 +1617,7 @@ impl Painter {
             a.of = Of::Body(i);
             let (ax, ay, alpha) = (d.x + ox, d.y + oy, a.alpha);
             out.draws.push(a);
-            for p in art.also.get(d.pic as usize).into_iter().flatten() {
+            for p in &art.also_on(d.pic, s.level) {
                 let mut e = placed(Some(*p), d.pic, ax, ay);
                 // Turned with the body about the body's own picture: a
                 // thing drawn at its right hand is at its left when the

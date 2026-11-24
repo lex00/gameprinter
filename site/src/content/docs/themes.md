@@ -47,6 +47,7 @@ Pictures are named by the build's own file names (`frame-82-0.png`, `hud-0.png`)
 | `#+ hud_over ROW...` | The same for those rows of the HUD only, 8 pixels each from the screen's top (row 2 is y 16 to 24) |
 | `#+ room SCREEN...`, `#+ room_cells`, `#+ room_fill`, `#+ room_run`, `#+ room_box`, `#+ room_at`, `#+ room_react`, `#+ room_front` | An arcade game's rooms built from your pieces on the screen your romset gives (below, "An arcade game") |
 | `#+ in REGION pic ...`, `#+ in REGION timed ...` | A `pic` or `timed` line that holds only while the body stands in a region of the stage the game's level kit names, such as a shorter picture on a low ledge. Moss Hop's kit names one, `start`, where the hero starts; Donkey Kong's and Tapper's name none yet |
+| `#+ on SCREEN... pic ...`, `#+ on SCREEN... timed ...`, `#+ on SCREEN... also ...` | A `pic`, `timed` or `also` line that holds only on those screens of the game, the plain line holding on the rest: a drink drawn the other way round in a room where the bartender stands at the bars' other end. `gp theme look check` names a screen the game hasn't got |
 
 A theme never holds a picture of a stage. The `stage`, `stage_piece` and `level` lines describe how to build each stage from pieces (a plank, a ladder rail, a rope, a wheel) on top of the level picture from the player's own ROM, finding floors, ladders and ropes by colour. That way a theme carries no layout from the original.
 

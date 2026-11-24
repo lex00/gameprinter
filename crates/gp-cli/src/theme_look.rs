@@ -1467,6 +1467,7 @@ fn added_checks(
         let why = match word {
             "hud_over" => "`#+ hud_over` takes no row or rows of the HUD, each a number from 0 to 63 (8 pixels each from the screen's top)".to_owned(),
             "in" => "`#+ in` takes a region's name (lowercase letters, digits, - and _) and then a whole `pic` or `timed` line".to_owned(),
+            "on" => "`#+ on` takes one or more of the game's screens and then a whole `pic`, `timed` or `also` line".to_owned(),
             "room" => "`#+ room` takes one or more screens, after the `stage` line".to_owned(),
             "room_cells" => "`#+ room_cells` takes a new class's name (lowercase letters, digits, - and _) after a `#+ room` line, then its tests: tile=N or tile=LO-HI, bank=N, prio=N (0 to 3), share=P (1 to 100), !CLASS for a class given before, and colour tests such as r>g+40".to_owned(),
             "room_fill" | "room_box" => format!("`#+ {word}` takes a class its room gives and a piece"),
@@ -1475,7 +1476,7 @@ fn added_checks(
             "room_react" => "`#+ room_react` takes a class its room gives, its offset DX DY in screen pixels, then each piece of its cycle with the game frames it holds, PIECE:FRAMES (1 or more), and no pick=".to_owned(),
             "room_react_when" => "`#+ room_react_when` comes after a `#+ room_react` and takes a piece and one or more tests, COUNTER CMP VALUE, CMP one of < <= == != >= >".to_owned(),
             "" => "it says nothing after `#+`".to_owned(),
-            w => format!("no page knows `#+ {w}`; the lines are `#+ hud_over`, `#+ in` and the room lines (`#+ room`, `room_cells`, `room_fill`, `room_run`, `room_box`, `room_at`, `room_react`, `room_react_when`, `room_front`, `room_mask`), and `#+ recolor`"),
+            w => format!("no page knows `#+ {w}`; the lines are `#+ hud_over`, `#+ in`, `#+ on` and the room lines (`#+ room`, `room_cells`, `room_fill`, `room_run`, `room_box`, `room_at`, `room_react`, `room_react_when`, `room_front`, `room_mask`), and `#+ recolor`"),
         };
         r.add(
             Group::Files,
@@ -1553,7 +1554,10 @@ fn added_checks(
             }
         }
     }
-    let used = rules.hud_over.is_some() || !rules.regions().is_empty() || !rules.rooms.is_empty();
+    let used = rules.hud_over.is_some()
+        || !rules.regions().is_empty()
+        || !rules.rooms.is_empty()
+        || !rules.on_screen.is_empty();
     if used {
         r.add(
             Group::Files,
@@ -3355,6 +3359,59 @@ mod tests {
         assert!(
             o.text
                 .contains("read as the page reads them; 2 pictures named, all there"),
+            "{}",
+            o.text
+        );
+    }
+
+    /// `#+ on SCREEN...`: a screen the game shows is read with no problem,
+    /// one it hasn't got is refused by its line, and a line with no screen
+    /// says what it takes.
+    #[test]
+    fn the_check_knows_an_on_screen_line_and_refuses_a_screen_the_game_hasnt_got() {
+        let g = tempfile::tempdir().unwrap();
+        let game = game(g.path());
+        let t = tempfile::tempdir().unwrap();
+        let art = "gp-art 1\nscale 4\npic frame-0-0.png art/roll.png 16 16 0 0\npic frame-1-0.png art/roll.png 16 16 0 0\n";
+        let check = |art: &str| {
+            theme(t.path(), GOOD_PACKAGE, GOOD_LOOK, art);
+            for f in ["roll", "short"] {
+                put(
+                    t.path(),
+                    &format!("theme/art/{f}.png"),
+                    &picture(64, 64, [8, 8, 56, 64]).png(),
+                );
+            }
+            report(t.path(), &game, Ok(built()), None).unwrap()
+        };
+        let o = check(&format!(
+            "{art}#+ on frame-1-0.png pic frame-0-0.png art/short.png 16 12 0 4\n"
+        ));
+        assert!(levels(&o, "problem").is_empty(), "{}", o.text);
+        assert!(
+            o.text
+                .contains("uses `#+` lines, which a page built before them takes for notes"),
+            "{}",
+            o.text
+        );
+        let o = check(&format!(
+            "{art}#+ on screen_zz pic frame-0-0.png art/short.png 16 12 0 4\n"
+        ));
+        let problems = levels(&o, "problem");
+        assert_eq!(problems.len(), 1, "{}", o.text);
+        assert!(
+            problems[0]
+                .starts_with("theme/art.txt 5 names a picture this game doesn't have (screen_zz"),
+            "{}",
+            o.text
+        );
+        let o = check(&format!(
+            "{art}#+ on pic frame-0-0.png art/short.png 16 12 0 4\n"
+        ));
+        let problems = levels(&o, "problem");
+        assert_eq!(problems.len(), 1, "{}", o.text);
+        assert!(
+            problems[0].contains("(`#+ on` takes one or more of the game's screens"),
             "{}",
             o.text
         );

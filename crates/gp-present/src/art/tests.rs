@@ -620,6 +620,87 @@ fn a_pose_by_place_shows_only_in_its_region() {
     assert_eq!(at(&a, &painter, 40, 20, 0), 0);
 }
 
+/// A `#+ on SCREEN` rule holds on that screen (and a board's stage of it,
+/// `SCREEN-N`) and the plain rule on every other: a drink's liquid drawn
+/// one way in a room where the bartender stands mirrored and the other way
+/// in the rest.
+#[test]
+fn a_rule_on_a_screen_holds_there_and_the_plain_one_elsewhere() {
+    let pic = |f: &str, w, h| Picture {
+        file: f.into(),
+        size: [w, h],
+    };
+    let p = Present {
+        pictures: vec![
+            pic("screen_saloon", 512, 480),
+            pic("screen_park", 512, 480),
+            pic("screen_park-1", 512, 480),
+            pic("sprite-beer-15", 32, 32),
+            pic("sprite-man-1", 32, 32),
+        ],
+        ..Present::default()
+    };
+    let text = "gp-art 1\nscale 2\n\
+        pic sprite-beer-15 a/beer.png 32 32 0 0\n\
+        also sprite-man-1 a/mug.png 8 8 20 4\n\
+        #+ on screen_park pic sprite-beer-15 a/beer-left.png 32 32 -10 0\n\
+        #+ on screen_park also sprite-man-1 a/mug-left.png 8 8 2 4\n\
+        #+ on screen_saloon screen_park timed sprite-man-1 0 2 a/blink.png 32 32 0 0\n\
+        #+ on pic sprite-beer-15 a/x.png 1 1 0 0\n";
+    let r = ArtRules::read(text).unwrap();
+    assert_eq!(r.on_screen.len(), 3);
+    assert_eq!(r.on_screen[2].screens, ["screen_saloon", "screen_park"]);
+    // An `on` with no screen is passed over.
+    assert_eq!(r.skipped.iter().map(|x| x.0).collect::<Vec<_>>(), [8]);
+    // The screens are names the build must have.
+    assert_eq!(
+        r.passed_over(&["sprite-beer-15", "sprite-man-1"]),
+        ["screen_park", "screen_saloon"]
+    );
+    let a = Art::new(r, &p).unwrap();
+    let file = |n: &str| a.files.iter().position(|f| f == n).unwrap() as u32;
+    let on = |level: u32, painter: &Painter| {
+        let f = framed(Scene {
+            level: Some(level),
+            bodies: vec![draw(3, 100, 100), draw(4, 200, 100)],
+            ..Scene::default()
+        });
+        arts(&painter.frame(&a, &p, &f, 224))
+    };
+    let old = Painter::new();
+    let mut painter = Painter::new();
+    // Past the timed frames: the screen's own beer and mug in the park and
+    // in its stage, the plain ones in the saloon.
+    for _ in 0..3 {
+        painter.step(
+            &a,
+            &Scene {
+                level: Some(0),
+                bodies: vec![draw(3, 100, 100), draw(4, 200, 100)],
+                ..Scene::default()
+            },
+        );
+    }
+    for level in [1, 2] {
+        assert_eq!(
+            on(level, &painter),
+            [
+                (file("a/beer-left.png"), 90, 92),
+                (file("a/mug-left.png"), 202, 96)
+            ],
+            "level {level}"
+        );
+    }
+    assert_eq!(
+        on(0, &painter),
+        [(file("a/beer.png"), 100, 92), (file("a/mug.png"), 220, 96)]
+    );
+    // A timed rule on both screens holds on each, before the rest.
+    for level in [0, 1] {
+        assert_eq!(on(level, &old)[1].0, file("a/blink.png"), "level {level}");
+    }
+}
+
 /// An `also` picture is drawn with a body while it shows its build, over
 /// the body and turned with it; another pose draws none. It is a file of
 /// its own: a `pic` before it doesn't take its place.
