@@ -68,8 +68,8 @@
 //!   `on` `also` pictures are drawn in place of its plain ones; on any
 //!   other screen the plain rules hold, as before.
 //! - `#+ room SCREEN...`, `#+ room_cells`, `#+ room_fill`, `#+ room_run`,
-//!   `#+ room_box`, `#+ room_at` and `#+ room_react`: an arcade game's screens built from the stage's
-//!   pieces on the cells of the screen the player's lift gives
+//!   `#+ room_box`, `#+ room_at`, `#+ room_react` and `#+ room_scroll`: an
+//!   arcade game's screens built from the stage's pieces on the cells of the screen the player's lift gives
 //!   ([`room`]). The runtime gives each screen's cells with
 //!   [`Art::build_room`].
 //!
@@ -820,6 +820,10 @@ pub struct Art {
     /// By the build's picture: the room's `#+ room_react` pieces
     /// ([`room::Room::live`]), their pieces as [`Art::files`] numbers.
     live: Vec<Vec<room::Live>>,
+    /// By the build's picture: the room's draws that are drawn frame by
+    /// frame ([`room::Room::moving`], a `#+ room_scroll` piece's and those
+    /// over it), their pieces as [`Art::files`] numbers.
+    moving: Vec<Vec<room::Moving>>,
     /// The seed a room's piece alternatives (`#+ room_box picture a|b`)
     /// are picked by ([`room::pick`]); the page gives a new one each time
     /// it loads a theme, so each is as likely.
@@ -1024,6 +1028,7 @@ impl Art {
             room_seed: 0,
             stages: vec![None; n],
             live: vec![Vec::new(); n],
+            moving: vec![Vec::new(); n],
             holes,
             held: set(&rules.held)?,
             also,
@@ -1202,7 +1207,14 @@ impl Art {
             .live
             .iter_mut()
             .flat_map(|l| l.draws.iter_mut().flatten());
-        for d in built.stage.draws.iter_mut().chain(live_draws) {
+        let moving_draws = built.moving.iter_mut().map(|m| &mut m.draw);
+        for d in built
+            .stage
+            .draws
+            .iter_mut()
+            .chain(live_draws)
+            .chain(moving_draws)
+        {
             if let StageSrc::Piece(i) = d.src {
                 let art = &st.pieces[i as usize].1;
                 d.src =
@@ -1211,7 +1223,68 @@ impl Art {
         }
         self.stages[pic as usize] = Some(built.stage);
         self.live[pic as usize] = built.live;
+        self.moving[pic as usize] = built.moving;
         Ok(built.cells)
+    }
+
+    /// The draws of the room over screen picture `pic` that its stage
+    /// leaves out, as game frame `frame` shows them: the `#+ room_scroll`
+    /// pieces where the frame has slid them, and the draws of later lines
+    /// that lie over them, in the order of their lines. Each is in the
+    /// window, the screen's top left at `[ox, oy]` (window pixels), to
+    /// paint over the room and under the bodies; `within` (a box as an
+    /// [`ArtDraw`]'s clip, a `#+ room_front` box) cuts them to it and
+    /// leaves out those outside it.
+    #[must_use]
+    pub fn moving_draws(
+        &self,
+        pic: u32,
+        frame: u64,
+        origin: [i64; 2],
+        within: Option<[i64; 4]>,
+    ) -> Vec<ArtDraw> {
+        let (Some(moving), Some(st)) = (self.moving.get(pic as usize), self.stage(pic)) else {
+            return Vec::new();
+        };
+        let (u, s) = (ART_SUB, st.scale.max(1));
+        let (ox, oy) = (origin[0] * u, origin[1] * u);
+        let mut out = Vec::new();
+        for d in moving.iter().flat_map(|m| m.draws(frame)) {
+            let StageSrc::Piece(file) = d.src else {
+                continue;
+            };
+            let mut clip = d.clip.map(|c| {
+                [
+                    ox + c[0] * u / s,
+                    oy + c[1] * u / s,
+                    c[2] * u / s,
+                    c[3] * u / s,
+                ]
+            });
+            if let Some(b) = within {
+                let c = clip.unwrap_or(b);
+                let (x0, y0) = (c[0].max(b[0]), c[1].max(b[1]));
+                let (x1, y1) = (
+                    (c[0] + c[2]).min(b[0] + b[2]),
+                    (c[1] + c[3]).min(b[1] + b[3]),
+                );
+                if x0 >= x1 || y0 >= y1 {
+                    continue;
+                }
+                clip = Some([x0, y0, x1 - x0, y1 - y0]);
+            }
+            let mut a = ArtDraw::new(
+                Src::Art(file),
+                ox + d.x * u / s,
+                oy + d.y * u / s,
+                d.w * u / s,
+                d.h * u / s,
+            );
+            a.flip_x = d.flip_x;
+            a.clip = clip;
+            out.push(a);
+        }
+        out
     }
 
     /// The `#+ room_react` pieces of the room over screen picture `pic` as

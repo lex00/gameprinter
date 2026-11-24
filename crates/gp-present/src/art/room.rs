@@ -67,6 +67,19 @@
 //!   A piece larger than a cell is not squeezed into each cell: it repeats
 //!   from the screen's top left as a fill's does, so one painting (a
 //!   field, a sky) carries on under a room's edges.
+//! - `#+ room_scroll PIECE DX EVERY`: every draw of that piece in the room
+//!   (a `room_fill`'s, a `room_mask`'s, a `room_at`'s, a `room_box`'s or a
+//!   `room_run`'s) slides sideways as the game plays: `DX` stage pixels
+//!   (to the right, or to the left when negative) every `EVERY` game
+//!   frames (1 or more), counted on the game's own frame number, so a clip
+//!   replays the same. The piece shows only where it was laid (a fill's
+//!   cells, a mask's pixels, an `at` piece's own box) and comes round
+//!   again at its own width (`stage_piece`'s `W`), a second copy one width
+//!   away filling the gap: one layer that slides behind the room's edges.
+//!   A fill's or a mask's piece is laid from the screen's top left
+//!   whatever its size, so its whole layer moves as one. A piece wider
+//!   than the screen leaves the screen wholly before it comes back. The
+//!   draws of later lines that lie over it are drawn over it still.
 //! - `#+ room_front C0 R0 C1 R1`: the room drawn again over the bodies in
 //!   the cells from column C0, row R0 to column C1, row R1: a wall a body
 //!   walks or is thrown into hides it there.
@@ -228,6 +241,52 @@ impl Live {
     }
 }
 
+/// A `#+ room_scroll` line: the piece whose draws slide, `dx` stage pixels
+/// every `every` game frames, and its line in the rules.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Scroll {
+    pub piece: String,
+    pub dx: i64,
+    pub every: u64,
+    pub line: usize,
+}
+
+/// A draw of a built room that is not in its stage, which is painted once,
+/// but drawn frame by frame: a `#+ room_scroll` piece's (`scroll` its `DX`
+/// and `EVERY`, the draw's clip the place it shows in), or a later line's
+/// that lies over one and so is drawn after it, as it stands.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Moving {
+    pub draw: StageDraw,
+    pub scroll: Option<(i64, u64)>,
+}
+
+impl Moving {
+    /// Its draws on game frame `frame`. A scrolled piece is one layer that
+    /// repeats at its own width from its place moved `DX` for each `EVERY`
+    /// frames gone: each copy of it that reaches into the draw's clip,
+    /// left to right, every one with that clip.
+    #[must_use]
+    pub fn draws(&self, frame: u64) -> Vec<StageDraw> {
+        let d = &self.draw;
+        let (Some((dx, every)), Some([cx, _, cw, _])) = (self.scroll, d.clip) else {
+            return vec![d.clone()];
+        };
+        let w = d.w.max(1);
+        let steps = ((frame / every.max(1)) % w as u64) as i64;
+        let off = (steps * dx.rem_euclid(w)).rem_euclid(w);
+        let mut x = cx - (cx - d.x - off).rem_euclid(w);
+        let mut out = Vec::with_capacity(2);
+        while x < cx + cw {
+            let mut c = d.clone();
+            c.x = x;
+            out.push(c);
+            x += w;
+        }
+        out
+    }
+}
+
 /// A rule laying pieces on a class's cells, with its line in the rules.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Place {
@@ -261,6 +320,8 @@ pub struct RoomRules {
     /// `#+ room_front`: boxes of cells, `[c0, r0, c1, r1]`, the room drawn
     /// over the bodies.
     pub front: Vec<[usize; 4]>,
+    /// `#+ room_scroll`: the pieces whose draws slide as the game plays.
+    pub scrolls: Vec<Scroll>,
 }
 
 fn number(s: &str) -> Option<u16> {
@@ -340,6 +401,23 @@ impl RoomRules {
                     return Err(());
                 }
                 room.front.push(b);
+            }
+            ["room_scroll", p, dx, every] => {
+                let room = rooms.last_mut().ok_or(())?;
+                let every: u64 = every.parse().map_err(|_| ())?;
+                if *p == "-"
+                    || p.contains('|')
+                    || every == 0
+                    || room.scrolls.iter().any(|s| s.piece == *p)
+                {
+                    return Err(());
+                }
+                room.scrolls.push(Scroll {
+                    piece: (*p).to_owned(),
+                    dx: dx.parse().map_err(|_| ())?,
+                    every,
+                    line,
+                });
             }
             ["room_react_when", p, tests @ ..]
                 if *p != "-" && !tests.is_empty() && tests.len() % 3 == 0 =>
@@ -490,6 +568,71 @@ pub struct Room {
     /// The `#+ room_react` pieces, one for each cell of their class, in
     /// the order of their rules: drawn frame by frame over the stage.
     pub live: Vec<Live>,
+    /// The draws left out of the stage and drawn frame by frame over it,
+    /// in the order of their lines: the `#+ room_scroll` pieces' and those
+    /// of later lines that lie over them.
+    pub moving: Vec<Moving>,
+}
+
+/// Whether two boxes `[x, y, w, h]` share a pixel.
+fn meet(a: [i64; 4], b: [i64; 4]) -> bool {
+    a[0] < b[0] + b[2] && b[0] < a[0] + a[2] && a[1] < b[1] + b[3] && b[1] < a[1] + a[3]
+}
+
+/// Takes the scrolled pieces' draws (`scrolls`: a piece's number in the
+/// stage's pieces, its `DX` and `EVERY`) out of `draws`, and with them
+/// each later draw that lies over one taken, so the order of the lines
+/// holds. A scrolled draw is cut to where it stood (its clip, else its own
+/// box), and the copies of one layer (a fill's tiles in one rectangle) are
+/// kept once, since [`Moving::draws`] repeats it.
+fn split(draws: &mut Vec<StageDraw>, scrolls: &[(u32, i64, u64)]) -> Vec<Moving> {
+    let mut moving: Vec<Moving> = Vec::new();
+    // The boxes the draws taken so far show in.
+    let mut taken: Vec<[i64; 4]> = Vec::new();
+    let mut stay = Vec::with_capacity(draws.len());
+    for mut d in draws.drain(..) {
+        let own = [d.x, d.y, d.w, d.h];
+        let scroll = scrolls
+            .iter()
+            .find(|(p, ..)| d.src == super::stage::StageSrc::Piece(*p))
+            .map(|&(_, dx, every)| (dx, every));
+        if scroll.is_some() {
+            let clip = *d.clip.get_or_insert(own);
+            let same = moving.last().is_some_and(|m| {
+                let l = &m.draw;
+                m.scroll.is_some()
+                    && (l.src, l.y, l.w, l.h, l.flip_x, l.clip)
+                        == (d.src, d.y, d.w, d.h, d.flip_x, d.clip)
+                    && (d.x - l.x).rem_euclid(d.w.max(1)) == 0
+            });
+            if !same {
+                taken.push(clip);
+                moving.push(Moving { draw: d, scroll });
+            }
+            continue;
+        }
+        // What it paints: its box, inside its clip.
+        let shows = d.clip.map_or(Some(own), |c| {
+            let (x0, y0) = (c[0].max(own[0]), c[1].max(own[1]));
+            let (x1, y1) = (
+                (c[0] + c[2]).min(own[0] + own[2]),
+                (c[1] + c[3]).min(own[1] + own[3]),
+            );
+            (x0 < x1 && y0 < y1).then_some([x0, y0, x1 - x0, y1 - y0])
+        });
+        match shows {
+            Some(b) if taken.iter().any(|t| meet(*t, b)) => {
+                taken.push(b);
+                moving.push(Moving {
+                    draw: d,
+                    scroll: None,
+                });
+            }
+            _ => stay.push(d),
+        }
+    }
+    *draws = stay;
+    moving
 }
 
 /// Each class's cells, by class, as a grid of `cols` by `rows`.
@@ -655,6 +798,16 @@ pub fn build_seeded(st: &StageRules, r: &RoomRules, cells: &Cells, seed: u64) ->
             .collect(),
     };
     let classes = classify(r, cells);
+    // The scrolled pieces by their number in the stage's pieces.
+    let scrolls: Vec<(u32, i64, u64)> = r
+        .scrolls
+        .iter()
+        .filter_map(|sc| {
+            let i = st.pieces.iter().position(|p| p.0 == sc.piece)?;
+            Some((i as u32, sc.dx, sc.every))
+        })
+        .collect();
+    let scrolled = |p: u32| scrolls.iter().any(|(i, ..)| *i == p);
     let mut counts = Vec::with_capacity(r.places.len());
     let mut live = Vec::new();
     // A piece at its own size at cell `i`, its top left `d` screen pixels
@@ -699,7 +852,7 @@ pub fn build_seeded(st: &StageRules, r: &RoomRules, cells: &Cells, seed: u64) ->
                 let Some((p, [tw, th])) = piece(p) else {
                     continue;
                 };
-                if tw == side && th == side {
+                if tw == side && th == side && !scrolled(p) {
                     for (i, _) in grid.iter().enumerate().filter(|(_, c)| **c) {
                         let (x, y) = ((i % cols) as i64 * side, (i / cols) as i64 * side);
                         let mut d = StageDraw::piece(p, x, y, side, side);
@@ -731,7 +884,7 @@ pub fn build_seeded(st: &StageRules, r: &RoomRules, cells: &Cells, seed: u64) ->
                 // A piece one cell square is laid cell by cell; a larger
                 // one repeats from the screen's top left, as a fill does,
                 // so one painting runs unbroken under a room's edges.
-                let large = tw != side || th != side;
+                let large = tw != side || th != side || scrolled(p);
                 for (i, _) in grid.iter().enumerate().filter(|(_, c)| **c) {
                     let c = &cells.cells[i];
                     // The cell's pixels as a square, row by row, in the
@@ -848,10 +1001,16 @@ pub fn build_seeded(st: &StageRules, r: &RoomRules, cells: &Cells, seed: u64) ->
             }
         }
     }
+    let moving = if scrolls.is_empty() {
+        Vec::new()
+    } else {
+        split(&mut out.draws, &scrolls)
+    };
     Room {
         stage: out,
         cells: counts,
         live,
+        moving,
     }
 }
 
@@ -1159,6 +1318,188 @@ mod tests {
             let w: Vec<&str> = bad.split_whitespace().collect();
             assert_ne!(
                 RoomRules::line(&mut rooms, Some(&st), &w, 6),
+                Ok(true),
+                "{bad}"
+            );
+        }
+    }
+
+    /// `#+ room_scroll` takes its piece's draws out of the stage: a fill's
+    /// tiles in a rectangle become one layer, laid from the screen's top
+    /// left and moved `DX` after each `EVERY` frames, each copy that
+    /// reaches into the rectangle drawn with the rectangle's clip (so one
+    /// more, a width away, once it has moved). The same frame gives the
+    /// same draws, and a piece that isn't scrolled stays in the stage.
+    #[test]
+    fn a_scrolled_fill_slides_as_one_layer_and_wraps_at_its_width() {
+        let lines = [
+            "room rooftop",
+            "room_cells bar tile=2",
+            "room_cells door tile=3",
+            "room_cells sky !bar !door",
+            "room_fill sky wall",
+            "room_box bar top",
+            "room_scroll wall 3 4",
+        ];
+        let (st, r) = rules(&lines);
+        assert_eq!(r.scrolls[0].piece, "wall");
+        assert_eq!((r.scrolls[0].dx, r.scrolls[0].every), (3, 4));
+        let (_, still) = rules(&lines[..6]);
+        let (room, plain) = (build(&st, &r, &screen()), build(&st, &still, &screen()));
+        assert_eq!(room.cells, plain.cells);
+        // The bar's box lies on no sky cell: it stays in the stage, alone.
+        let top: Vec<&StageDraw> = room.stage.draws.iter().collect();
+        assert_eq!(top.len(), 1);
+        assert_eq!(top[0].src, StageSrc::Piece(1));
+        assert!(room.moving.iter().all(|m| m.scroll == Some((3, 4))));
+        let at =
+            |f: u64| -> Vec<StageDraw> { room.moving.iter().flat_map(|m| m.draws(f)).collect() };
+        // Until the first slide, the fill's own draws, each tile once.
+        let fill: Vec<StageDraw> = plain
+            .stage
+            .draws
+            .iter()
+            .filter(|d| d.src == StageSrc::Piece(0))
+            .cloned()
+            .collect();
+        let sorted = |mut v: Vec<StageDraw>| {
+            v.sort_by_key(|d| (d.clip, d.y, d.x));
+            v
+        };
+        assert_eq!(sorted(at(0)), sorted(fill.clone()));
+        assert_eq!(at(3), at(0));
+        // After 4 frames each tile is 3 to the right with its clip as it
+        // was, and each row of a rectangle has one more a width (64) to
+        // the left of its first, so the layer has no gap at the wrap.
+        let moved = at(4);
+        for d in &fill {
+            let mut m = d.clone();
+            m.x += 3;
+            // A tile slid wholly out of its rectangle is not drawn.
+            let [cx, _, cw, _] = d.clip.unwrap();
+            assert_eq!(moved.contains(&m), m.x < cx + cw, "{d:?}");
+        }
+        for m in &moved {
+            let [cx, _, cw, _] = m.clip.unwrap();
+            assert_eq!((m.x - 3).rem_euclid(64), 0, "{m:?}");
+            assert!(m.x < cx + cw && m.x + 64 > cx, "{m:?}");
+            assert!(fill.iter().any(|d| d.clip == m.clip && d.y == m.y));
+        }
+        // One layer: wherever two draws show the same place, they show
+        // the same pixel of the piece, and each clip's row is covered
+        // from side to side.
+        for f in [0, 4, 40, 85, 1000] {
+            let now = at(f);
+            let off = (f / 4 * 3 % 64) as i64;
+            for m in &now {
+                assert_eq!((m.x - off).rem_euclid(64), 0, "frame {f} {m:?}");
+                assert_eq!(m.y % 64, 0);
+            }
+            for m in &room.moving {
+                let [cx, _, cw, _] = m.draw.clip.unwrap();
+                let row = m.draws(f);
+                assert!(row[0].x <= cx && row.last().unwrap().x + 64 >= cx + cw);
+                assert!(row.windows(2).all(|p| p[1].x - p[0].x == 64));
+            }
+        }
+        // A whole width on (64 slides of 3 are 3 widths): as at the start.
+        assert_eq!(at(64 * 4), at(0));
+        assert_eq!(at(85), at(85));
+        // To the left: the layer a width less 3 on, the same thing.
+        let mut left = lines;
+        left[6] = "room_scroll wall -3 4";
+        let (st, r) = rules(&left);
+        let room = build(&st, &r, &screen());
+        let first = room.moving[0].draws(4);
+        assert_eq!((first[0].x + 3).rem_euclid(64), 0);
+    }
+
+    /// A scrolled mask's piece slides under the pixels that pass, each
+    /// run's clip as it was; a scrolled `room_at` piece slides inside its
+    /// own box, a second copy a width away once it has moved; and a later
+    /// line's draw that lies over a scrolled one leaves the stage too, to
+    /// be drawn over it in its line's order, as it stands.
+    #[test]
+    fn a_scrolled_mask_and_piece_keep_their_place_and_what_lies_over_them() {
+        let mut sc = screen();
+        sc.cells[9].colors = vec![[200, 40, 30], [200, 40, 30], [90, 90, 90], [90, 90, 90]];
+        let (st, r) = rules(&[
+            "room hilltop",
+            "room_cells c tile=1",
+            "room_cells door tile=3",
+            "room_cells bar tile=2",
+            "room_mask c wall r>g+100",
+            "room_at door door 0 0",
+            "room_box bar end",
+            "room_scroll wall -2 1",
+            "room_scroll door 5 2",
+        ]);
+        let room = build(&st, &r, &sc);
+        let z = sc.size * st.scale;
+        // The bar's box is far from both: the stage keeps it.
+        assert_eq!(room.stage.draws.len(), 1);
+        assert_eq!(room.stage.draws[0].src, StageSrc::Piece(2));
+        // The mask's one run, then the two doors (cells 8 and 16).
+        assert_eq!(room.moving.len(), 3);
+        let run = &room.moving[0];
+        assert_eq!(run.draw.clip, Some([z, z, z, z / 2]));
+        for f in 0..70 {
+            let d = run.draws(f);
+            // 64 wide over a 32-wide run: one copy, two where it wraps.
+            let x = (-2 * f as i64).rem_euclid(64);
+            let want: Vec<i64> = if x > z && x < 2 * z {
+                vec![x - 64, x]
+            } else if x <= z {
+                vec![x]
+            } else {
+                vec![x - 64]
+            };
+            assert_eq!(d.iter().map(|d| d.x).collect::<Vec<_>>(), want, "{f}");
+            assert!(d.iter().all(|d| d.clip == run.draw.clip && d.y == 0));
+        }
+        // The door, 40 by 80 at cell 8: cut to its own box.
+        let door = &room.moving[1];
+        assert_eq!(door.draw.clip, Some([0, 32, 40, 80]));
+        assert_eq!(door.draws(1).len(), 1);
+        let d = door.draws(2);
+        assert_eq!(d.iter().map(|d| d.x).collect::<Vec<_>>(), [5 - 40, 5]);
+        assert!(d.iter().all(|d| d.clip == door.draw.clip && d.y == 32));
+        // The second door (cell 16, at y 64) lies over the first's box,
+        // and slides itself.
+        assert_eq!(room.moving[2].scroll, Some((5, 2)));
+        // A box laid after over a scrolled piece is drawn after it, still.
+        let (st, r) = rules(&[
+            "room hilltop",
+            "room_cells door tile=3",
+            "room_cells bar tile=2",
+            "room_at door door 0 0",
+            "room_box door end",
+            "room_box bar end",
+            "room_scroll door 1 1",
+        ]);
+        let room = build(&st, &r, &screen());
+        assert_eq!(room.stage.draws.len(), 1);
+        let over = room.moving.last().unwrap();
+        assert_eq!(over.scroll, None);
+        assert_eq!(over.draw.src, StageSrc::Piece(2));
+        assert_eq!(over.draws(0), over.draws(99));
+        assert_eq!(over.draws(7), vec![over.draw.clone()]);
+        // Refused: no frames, a list of pieces, the same piece twice.
+        let mut rooms = Vec::new();
+        for l in ["room s", "room_cells c", "room_scroll wall 1 1"] {
+            let w: Vec<&str> = l.split_whitespace().collect();
+            RoomRules::line(&mut rooms, Some(&st), &w, 1).unwrap();
+        }
+        for bad in [
+            "room_scroll top 1 0",
+            "room_scroll top|end 1 1",
+            "room_scroll wall 2 2",
+            "room_scroll top x 1",
+            "room_scroll top 1",
+        ] {
+            let w: Vec<&str> = bad.split_whitespace().collect();
+            assert_ne!(
+                RoomRules::line(&mut rooms, Some(&st), &w, 4),
                 Ok(true),
                 "{bad}"
             );

@@ -2016,6 +2016,9 @@ impl BoardArt {
                     // this game frame and the model's counters show them.
                     if let Src::Stage(l) = d.src {
                         let u = gp_present::art::ART_SUB;
+                        // Its pieces that slide (`#+ room_scroll`) and
+                        // what lies over them, as this game frame has them.
+                        draws.extend(theme.art.moving_draws(l, w.frame, [d.x / u, d.y / u], None));
                         let holds = |c: &str, cmp: &str, v: i64| {
                             let at = self.counter_names.iter().position(|n| n == c);
                             match (at.and_then(|i| w.counters.get(i)), cmp_of(cmp)) {
@@ -2029,7 +2032,15 @@ impl BoardArt {
                 }
                 // The room over the bodies in its front boxes, after the
                 // board's picture.
-                (_, Src::Stage(_)) if d.clip.is_some() => draws.push(d.clone()),
+                (_, Src::Stage(l)) if d.clip.is_some() => {
+                    draws.push(d.clone());
+                    let u = gp_present::art::ART_SUB;
+                    draws.extend(
+                        theme
+                            .art
+                            .moving_draws(l, w.frame, [d.x / u, d.y / u], d.clip),
+                    );
+                }
                 // The board's own pictures are in its picture.
                 (_, Src::Own(_) | Src::Tint(..) | Src::Stage(_) | Src::Backdrop) => {}
                 _ => draws.push(d.clone()),
@@ -3971,6 +3982,79 @@ asset = "stage2"
         w.counters[c("cleared")] = 0;
         w.frame = 12;
         assert_eq!(shown(&mut theme, &w), "right.png");
+    }
+
+    /// A room's `#+ room_scroll` piece is drawn after the room and before
+    /// the board's picture, cut to the cell it was laid on, and slid by
+    /// the game's frame number: the same frame, the same draw.
+    #[test]
+    fn a_scrolled_room_piece_slides_with_the_games_frames() {
+        let dir = tempfile::tempdir().unwrap();
+        let (model, _, _) = with_looks_and_counters(dir.path());
+        // One cell of tile 0 in colour bank 2 at column 10, row 5.
+        let rows: Vec<String> = (0..30)
+            .map(|y| {
+                let row: Vec<&str> = (0..32)
+                    .map(|x| {
+                        if (x, y) == (10, 5) {
+                            "0x2000"
+                        } else {
+                            "0x1001"
+                        }
+                    })
+                    .collect();
+                format!("[{}]", row.join(", "))
+            })
+            .collect();
+        std::fs::write(
+            dir.path().join("stage.toml"),
+            format!("rows = [{}]\n", rows.join(",\n")),
+        )
+        .unwrap();
+        let lifted = gp_interp::Lifted::read_dir(dir.path(), &model).unwrap();
+        let spec = gp_interp::compile::compile(&model, &lifted).unwrap();
+        let art = BoardArt::load(&model, &spec, dir.path()).unwrap().unwrap();
+        let text = "gp-art 1\nscale 2\nstage 2 0 0 0 0 0 0\n\
+                    stage_piece clouds clouds.png 64 32\n\
+                    #+ room stage\n#+ room_cells sky bank=2\n\
+                    #+ room_fill sky clouds\n#+ room_scroll clouds 3 2\n";
+        let mut theme = art.theme(text).unwrap();
+        assert!(
+            theme.art.rules.skipped.is_empty(),
+            "{:?}",
+            theme.art.rules.skipped
+        );
+        let mut w = World {
+            counters: vec![0; spec.counters.len()],
+            ..Default::default()
+        };
+        // Stage pixels are 2 to a screen pixel, 8 parts each.
+        let k = gp_present::art::ART_SUB / 2;
+        let shown = |theme: &mut BoardTheme, w: &World| {
+            let t = art.themed(theme, w, &[], &[]).unwrap();
+            let at = t.board_at;
+            let d: Vec<_> = t.frame.draws[1..at].to_vec();
+            for d in &d {
+                assert!(matches!(d.src, gp_present::art::Src::Art(_)), "{d:?}");
+                assert_eq!((d.y, d.w, d.h), (160 * k, 64 * k, 32 * k));
+                assert_eq!(d.clip, Some([320 * k, 160 * k, 32 * k, 32 * k]));
+            }
+            d.iter().map(|d| d.x).collect::<Vec<_>>()
+        };
+        // The cell (16 screen pixels square) is stage pixels 320 to 352,
+        // where a tile of the layer starts.
+        assert_eq!(shown(&mut theme, &w), [320 * k]);
+        w.frame = 1;
+        assert_eq!(shown(&mut theme, &w), [320 * k]);
+        // One slide: the tile 3 to the right, and the copy a width to its
+        // left fills the cell's first 3.
+        w.frame = 2;
+        assert_eq!(shown(&mut theme, &w), [(323 - 64) * k, 323 * k]);
+        // 11 slides on the tile has left the cell: the copy alone.
+        w.frame = 22;
+        assert_eq!(shown(&mut theme, &w), [(353 - 64) * k]);
+        let mut again = art.theme(text).unwrap();
+        assert_eq!(shown(&mut again, &w), [(353 - 64) * k]);
     }
 
     #[test]

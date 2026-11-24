@@ -1476,8 +1476,9 @@ fn added_checks(
             "room_react" => "`#+ room_react` takes a class its room gives, its offset DX DY in screen pixels, then each piece of its cycle with the game frames it holds, PIECE:FRAMES (1 or more), and no pick=".to_owned(),
             "room_react_when" => "`#+ room_react_when` comes after a `#+ room_react` and takes a piece and one or more tests, COUNTER CMP VALUE, CMP one of < <= == != >= >".to_owned(),
             "room_react_drift" => "`#+ room_react_drift` comes once after a `#+ room_react` and takes VX VY, the screen pixels it moves (whole numbers from -64 to 64, not both 0), and PER, the game frames each move takes (1 or more)".to_owned(),
+            "room_scroll" => "`#+ room_scroll` takes one piece (no `a|b` list) after a `#+ room` line, the stage pixels it slides, DX (negative for left), and the game frames each slide takes, EVERY (1 or more), once for a piece in a room".to_owned(),
             "" => "it says nothing after `#+`".to_owned(),
-            w => format!("no page knows `#+ {w}`; the lines are `#+ hud_over`, `#+ in`, `#+ on` and the room lines (`#+ room`, `room_cells`, `room_fill`, `room_run`, `room_box`, `room_at`, `room_react`, `room_react_when`, `room_react_drift`, `room_front`, `room_mask`), and `#+ recolor`"),
+            w => format!("no page knows `#+ {w}`; the lines are `#+ hud_over`, `#+ in`, `#+ on` and the room lines (`#+ room`, `room_cells`, `room_fill`, `room_run`, `room_box`, `room_at`, `room_react`, `room_react_when`, `room_react_drift`, `room_scroll`, `room_front`, `room_mask`), and `#+ recolor`"),
         };
         r.add(
             Group::Files,
@@ -1696,6 +1697,42 @@ fn room_checks(
             }
         }
     }
+    for (line, said) in scroll_problems(rules) {
+        r.add(Group::Kit, Level::Problem, Some(art_rel), Some(line), said);
+    }
+}
+
+/// What is wrong with the rooms' `#+ room_scroll` lines, each with its
+/// line: a piece no `stage_piece` line gives, or one no line of its room
+/// lays, slides nothing.
+fn scroll_problems(rules: &ArtRules) -> Vec<(usize, String)> {
+    let pieces: BTreeSet<&str> = rules
+        .stage
+        .iter()
+        .flat_map(|st| st.pieces.iter().map(|p| p.0.as_str()))
+        .collect();
+    let mut out = Vec::new();
+    for room in &rules.rooms {
+        for sc in &room.scrolls {
+            let name = sc.piece.as_str();
+            if !pieces.contains(name) {
+                out.push((
+                    sc.line,
+                    format!(
+                        "names {name} no `stage_piece` line gives, and the page passes over it. Add `stage_piece NAME ART W H` or fix the name"
+                    ),
+                ));
+            } else if !room.places.iter().any(|p| p.pieces().contains(&name)) {
+                out.push((
+                    sc.line,
+                    format!(
+                        "slides {name}, which no line of its room lays, so nothing moves. Lay it with `#+ room_fill`, `#+ room_mask` or `#+ room_at` in the same room, or fix the name"
+                    ),
+                ));
+            }
+        }
+    }
+    out
 }
 
 /// An arcade game's board names against what the person's sheet saw the
@@ -3959,5 +3996,39 @@ mod tests {
             p.iter().all(|t| !t.contains("screen with nothing drawn")),
             "{p:?}"
         );
+    }
+
+    /// The check reads a `#+ room_scroll` line, and says so of one whose
+    /// piece the look hasn't got or its room never lays; a line it can't
+    /// read is passed over as any `#+` line is.
+    #[test]
+    fn the_check_knows_a_scroll_line_and_names_a_piece_the_look_hasnt_got() {
+        let head = "gp-art 1\nscale 2\nstage 2 0 0 0 0 0 0\nstage_piece clouds art/clouds.png 64 32\nstage_piece hilltop art/hilltop.png 16 16\n#+ room rooftop\n#+ room_cells all\n#+ room_fill all clouds\n";
+        let read = |line: &str| ArtRules::read(&format!("{head}{line}\n")).unwrap();
+        let rules = read("#+ room_scroll clouds 1 4");
+        assert!(rules.skipped.is_empty(), "{:?}", rules.skipped);
+        assert_eq!(rules.rooms[0].scrolls.len(), 1);
+        assert!(scroll_problems(&rules).is_empty());
+        let p = scroll_problems(&read("#+ room_scroll airship -1 2"));
+        assert_eq!(p.len(), 1);
+        assert!(
+            p[0].0 == 9
+                && p[0]
+                    .1
+                    .starts_with("names airship no `stage_piece` line gives"),
+            "{p:?}"
+        );
+        let p = scroll_problems(&read("#+ room_scroll hilltop -1 2"));
+        assert!(
+            p.len() == 1
+                && p[0]
+                    .1
+                    .starts_with("slides hilltop, which no line of its room lays"),
+            "{p:?}"
+        );
+        // No frames to a slide: passed over, and nothing slides.
+        let rules = read("#+ room_scroll clouds 1 0");
+        assert_eq!(rules.skipped.len(), 1, "{:?}", rules.skipped);
+        assert!(rules.rooms[0].scrolls.is_empty());
     }
 }
