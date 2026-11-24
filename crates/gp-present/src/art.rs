@@ -1426,7 +1426,7 @@ impl Art {
             let StageSrc::Piece(file) = d.src else {
                 continue;
             };
-            let mut clip = d.clip.map(|c| {
+            let clip = d.clip.map(|c| {
                 [
                     ox + c[0] * u / s,
                     oy + c[1] * u / s,
@@ -1434,18 +1434,9 @@ impl Art {
                     c[3] * u / s,
                 ]
             });
-            if let Some(b) = within {
-                let c = clip.unwrap_or(b);
-                let (x0, y0) = (c[0].max(b[0]), c[1].max(b[1]));
-                let (x1, y1) = (
-                    (c[0] + c[2]).min(b[0] + b[2]),
-                    (c[1] + c[3]).min(b[1] + b[3]),
-                );
-                if x0 >= x1 || y0 >= y1 {
-                    continue;
-                }
-                clip = Some([x0, y0, x1 - x0, y1 - y0]);
-            }
+            let Some(clip) = cut_within(clip, within) else {
+                continue;
+            };
             let mut a = ArtDraw::new(
                 Src::Art(file),
                 ox + d.x * u / s,
@@ -1465,12 +1456,15 @@ impl Art {
     /// moved them by then), `holds` answering each `when` test
     /// (a counter's name, its comparison and the value): each one's draw
     /// in the window, its top left at the screen's `[ox, oy]` (window
-    /// pixels), to paint over the room and under the bodies.
+    /// pixels), to paint over the room and under the bodies; `within` (a
+    /// `#+ room_front` box, as an [`ArtDraw`]'s clip) cuts them to it and
+    /// leaves out those outside it, to paint again over the bodies there.
     pub fn live_draws(
         &self,
         pic: u32,
         frame: u64,
         origin: [i64; 2],
+        within: Option<[i64; 4]>,
         holds: impl Fn(&str, &str, i64) -> bool,
     ) -> Vec<ArtDraw> {
         let (Some(live), Some(st)) = (self.live.get(pic as usize), self.stage(pic)) else {
@@ -1492,7 +1486,7 @@ impl Art {
                 );
                 a.flip_x = d.flip_x;
                 // A drifting piece is cut to its screen.
-                a.clip = d.clip.map(|[x, y, w, h]| {
+                let clip = d.clip.map(|[x, y, w, h]| {
                     [
                         origin[0] * u + x * u / s,
                         origin[1] * u + y * u / s,
@@ -1500,6 +1494,14 @@ impl Art {
                         h * u / s,
                     ]
                 });
+                // Where there is no clip, the piece's own box is what
+                // `within` cuts.
+                let own = [a.x, a.y, a.w, a.h];
+                a.clip = if within.is_some() {
+                    cut_within(Some(clip.unwrap_or(own)), within)?
+                } else {
+                    clip
+                };
                 Some(a)
             })
             .collect()
@@ -1510,6 +1512,22 @@ impl Art {
     pub fn stage(&self, pic: u32) -> Option<&Stage> {
         self.stages.get(pic as usize).and_then(Option::as_ref)
     }
+}
+
+/// A draw's clip cut to box `within` (both in window pixels, as an
+/// [`ArtDraw`]'s clip): no box, the clip as it is; a draw with no clip
+/// takes the box; `None` where nothing of the clip is in the box.
+fn cut_within(clip: Option<[i64; 4]>, within: Option<[i64; 4]>) -> Option<Option<[i64; 4]>> {
+    let Some(b) = within else {
+        return Some(clip);
+    };
+    let c = clip.unwrap_or(b);
+    let (x0, y0) = (c[0].max(b[0]), c[1].max(b[1]));
+    let (x1, y1) = (
+        (c[0] + c[2]).min(b[0] + b[2]),
+        (c[1] + c[3]).min(b[1] + b[3]),
+    );
+    (x0 < x1 && y0 < y1).then_some(Some([x0, y0, x1 - x0, y1 - y0]))
 }
 
 /// Where a draw's picture comes from.

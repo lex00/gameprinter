@@ -2015,6 +2015,14 @@ impl BoardArt {
             w.frame,
             [0, 0],
         ));
+        // A `#+ room_react_when` test, on the model's counters.
+        let holds = |c: &str, cmp: &str, v: i64| {
+            let at = self.counter_names.iter().position(|n| n == c);
+            match (at.and_then(|i| w.counters.get(i)), cmp_of(cmp)) {
+                (Some(x), Some(cmp)) => cmp.holds(*x, v),
+                _ => false,
+            }
+        };
         for d in f.draws.iter() {
             match (d.of, d.src) {
                 // The screen is the board's, in its picture: over that.
@@ -2031,29 +2039,27 @@ impl BoardArt {
                         // Its pieces that slide (`#+ room_scroll`) and
                         // what lies over them, as this game frame has them.
                         draws.extend(theme.art.moving_draws(l, w.frame, [d.x / u, d.y / u], None));
-                        let holds = |c: &str, cmp: &str, v: i64| {
-                            let at = self.counter_names.iter().position(|n| n == c);
-                            match (at.and_then(|i| w.counters.get(i)), cmp_of(cmp)) {
-                                (Some(x), Some(cmp)) => cmp.holds(*x, v),
-                                _ => false,
-                            }
-                        };
-                        draws.extend(theme.art.live_draws(l, w.frame, [d.x / u, d.y / u], holds));
+                        draws.extend(theme.art.live_draws(
+                            l,
+                            w.frame,
+                            [d.x / u, d.y / u],
+                            None,
+                            holds,
+                        ));
                     }
                     // Over the theme's screen, under the board's picture.
                     draws.extend(under.take().into_iter().flatten());
                     board_at = draws.len();
                 }
                 // The room over the bodies in its front boxes, after the
-                // board's picture.
+                // board's picture, with its sliding and reacting pieces
+                // there as under the bodies.
                 (_, Src::Stage(l)) if d.clip.is_some() => {
                     draws.push(d.clone());
                     let u = gp_present::art::ART_SUB;
-                    draws.extend(
-                        theme
-                            .art
-                            .moving_draws(l, w.frame, [d.x / u, d.y / u], d.clip),
-                    );
+                    let at = [d.x / u, d.y / u];
+                    draws.extend(theme.art.moving_draws(l, w.frame, at, d.clip));
+                    draws.extend(theme.art.live_draws(l, w.frame, at, d.clip, holds));
                 }
                 // The board's own pictures are in its picture.
                 (_, Src::Own(_) | Src::Tint(..) | Src::Stage(_) | Src::Backdrop) => {}
@@ -4000,6 +4006,80 @@ asset = "stage2"
         w.counters[c("cleared")] = 0;
         w.frame = 12;
         assert_eq!(shown(&mut theme, &w), "right.png");
+    }
+
+    /// A `#+ room_front` box over a `#+ room_react` piece paints the piece
+    /// again over the bodies, after the room there, cut to the box, with
+    /// the picture it shows under them; a box away from it paints it not.
+    #[test]
+    fn a_front_box_paints_the_rooms_reacting_piece_over_the_bodies() {
+        let dir = tempfile::tempdir().unwrap();
+        let (model, _, _) = with_looks_and_counters(dir.path());
+        // One cell of tile 0 in colour bank 2 at column 10, row 5.
+        let rows: Vec<String> = (0..30)
+            .map(|y| {
+                let row: Vec<&str> = (0..32)
+                    .map(|x| {
+                        if (x, y) == (10, 5) {
+                            "0x2000"
+                        } else {
+                            "0x1001"
+                        }
+                    })
+                    .collect();
+                format!("[{}]", row.join(", "))
+            })
+            .collect();
+        std::fs::write(
+            dir.path().join("stage.toml"),
+            format!("rows = [{}]\n", rows.join(",\n")),
+        )
+        .unwrap();
+        let lifted = gp_interp::Lifted::read_dir(dir.path(), &model).unwrap();
+        let spec = gp_interp::compile::compile(&model, &lifted).unwrap();
+        let art = BoardArt::load(&model, &spec, dir.path()).unwrap().unwrap();
+        // The piece's box: 16 by 16 at (164, 72); the first front box,
+        // columns 11 to 12 and rows 4 to 5, keeps its right 4 pixels.
+        let text = "gp-art 1\nscale 2\nstage 2 0 0 0 0 0 0\n\
+                    stage_piece left left.png 32 32\nstage_piece right right.png 32 32\n\
+                    #+ room stage\n#+ room_cells trophy bank=2\n\
+                    #+ room_react trophy 4 -8 left:2 right:3\n\
+                    #+ room_front 11 4 12 5\n#+ room_front 0 0 1 1\n";
+        let mut theme = art.theme(text).unwrap();
+        assert!(
+            theme.art.rules.skipped.is_empty(),
+            "{:?}",
+            theme.art.rules.skipped
+        );
+        let w = World {
+            counters: vec![0; spec.counters.len()],
+            frame: 2,
+            ..Default::default()
+        };
+        let t = art.themed(&mut theme, &w, &[], &[]).unwrap();
+        let pic = theme.rooms[0].pic;
+        let u = gp_present::art::ART_SUB;
+        let file = |d: &gp_present::art::ArtDraw| match d.src {
+            gp_present::art::Src::Art(f) => theme.art.files[f as usize].clone(),
+            s => panic!("{s:?}"),
+        };
+        // Under the bodies: the room, then the piece.
+        assert_eq!(t.board_at, 2);
+        assert_eq!(file(&t.frame.draws[1]), "right.png");
+        // Over them: each front box's room, the first with the piece after
+        // it, cut to the box.
+        let over = &t.frame.draws[2..];
+        let srcs: Vec<_> = over.iter().map(|d| d.src).collect();
+        assert_eq!(srcs.len(), 3, "{srcs:?}");
+        assert_eq!(over[0].src, gp_present::art::Src::Stage(pic));
+        assert_eq!(over[0].clip, Some([176 * u, 64 * u, 32 * u, 32 * u]));
+        assert_eq!(file(&over[1]), "right.png");
+        assert_eq!(
+            (over[1].x, over[1].y, over[1].w, over[1].h),
+            (164 * u, 72 * u, 16 * u, 16 * u)
+        );
+        assert_eq!(over[1].clip, Some([176 * u, 72 * u, 4 * u, 16 * u]));
+        assert_eq!(over[2].src, gp_present::art::Src::Stage(pic));
     }
 
     /// A `#+ under` piece is drawn once under each body of its entity, by
