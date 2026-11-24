@@ -8,7 +8,7 @@ import assert from "node:assert/strict";
 
 const src = fs.readFileSync(new URL("./screen.js", import.meta.url), "utf8");
 const block = src.slice(src.indexOf("// <reach>"), src.indexOf("// </reach>"));
-const { reach, buildModel } = new Function(`${block}; return { reach, buildModel };`)();
+const { reach, buildModel, sendTalk, unsaved } = new Function(`${block}; return { reach, buildModel, sendTalk, unsaved };`)();
 
 const sleep = async () => {};
 const away = () => { throw new TypeError("Failed to fetch"); };
@@ -93,4 +93,24 @@ test("a 503 from a server moving onto a new gp is waited through as a server awa
   const waited = [];
   assert.equal(await reach(async () => (++n < 4 ? moving() : "ok"), { sleep, away: (w) => waited.push(w) }), "ok");
   assert.deepEqual(waited, [0, 1000, 2000]);
+});
+
+test("the person's words sent while the server moves onto a new build are sent again, the same", async () => {
+  // Away for two tries, then the server keeps the turn.
+  const s = server((path, body, n) => (n <= 2 ? away() : { turn: 4, again: false }));
+  const body = { text: "the mug floats", clips: [], mechanic: "pour" };
+  const waited = [];
+  assert.deepEqual(await sendTalk(s.api, body, { sleep, away: (w) => waited.push(w) }), { turn: 4, again: false });
+  assert.deepEqual(s.sent, ["POST api/talk", "POST api/talk", "POST api/talk"]);
+  assert.deepEqual(waited, [0, 1000]);
+  // A refusal from the server is said at once, in its words.
+  const r = server(() => { throw new Error("no row pour"); });
+  await assert.rejects(sendTalk(r.api, body, { sleep }), /no row pour/);
+  assert.equal(r.sent.length, 1);
+  assert.equal(unsaved(new Error("no row pour")), "no row pour");
+  // A server that never comes back is given up on in plain words.
+  const gone = server(() => away());
+  const err = await sendTalk(gone.api, body, { sleep, within: 3000 }).catch((e) => e);
+  assert.match(unsaved(err), /didn't answer for a minute. Your words are still in the box/);
+  assert.doesNotMatch(unsaved(err), /Failed to fetch/);
 });

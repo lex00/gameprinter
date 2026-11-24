@@ -306,6 +306,25 @@ async function reach(fn, { away = () => {}, within = 60000, every = 1000, sleep 
   }
 }
 
+/** The person's words to a row's talk (POST api/talk with `body`), sent
+ * again while the page's server can't be reached, as reach does: a send
+ * made while gp serve moves onto a new build failed to fetch and lost the
+ * answer (trouble-the-page-showed-the-person-an-error-your-93d9c0). A
+ * send that got there before the server went is kept once: the server
+ * gives a turn the same as the person's turn before it that turn's number
+ * (session.rs turn_once), so `body` is made once, before the first try. */
+function sendTalk(api, body, o = {}) {
+  return reach(() => api("api/talk", body), o);
+}
+
+/** Why words didn't save, in the person's words: a server that didn't
+ * answer through all of reach's tries, else what it answered. */
+function unsaved(err) {
+  return unreached(err)
+    ? "the page's server didn't answer for a minute. Your words are still in the box: send them again once it is back"
+    : String(err?.message ?? err);
+}
+
 /** The rebuild (card `ask`'s look, or main's) built once at least: builds
  * it first when it isn't, telling `say` each status while it builds. A
  * server that moved onto a new build meanwhile forgot the build it ran
@@ -334,6 +353,12 @@ async function buildModel(api, ask, { say = () => {}, away = () => {}, sleep = (
   return st;
 }
 // </reach>
+
+/** sendTalk on this page's api, saying on the page while it waits for the
+ * server to come back. */
+function talk(body) {
+  return sendTalk(api, body, { away: (ms) => note(`Waiting for the page's server to come back to send your words (${Math.round(ms / 1000)} s)...`, 3000) });
+}
 
 // Controls -------------------------------------------------------------
 
@@ -1475,13 +1500,13 @@ function commentBox(host, mechanic, clips, label, word = "COMMENT") {
       if (!text) return;
       go.disabled = true;
       try {
-        await api("api/talk", { text: withSeen(text), clips, mechanic });
+        await talk({ text: withSeen(text), clips, mechanic });
         f.remove();
         note(clips.length ? `Your comment on clip ${clips[0]} of ${mechanic} went to your agent.` : `Your comment on ${mechanic} went to your agent.`, 5000);
         await refreshLists(true);
       } catch (err) {
         go.disabled = false;
-        fault(`Your comment didn't save: ${err.message ?? err}`, 8000);
+        fault(`Your comment didn't save: ${unsaved(err)}`, 8000);
       }
     });
     host.append(f);
@@ -1834,11 +1859,11 @@ async function tell(e) {
   if (!t) return;
   $("tell-send").disabled = true;
   try {
-    await api("api/talk", { text: t, clips: [], mechanic: session?.mechanic ?? null });
+    await talk({ text: t, clips: [], mechanic: session?.mechanic ?? null });
     $("tell-text").value = "";
     $("tell-text").blur();
     note("Sent to your agent.");
-  } catch (err) { fault(`Your agent didn't get it: ${err.message ?? err}`, 8000); }
+  } catch (err) { fault(`Your agent didn't get it: ${unsaved(err)}`, 8000); }
   finally { $("tell-send").disabled = false; }
 }
 
@@ -2036,13 +2061,13 @@ async function refreshAsks() {
         const m = askRow(a);
         w.disabled = true;
         try {
-          if (m) await api("api/talk", { text: withSeen(`On the card "${cardLine(a.says)}": ${text}`), clips: [], mechanic: m });
+          if (m) await talk({ text: withSeen(`On the card "${cardLine(a.says)}": ${text}`), clips: [], mechanic: m });
           else throw new Error("this card has no row to carry your words: press NO with them");
           t.value = "";
           askWords.delete(a.id);
           note(`Your answer went to ${m}'s agent.`, 5000);
         } catch (err) {
-          fault(`Your answer didn't save: ${err.message ?? err}`, 8000);
+          fault(`Your answer didn't save: ${unsaved(err)}`, 8000);
         } finally { w.disabled = false; }
       };
       w.addEventListener("click", (e) => { e.stopPropagation(); e.currentTarget.blur(); void sendWords(); });
@@ -2233,16 +2258,21 @@ function answerBox(m, clips, o = {}) {
     if (!text) { t.focus(); return; }
     go.disabled = true;
     try {
-      await api("api/talk", { text: withSeen(text), clips, mechanic: m });
+      await talk({ text: withSeen(text), clips, mechanic: m });
       t.value = "";
       typedWords.delete(keep);
       t.blur();
       note(o.sent ?? `Your answer on ${m} went to its agent.`, 5000);
-      turnDrawn = "";
-      await refreshLists(true);
     } catch (err) {
-      fault(`Your answer didn't save: ${err.message ?? err}`, 8000);
-    } finally { go.disabled = false; }
+      fault(`Your answer didn't save: ${unsaved(err)}`, 8000);
+      go.disabled = false;
+      return;
+    }
+    // The lists drawn again once it saved: a server that goes away just
+    // after doesn't make the page say the answer didn't save.
+    turnDrawn = "";
+    try { await refreshLists(true); } catch (err) { /* the lists' own timer draws them again */ }
+    finally { go.disabled = false; }
   });
   return f;
 }
