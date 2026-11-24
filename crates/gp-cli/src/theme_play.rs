@@ -7,7 +7,8 @@
 //! from it on 127.0.0.1 with the theme chosen. The person loads their own
 //! ROM in the page. With `--shots` it drives headless Chrome through the
 //! game's route instead and saves the game's canvas at named moments on
-//! each ROM of the game that is here; `--against` does the same for a
+//! each ROM of the game that is here (a ROM the page refuses, such as a
+//! set not drawn right yet, is skipped with a line); `--against` does the same for a
 //! second theme, or for the game in its own pictures (`--against
 //! original`), and writes the pairs side by side.
 //!
@@ -19,7 +20,8 @@
 //! - The page: `--page`, else the newest bundle that passed the release
 //!   check in `$GP_HOME/work/page-release` (`scripts/web/release-check.sh`),
 //!   else one built with `scripts/web/build-page.sh` from the gameprinter
-//!   checkout. A gp with no checkout and no bundle can't serve the page.
+//!   checkout, told the games checkout holding the game ($GP_GAMES_DIR) for
+//!   its `gp roms sets`. A gp with no checkout and no bundle can't serve the page.
 //! - The game and its themes: `--registry`, else the page's own source
 //!   (page.json), read from a checkout of it beside the games checkout when
 //!   there is one with the same name, else over HTTPS (blobs cached by hash
@@ -466,6 +468,31 @@ fn find_page(
     build_page(&repo, game_dir, game, paths)
 }
 
+/// The games checkout the page build is told of ($GP_GAMES_DIR), so its
+/// `gp roms sets` call, which runs from the gameprinter checkout, knows the
+/// game's romsets: $GP_GAMES_DIR when it is set (the build has it already),
+/// else the folder holding the game when the game has a roms.toml (a game
+/// of a games checkout), else the checkout gp was run in. None for a game
+/// outside any checkout, whose build needs no romset.
+fn games_for_build(game_dir: &Path) -> Option<PathBuf> {
+    if std::env::var_os("GP_GAMES_DIR").is_some_and(|v| !v.is_empty()) {
+        return None;
+    }
+    checkout_of_game(game_dir).or_else(|| crate::roms_cmd::games_dir(None))
+}
+
+/// The games checkout holding a game's folder: its parent, when the game
+/// has a roms.toml.
+fn checkout_of_game(game_dir: &Path) -> Option<PathBuf> {
+    let game = game_dir
+        .canonicalize()
+        .unwrap_or_else(|_| game_dir.to_owned());
+    if !game.join("roms.toml").is_file() {
+        return None;
+    }
+    game.parent().map(Path::to_owned)
+}
+
 /// The page and the game's play files, built now with
 /// scripts/web/build-page.sh into the home's work folder, a folder for
 /// each game.
@@ -516,12 +543,17 @@ fn build_page(repo: &Path, game_dir: &Path, game: &str, paths: &Paths) -> Result
     if let Some(p) = out.parent() {
         fs::create_dir_all(p)?;
     }
-    let o = Command::new("bash")
+    let mut build = Command::new("bash");
+    build
         .arg(repo.join("scripts/web/build-page.sh"))
         .arg(game_dir)
         .arg(&out)
         .env("GP", exe)
-        .current_dir(repo)
+        .current_dir(repo);
+    if let Some(games) = games_for_build(game_dir) {
+        build.env("GP_GAMES_DIR", games);
+    }
+    let o = build
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .output()
@@ -1666,6 +1698,12 @@ fn shoot(
     Ok(lines)
 }
 
+/// What the page said when it refused the ROM of a play, from the play's
+/// lines, if it did.
+fn refused_by_page(lines: &[Value]) -> Option<&str> {
+    lines.iter().find_map(|v| v["refused"].as_str())
+}
+
 #[allow(clippy::too_many_arguments)]
 fn shoot_in(
     p: &mut crate::chrome::Page,
@@ -1743,7 +1781,10 @@ fn shoot_in(
         .unwrap_or("")
         .to_owned();
     if kind == "error" {
-        bail!("the page refused the ROM: {message}");
+        // A set the page doesn't take (one not drawn right yet, say): the
+        // play is skipped with this line, and the other ROMs go on.
+        lines.push(json!({ "refused": message }));
+        return Ok(());
     }
     p.wait_for(
         "document.getElementById('game').src.includes('files=idb:')",
@@ -2383,7 +2424,8 @@ impl Pictured<'_> {
         // Each pair with its moment, for a page that steps through them.
         let mut paired = Vec::new();
         let mut shot_count = 0;
-        for play in plays {
+        let mut refused = Vec::new();
+        'plays: for play in plays {
             let list = &play.shots;
             let mut files: Vec<BTreeMap<String, PathBuf>> = Vec::new();
             for (i, s) in sides.iter().enumerate() {
@@ -2404,6 +2446,13 @@ impl Pictured<'_> {
                     &prefix,
                     list,
                 )?;
+                if let Some(why) = refused_by_page(&lines) {
+                    let _ = writeln!(text, "{}: skipped, the page refused it: {why}", play.id);
+                    eprintln!("  {}: skipped, the page refused it: {why}", play.id);
+                    report.push(json!({ "rom": play.id, "refused": why }));
+                    refused.push(play.id.clone());
+                    continue 'plays;
+                }
                 let mut got = BTreeMap::new();
                 let mut errors = 0;
                 for v in &lines {
@@ -2476,6 +2525,12 @@ impl Pictured<'_> {
                 }
             }
         }
+        if !plays.is_empty() && refused.len() == plays.len() {
+            bail!(
+                "the page refused every ROM it was given ({}): no pictures",
+                refused.join(", ")
+            );
+        }
         let _ = writeln!(text, "\n{shot_count} pictures in {}", out.display());
         for (i, s) in sides.iter().enumerate() {
             let _ = writeln!(text, "  ROM-{}-MOMENT.png: {}", tags[i], s.words());
@@ -2508,6 +2563,7 @@ impl Pictured<'_> {
                 "paired": paired,
                 "sides": sides.iter().map(Side::words).collect::<Vec<_>>(),
                 "pictures": shot_count,
+                "refused": refused,
             }),
             text,
         ))

@@ -670,3 +670,36 @@ fn a_dev_page_names_its_build_number() {
         "0\n"
     );
 }
+
+/// The page build runs from the gameprinter checkout, so it is told the
+/// games checkout holding the game: the game's parent when the game has a
+/// roms.toml, and none for a game outside a checkout.
+#[test]
+fn the_page_build_is_told_the_games_checkout_holding_the_game() {
+    let d = tempfile::tempdir().unwrap();
+    let games = d.path().join("games");
+    let game = game_folder(&games.join("made-up"), "rom", "arcade", Some("arcade"));
+    fs::write(game.join("roms.toml"), "").unwrap();
+    assert_eq!(checkout_of_game(&game), Some(games.canonicalize().unwrap()));
+    let own = game_folder(&d.path().join("mine"), "build", "nes", None);
+    assert_eq!(checkout_of_game(&own), None);
+}
+
+/// A ROM the page refuses (a set not drawn right yet) is a play skipped
+/// with the page's words, not a failure of the run.
+#[test]
+fn a_rom_the_page_refuses_is_skipped_with_its_words() {
+    let lines = vec![
+        json!({ "refused": "rooftopb is refused: not drawn right yet" }),
+        json!({ "done": true, "console_lines": 3, "console_errors": 0 }),
+    ];
+    assert_eq!(
+        refused_by_page(&lines),
+        Some("rooftopb is refused: not drawn right yet")
+    );
+    let played = vec![
+        json!({ "shot": "title", "file": "x.png" }),
+        json!({ "done": true }),
+    ];
+    assert_eq!(refused_by_page(&played), None);
+}
