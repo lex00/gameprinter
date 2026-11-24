@@ -58,6 +58,9 @@
 //!   pixels whose colour passes every test (as `room_cells` takes them):
 //!   the floor's edge through a cell the room shares with a wall, a door
 //!   or a cask, where the original draws it.
+//!   A piece larger than a cell is not squeezed into each cell: it repeats
+//!   from the screen's top left as a fill's does, so one painting (a
+//!   field, a sky) carries on under a room's edges.
 //! - `#+ room_front C0 R0 C1 R1`: the room drawn again over the bodies in
 //!   the cells from column C0, row R0 to column C1, row R1: a wall a body
 //!   walks or is thrown into hides it there.
@@ -668,7 +671,13 @@ pub fn build_seeded(st: &StageRules, r: &RoomRules, cells: &Cells, seed: u64) ->
                 }
             }
             Lay::Mask(p, tests) => {
-                let Some((p, _)) = piece(p) else { continue };
+                let Some((p, [tw, th])) = piece(p) else {
+                    continue;
+                };
+                // A piece one cell square is laid cell by cell; a larger
+                // one repeats from the screen's top left, as a fill does,
+                // so one painting runs unbroken under a room's edges.
+                let large = tw != side || th != side;
                 for (i, _) in grid.iter().enumerate().filter(|(_, c)| **c) {
                     let c = &cells.cells[i];
                     // The cell's pixels as a square, row by row, in the
@@ -695,9 +704,15 @@ pub fn build_seeded(st: &StageRules, r: &RoomRules, cells: &Cells, seed: u64) ->
                             while col < k && on(col) {
                                 col += 1;
                             }
-                            let mut d = StageDraw::piece(p, x, y, side, side);
-                            d.clip =
-                                Some([x + px(c0), y + px(r), px(col) - px(c0), px(r + 1) - px(r)]);
+                            let clip = [x + px(c0), y + px(r), px(col) - px(c0), px(r + 1) - px(r)];
+                            let mut d = if large {
+                                let (tx, ty) =
+                                    (clip[0].div_euclid(tw) * tw, clip[1].div_euclid(th) * th);
+                                StageDraw::piece(p, tx, ty, tw, th)
+                            } else {
+                                StageDraw::piece(p, x, y, side, side)
+                            };
+                            d.clip = Some(clip);
                             out.draws.push(d);
                         }
                     }
@@ -795,7 +810,7 @@ mod tests {
         let mut sc = screen();
         // Cell 9: its top row red, its bottom row grey (2 by 2 pixels).
         sc.cells[9].colors = vec![[200, 40, 30], [200, 40, 30], [90, 90, 90], [90, 90, 90]];
-        let (st, r) = rules(&["room s", "room_cells c tile=1", "room_mask c wall r>g+100"]);
+        let (st, r) = rules(&["room s", "room_cells c tile=1", "room_mask c cell r>g+100"]);
         let room = build(&st, &r, &sc);
         let z = sc.size * st.scale;
         // Only cell 9's top row: one draw, cut to it.
@@ -810,6 +825,23 @@ mod tests {
         sc.cells[9].flip = [false, true];
         let room = build(&st, &r, &sc);
         assert_eq!(room.stage.draws[0].clip, Some([z, z + z / 2, z, z / 2]));
+    }
+
+    /// A mask's piece larger than a cell is laid from the screen's top left,
+    /// as a fill's is, and only cut to the pixels that pass: one painting
+    /// runs on under the room's edges, never squeezed into a cell.
+    #[test]
+    fn a_rooms_mask_lays_a_large_piece_from_the_screens_corner() {
+        let mut sc = screen();
+        sc.cells[9].colors = vec![[200, 40, 30], [200, 40, 30], [90, 90, 90], [90, 90, 90]];
+        let (st, r) = rules(&["room s", "room_cells c tile=1", "room_mask c wall r>g+100"]);
+        let room = build(&st, &r, &sc);
+        let z = sc.size * st.scale;
+        assert_eq!(room.stage.draws.len(), 1);
+        let d = &room.stage.draws[0];
+        // The wall is 64 by 64: its tile that holds the cell, at its own size.
+        assert_eq!((d.x, d.y), (z.div_euclid(64) * 64, z.div_euclid(64) * 64));
+        assert_eq!(d.clip, Some([z, z, z, z / 2]));
     }
 
     /// `#+ room_front` keeps its boxes of cells, and the built room gives
@@ -984,6 +1016,7 @@ mod tests {
             "stage_piece top pieces/top.png 32 16",
             "stage_piece end pieces/end.png 16 32",
             "stage_piece door pieces/door.png 40 80",
+            "stage_piece cell pieces/cell.png 32 32",
         ] {
             let w: Vec<&str> = l.split_whitespace().collect();
             assert!(StageRules::line(&mut st, &w).unwrap(), "{l}");
