@@ -1468,6 +1468,13 @@ impl Painter {
             out.draws.push(a);
             for p in art.also.get(d.pic as usize).into_iter().flatten() {
                 let mut e = placed(Some(*p), d.pic, ax, ay);
+                // Turned with the body about the body's own picture: a
+                // thing drawn at its right hand is at its left when the
+                // board mirrors it.
+                if flip_x {
+                    let bw = own(d.pic)[0];
+                    e.x = (ax + bw - p.offset[0] - p.size[0]) * u;
+                }
                 e.flip_x = flip_x;
                 e.flip_y = d.flip_y;
                 e.alpha = alpha;

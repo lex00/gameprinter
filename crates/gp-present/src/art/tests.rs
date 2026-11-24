@@ -639,10 +639,22 @@ fn an_also_picture_comes_with_its_pose() {
     assert_eq!(out.draws[1].src, Src::Own(1));
     let e = &out.draws[2];
     assert_eq!(e.src, Src::Art(1));
+    // Turned with the body about the body's own picture: 4 from its left
+    // edge unturned is 4 from its right edge turned.
+    let body = &out.draws[1];
     assert_eq!(
         [e.x, e.y, e.w, e.h],
-        [44 * ART_SUB, 86 * ART_SUB, 8 * ART_SUB, 8 * ART_SUB]
+        [
+            body.x + body.w - (4 + 8) * ART_SUB,
+            86 * ART_SUB,
+            8 * ART_SUB,
+            8 * ART_SUB
+        ]
     );
     assert!(e.flip_x);
     assert_eq!(out.draws[3].src, Src::Own(2));
+    // Unturned, it stands at its offset from the body's left edge.
+    f.scene.bodies[0].as_mut().unwrap().flip_x = false;
+    let out = Painter::new().frame(&a, &p, &f, 224);
+    assert_eq!(out.draws[2].x, 44 * ART_SUB);
 }
