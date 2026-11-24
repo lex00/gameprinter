@@ -181,6 +181,8 @@ body.loop-page #input-set { display: none; }
 .asks button { flex: none; font: bold 12px var(--mono); padding: 0 10px; }
 .asks .ask-yes { color: var(--bg); background: var(--gold); border: 2px solid var(--gold); }
 .asks .ask-no { color: var(--fg); background: transparent; border: 2px solid var(--muted); }
+/* A gate card's LOOKS GOOD, KEEP GOING: lands nothing, the row stays iterating. */
+.asks .ask-keep { color: var(--gold); background: transparent; border: 2px solid var(--gold); }
 /* A NO naming the open card this one duplicates. */
 .asks .ask-duplicate { color: var(--fg); background: var(--bg); border: 2px solid var(--muted); font: 11px var(--mono); max-width: 14em; }
 /* A card's answer box, open: the person's words, sent alone or with YES or NO. */

@@ -471,7 +471,7 @@ pub enum MechanicCmd {
         mechanic: Option<String>,
         /// List the archive of finished rows: their notes, facts, session
         /// and landed commit, newest closed first.
-        #[arg(long, conflicts_with_all = ["status", "known", "reads", "opens", "out_of_scope", "in_scope", "repo", "clip", "no_clip", "target", "no_target", "measure_needed", "waits_on", "parked", "no_wait", "plain"])]
+        #[arg(long, conflicts_with_all = ["status", "known", "reads", "opens", "out_of_scope", "in_scope", "repo", "clip", "no_clip", "target", "no_target", "measure_needed", "waits_on", "parked", "no_wait", "plain", "iterating", "no_iterating"])]
         archived: bool,
         #[arg(long, requires = "mechanic", value_parser = ["done", "asking you", "agent working", "in line", "next"])]
         status: Option<String>,
@@ -572,6 +572,27 @@ pub enum MechanicCmd {
         /// End the row's wait without changing its status.
         #[arg(long, requires = "mechanic")]
         no_wait: bool,
+        /// Mark the row iterating, with why: the person is still trying it,
+        /// and no worker gates it (gp_run refuses its model gate and tool
+        /// gate, dry run or card) until they press LAND IT on the row or
+        /// say to gate it (--no-iterating). The card's LOOKS GOOD, KEEP
+        /// GOING marks it so.
+        #[arg(
+            long,
+            value_name = "WHY",
+            requires = "mechanic",
+            conflicts_with = "no_iterating"
+        )]
+        iterating: Option<String>,
+        /// A folder the iterating row's work is in (a working copy:
+        /// rooftop/themes/last-call), repeat for each: a model gate from any
+        /// row whose patch changes a file under it is refused too.
+        #[arg(long, value_name = "PATH", requires = "iterating")]
+        iterating_on: Vec<String>,
+        /// Take the iterating mark off: the person says to gate it now. Not
+        /// a worker's (the person's LAND IT on the row does it).
+        #[arg(long, requires = "mechanic")]
+        no_iterating: bool,
     },
     /// A sweep of one mechanic: a grid of clips from one spot, each played
     /// on the original and on a rebuilt model in lockstep. `jump` (the
@@ -1194,6 +1215,9 @@ pub(crate) fn run(cmd: &MechanicCmd, paths: &Paths) -> Result<Outcome> {
             waits_on,
             parked,
             no_wait,
+            iterating,
+            iterating_on,
+            no_iterating,
             archived,
         } => {
             if *archived {
@@ -1211,6 +1235,11 @@ pub(crate) fn run(cmd: &MechanicCmd, paths: &Paths) -> Result<Outcome> {
             if *no_target && std::env::var("GP_STEP").is_ok_and(|s| !s.is_empty()) {
                 bail!(
                     "a worker doesn't take a row's target off: the measure closes the row. If the target is wrong, set a better one (--target) and say why in --note"
+                );
+            }
+            if *no_iterating && std::env::var("GP_STEP").is_ok_and(|s| !s.is_empty()) {
+                bail!(
+                    "a worker doesn't take a row's iterating mark off: the person does, with LAND IT on the row (or by saying so to their session). Park the row and say on it what is ready"
                 );
             }
             let games = crate::roms_cmd::games_dir(None);
@@ -1254,6 +1283,9 @@ pub(crate) fn run(cmd: &MechanicCmd, paths: &Paths) -> Result<Outcome> {
                     waits_on: waits_on.as_deref(),
                     parked: parked.as_deref(),
                     no_wait: *no_wait,
+                    iterating: iterating.as_deref(),
+                    iterating_on,
+                    no_iterating: *no_iterating,
                     games: games.as_deref(),
                     under_step: std::env::var("GP_STEP").is_ok_and(|s| !s.is_empty()),
                 },
@@ -1471,6 +1503,13 @@ struct RowChange<'a> {
     /// Why the row is parked in line (`--parked`).
     parked: Option<&'a str>,
     no_wait: bool,
+    /// Why the row is marked iterating (`--iterating`): no worker gates it
+    /// (gp_mcp::iterating).
+    iterating: Option<&'a str>,
+    /// The folders its work is in (`--iterating-on`).
+    iterating_on: &'a [String],
+    /// Take the iterating mark off (`--no-iterating`).
+    no_iterating: bool,
     /// The games checkout, for the game's scoreboard.
     games: Option<&'a std::path::Path>,
     /// Run as a loop step's (GP_STEP): a row asks the person only about a
@@ -1763,7 +1802,9 @@ fn queue(paths: &Paths, game: &str, mechanic: Option<&str>, c: &RowChange) -> Re
             || c.no_target
             || c.measure_needed.is_some()
             || c.plain.is_some()
-            || c.no_wait)
+            || c.no_wait
+            || c.iterating.is_some()
+            || c.no_iterating)
     {
         if !name_ok(m) {
             bail!("a mechanic name is lower-case letters, digits and dashes: {m}");
@@ -1875,6 +1916,31 @@ fn queue(paths: &Paths, game: &str, mechanic: Option<&str>, c: &RowChange) -> Re
                 }
                 None => {}
             }
+            // Iterating: no worker gates it until the person says to
+            // (gp_mcp::iterating). A status doesn't end it; --no-iterating
+            // or the row's LAND IT does.
+            if let Some(why) = c.iterating {
+                let why = why.trim();
+                if why.is_empty() {
+                    bail!("an iterating row says why (--iterating WHY)");
+                }
+                o.insert("iterating".into(), json!(why));
+                let on: Vec<&str> = c
+                    .iterating_on
+                    .iter()
+                    .map(|p| p.trim().trim_matches('/'))
+                    .filter(|p| !p.is_empty())
+                    .collect();
+                if on.is_empty() {
+                    o.remove("iterating_on");
+                } else {
+                    o.insert("iterating_on".into(), json!(on));
+                }
+            }
+            if c.no_iterating {
+                o.remove("iterating");
+                o.remove("iterating_on");
+            }
             // A status set without a wait ends the row's wait.
             match &wait {
                 Some(w) => {
@@ -1982,6 +2048,11 @@ fn queue(paths: &Paths, game: &str, mechanic: Option<&str>, c: &RowChange) -> Re
             if let Some(w) = r["waits_on"].as_str().filter(|_| parked) {
                 let when = "the loop takes it up when that lands or is done";
                 l.push_str(&format!("\n    waits on: {w} ({when})"));
+            }
+            if let Some(w) = r["iterating"].as_str() {
+                l.push_str(&format!(
+                    "\n    iterating: {w} (no worker gates it until the person presses LAND IT on the row)"
+                ));
             }
             if let Some(t) = r["target_says"].as_str() {
                 l.push_str(&format!("\n    target: {t}"));
@@ -2300,6 +2371,9 @@ mod tests {
             waits_on: None,
             parked: None,
             no_wait: false,
+            iterating: None,
+            iterating_on: none,
+            no_iterating: false,
             games: None,
             under_step: false,
         };
@@ -2385,6 +2459,80 @@ mod tests {
         assert!(mine().get("plain").is_none());
     }
 
+    /// --iterating marks a row the person is still trying, with the folders
+    /// its work is in; a status leaves the mark, --no-iterating takes it off
+    /// (gp_mcp::iterating refuses its gates while it is on).
+    #[test]
+    fn a_row_is_marked_iterating_until_the_person_says_to_gate() {
+        let d = tempfile::tempdir().unwrap();
+        let p = paths(d.path());
+        let none: &[String] = &[];
+        let plain = RowChange {
+            status: None,
+            note: None,
+            plain: None,
+            worker: None,
+            known: none,
+            reads: none,
+            opens: none,
+            out_of_scope: None,
+            in_scope: false,
+            repo: None,
+            clip: None,
+            no_clip: false,
+            target: None,
+            no_target: false,
+            measure_needed: None,
+            waits_on: None,
+            parked: None,
+            no_wait: false,
+            iterating: None,
+            iterating_on: none,
+            no_iterating: false,
+            games: None,
+            under_step: false,
+        };
+        let on = vec!["test-hop/themes/night/".to_owned()];
+        let mark = RowChange {
+            status: Some("in line"),
+            iterating: Some("the owner tries it by hand"),
+            iterating_on: &on,
+            ..plain
+        };
+        let o = queue(&p, "test-hop", Some("theme"), &mark).unwrap();
+        assert!(
+            o.text.contains("iterating: the owner tries it by hand"),
+            "{}",
+            o.text
+        );
+        let f = queue_file(&p, "test-hop").unwrap();
+        let row = || {
+            read_queue(&f)
+                .into_iter()
+                .find(|r| r["mechanic"] == "theme")
+                .unwrap()
+        };
+        assert_eq!(row()["iterating_on"], json!(["test-hop/themes/night"]));
+        let next = RowChange {
+            status: Some("next"),
+            ..plain
+        };
+        queue(&p, "test-hop", Some("theme"), &next).unwrap();
+        assert_eq!(row()["iterating"], "the owner tries it by hand");
+        let blank = RowChange {
+            iterating: Some(" "),
+            ..plain
+        };
+        assert!(queue(&p, "test-hop", Some("theme"), &blank).is_err());
+        let off = RowChange {
+            no_iterating: true,
+            ..plain
+        };
+        queue(&p, "test-hop", Some("theme"), &off).unwrap();
+        assert!(row().get("iterating").is_none());
+        assert!(row().get("iterating_on").is_none());
+    }
+
     /// --waits-on parks a row in line on a row there is, as a field the
     /// runner wakes it by; another status, or --no-wait, ends the wait.
     #[test]
@@ -2411,6 +2559,9 @@ mod tests {
             waits_on: None,
             parked: None,
             no_wait: false,
+            iterating: None,
+            iterating_on: none,
+            no_iterating: false,
             games: None,
             under_step: false,
         };
@@ -2487,6 +2638,9 @@ mod tests {
             waits_on: None,
             parked: None,
             no_wait: false,
+            iterating: None,
+            iterating_on: none,
+            no_iterating: false,
             games: None,
             under_step: false,
         };
@@ -2609,6 +2763,9 @@ mod tests {
             waits_on: None,
             parked: None,
             no_wait: false,
+            iterating: None,
+            iterating_on: none,
+            no_iterating: false,
             games: Some(games.path()),
             under_step: false,
         };
@@ -2822,6 +2979,9 @@ mod tests {
             waits_on: None,
             parked: None,
             no_wait: false,
+            iterating: None,
+            iterating_on: none,
+            no_iterating: false,
             games: None,
             under_step: false,
         };
@@ -2957,6 +3117,9 @@ mod tests {
             waits_on: None,
             parked: None,
             no_wait: false,
+            iterating: None,
+            iterating_on: none,
+            no_iterating: false,
             games: Some(&games),
             under_step: true,
         };
@@ -3072,6 +3235,9 @@ mod tests {
             waits_on: None,
             parked: None,
             no_wait: false,
+            iterating: None,
+            iterating_on: none,
+            no_iterating: false,
             games: Some(&wt),
             under_step: true,
         };

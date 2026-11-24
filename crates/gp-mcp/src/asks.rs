@@ -660,11 +660,14 @@ fn value<'a>(values: &'a [(String, String)], names: &[&str]) -> Option<&'a str> 
         .map(|(_, v)| v.as_str())
 }
 
-/// What the ask says to the person: what it does, in words they can judge,
-/// and what it publishes and where.
+/// A call's value `name`, or None.
+pub(crate) fn value_of<'a>(values: &'a [(String, String)], name: &str) -> Option<&'a str> {
+    value(values, &[name])
+}
+
 /// The files a patch (`git diff` output, or a format-patch mail) changes,
 /// by the paths its `diff --git` lines name; none when it can't be read.
-fn patch_files(path: &str) -> Vec<String> {
+pub(crate) fn patch_files(path: &str) -> Vec<String> {
     let Ok(text) = std::fs::read_to_string(path) else {
         return Vec::new();
     };
@@ -680,6 +683,8 @@ fn patch_files(path: &str) -> Vec<String> {
     out
 }
 
+/// What the ask says to the person: what it does, in words they can judge,
+/// and what it publishes and where.
 pub fn says(n: &New) -> String {
     let v = |names: &[&str]| value(n.values, names);
     let game = v(&["game", "template", "run"]);

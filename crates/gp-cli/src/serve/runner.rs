@@ -940,13 +940,25 @@ fn settle_row_by_card(
     let Some(r) = q.iter_mut().find(|r| r["mechanic"] == json!(row)) else {
         return Ok(true);
     };
+    // LOOKS GOOD, KEEP GOING (a NO with keep_going): the row is iterating
+    // from now, so its worker's gates are refused (gp_mcp::iterating) even
+    // while one still works on it.
+    let keep_going = kind == "no" && a["keep_going"] == json!(true);
+    if keep_going && r.get("iterating").is_none() {
+        r["iterating"] = json!(KEPT_GOING);
+        if r["status"] == json!("agent working") {
+            crate::mechanic::session::write_queue(&f, &q)?;
+            return Ok(false);
+        }
+    }
     if r["status"] == json!("agent working") {
         return Ok(false);
     }
     // A row asking the person about its card once the card is gone has
     // nothing left to ask, so it follows the card however late it was set
-    // (settle_card_asks).
-    if r["changed_ms"].as_u64().is_some_and(|c| c > ended) && !asks_of_card(r) {
+    // (settle_card_asks). The person's LOOKS GOOD, KEEP GOING parks it
+    // however it was changed since: it is their newest word on it.
+    if r["changed_ms"].as_u64().is_some_and(|c| c > ended) && !asks_of_card(r) && !keep_going {
         return Ok(true);
     }
     let note = r["note"].as_str().unwrap_or("");
@@ -1020,11 +1032,24 @@ fn settle_row_by_card(
     };
     let (status, note) = match &dup {
         Some(d) => ("in line", d.note(what, words)),
+        None if keep_going => ("in line", kept_going_note(what, words)),
         None => (status, note),
     };
     let Some(o) = r.as_object_mut() else {
         return Ok(true);
     };
+    if keep_going && dup.is_none() {
+        // Parked from now (words before don't wake it; words after do, and
+        // its worker may go on with anything but a gate).
+        o.insert("parked_ms".into(), json!(gp_mcp::asks::now_ms()));
+        o.insert("parked".into(), json!(KEPT_GOING));
+        o.remove("waits_on");
+        o.remove("waits_since");
+        o.insert(
+            "plain".into(),
+            json!("You said it looks good: nothing landed, and it waits for your LAND IT."),
+        );
+    }
     if let Some(d) = &dup {
         // Parked from now: words the person wrote before don't wake it.
         o.insert("parked_ms".into(), json!(gp_mcp::asks::now_ms()));
@@ -1040,7 +1065,7 @@ fn settle_row_by_card(
             }
         }
     }
-    if status == "in line" && o.contains_key("target") && dup.is_none() {
+    if status == "in line" && o.contains_key("target") && dup.is_none() && !keep_going {
         o.insert("awaiting_measure".into(), json!(gp_mcp::asks::now_ms()));
     }
     if o.get("by") == Some(&json!("person")) && !o.contains_key("asked") {
@@ -1055,6 +1080,22 @@ fn settle_row_by_card(
     }
     crate::mechanic::session::write_queue(&f, &q)?;
     Ok(true)
+}
+
+/// Why a row is iterating once the person pressed LOOKS GOOD, KEEP GOING on
+/// its card (its `iterating` and `parked`).
+const KEPT_GOING: &str = "you said LOOKS GOOD, KEEP GOING on its card";
+
+/// The row's note after LOOKS GOOD, KEEP GOING on its card (`what`), with
+/// the person's words.
+fn kept_going_note(what: &str, words: Option<&str>) -> String {
+    let mut n = format!(
+        "You said LOOKS GOOD, KEEP GOING to its card ({what}): nothing landed. The work stays where it is, and no worker gates it until you press LAND IT on this row; then it is gated as one patch, on one card."
+    );
+    if let Some(w) = words {
+        n.push_str(&format!(" You wrote: \"{w}\"."));
+    }
+    n
 }
 
 /// A card the person refused as a duplicate of another: the other card's
@@ -3738,6 +3779,69 @@ mod tests {
         assert_eq!(row("looks")["status"], "asking you");
         // Nothing left to move.
         assert!(settle_card_asks(home, now).is_empty());
+    }
+
+    /// The owner's case (2026-11-23): a YES meant "this is what I want for
+    /// this round" and began a 30-minute landing. LOOKS GOOD, KEEP GOING on a
+    /// gate's card lands nothing: the row is parked in line marked
+    /// iterating, so its worker's gates are refused (gp_mcp::iterating),
+    /// even when its worker was still on it as the person answered.
+    #[test]
+    fn looks_good_keep_going_parks_the_row_iterating_and_lands_nothing() {
+        let t = tempfile::tempdir().unwrap();
+        let home = t.path();
+        let f = home.join("mechanics/g/queue.json");
+        fs::create_dir_all(f.parent().unwrap()).unwrap();
+        fs::write(
+            &f,
+            json!([
+                {"mechanic": "tip-money", "status": "in line", "note": "Its card waits for your YES", "target": "level 1 sprites at least 1 of 2"},
+                {"mechanic": "clear-mugs", "status": "agent working", "note": "Its card waits for your YES"},
+            ])
+            .to_string(),
+        )
+        .unwrap();
+        let now = gp_mcp::asks::now_ms();
+        let kept =
+            json!({"state": "no", "answered_ms": now, "keep_going": true, "words": "nice tips"});
+        test_card(home, 1, now - 1000, "g", "tip-money", kept);
+        test_card(
+            home,
+            2,
+            now - 999,
+            "g",
+            "clear-mugs",
+            json!({"state": "no", "answered_ms": now, "keep_going": true}),
+        );
+        settle_card_rows(home);
+        let row = |m: &str| -> Value {
+            crate::mechanic::session::read_queue(&f)
+                .into_iter()
+                .find(|r| r["mechanic"] == json!(m))
+                .unwrap()
+        };
+        let r = row("tip-money");
+        assert_eq!(r["status"], "in line");
+        assert_eq!(r["iterating"], KEPT_GOING);
+        assert!(crate::mechanic::is_parked(&r));
+        assert!(r.get("awaiting_measure").is_none());
+        let note = r["note"].as_str().unwrap();
+        assert!(
+            note.contains("nothing landed") && note.contains("LAND IT"),
+            "{note}"
+        );
+        assert!(note.contains("You wrote: \"nice tips\""), "{note}");
+        // Its worker still on it: marked at once, parked once it stops.
+        let w = row("clear-mugs");
+        assert_eq!(w["status"], "agent working");
+        assert_eq!(w["iterating"], KEPT_GOING);
+        let mut q = crate::mechanic::session::read_queue(&f);
+        q[1]["status"] = json!("next");
+        crate::mechanic::session::write_queue(&f, &q).unwrap();
+        settle_card_rows(home);
+        let w = row("clear-mugs");
+        assert_eq!(w["status"], "in line");
+        assert!(crate::mechanic::is_parked(&w));
     }
 
     /// The owner's case (2026-11-22): refusing a duplicate card sent its row

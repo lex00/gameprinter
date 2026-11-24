@@ -871,6 +871,100 @@ impl Server {
     }
 }
 
+/// The person's LAND IT on row `m` of `game`'s quest log `f`, marked
+/// iterating: the mark comes off, and the row goes to next to be gated as
+/// one patch on one card. Another row iterating on a folder of this one's
+/// (`iterating_on`) is its work too: its mark comes off and it waits in
+/// line on this row, so the pieces land together and aren't cut one by
+/// one. Returns the row as it is now.
+pub(crate) fn land_it(f: &Path, game: &str, m: &str) -> Result<Value> {
+    let mut q = read_queue(f);
+    let Some(r) = q.iter().find(|r| r["mechanic"] == json!(m)) else {
+        bail!("{m} isn't in the quest log");
+    };
+    if !r["iterating"].is_string() {
+        bail!("{m} isn't marked iterating: its worker gates it when its work is ready");
+    }
+    let on: Vec<String> = r["iterating_on"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(str::to_owned)
+        .collect();
+    let now = gp_mcp::asks::now_ms();
+    let mut with: Vec<String> = Vec::new();
+    for r in &mut q {
+        let name = r["mechanic"].as_str().unwrap_or("").to_owned();
+        let Some(o) = r.as_object_mut() else { continue };
+        if name == m {
+            continue;
+        }
+        let shares = o
+            .get("iterating_on")
+            .and_then(Value::as_array)
+            .is_some_and(|a| {
+                a.iter()
+                    .filter_map(Value::as_str)
+                    .any(|p| on.iter().any(|x| x == p))
+            });
+        if !shares || !o.contains_key("iterating") {
+            continue;
+        }
+        o.remove("iterating");
+        o.remove("iterating_on");
+        o.remove("parked");
+        o.remove("worker");
+        o.insert("status".into(), json!("in line"));
+        o.insert("waits_on".into(), json!(format!("{game}/{m}")));
+        o.insert("waits_since".into(), json!(now));
+        o.insert("parked_ms".into(), json!(now));
+        o.insert(
+            "note".into(),
+            json!(format!(
+                "You pressed LAND IT on {m}: this row's work lands with its, as one patch. It waits on {game}/{m}."
+            )),
+        );
+        with.push(name);
+    }
+    let r = q
+        .iter_mut()
+        .find(|r| r["mechanic"] == json!(m))
+        .expect("found above");
+    let also = if with.is_empty() {
+        String::new()
+    } else {
+        format!(" with the work of {}", with.join(", "))
+    };
+    let folders = if on.is_empty() {
+        String::new()
+    } else {
+        format!(" (all of {})", on.join(", "))
+    };
+    if let Some(o) = r.as_object_mut() {
+        o.remove("iterating");
+        o.remove("iterating_on");
+        o.remove("parked");
+        o.remove("waits_on");
+        o.remove("waits_since");
+        o.remove("worker");
+        o.insert("status".into(), json!("next"));
+        o.insert(
+            "note".into(),
+            json!(format!(
+                "You pressed LAND IT: gate its work now as one patch{folders}{also}, dry run first, and raise one card for your YES. Don't cut it into pieces."
+            )),
+        );
+        o.insert(
+            "plain".into(),
+            json!("You asked to land it: a worker puts it all on one card for your YES."),
+        );
+    }
+    let out = r.clone();
+    write_queue(f, &q)?;
+    Ok(out)
+}
+
 /// A quest-log row's name from the person's words: their first four words
 /// of letters and digits, lower case, joined by dashes (`item` if none).
 fn row_name(text: &str) -> String {
@@ -1316,6 +1410,17 @@ fn handle(s: &Server, req: &Request) -> Result<Response> {
             let m = v["mechanic"].as_str().context("mechanic")?;
             let looks = crate::approved::saved_looks(None, &s.game);
             match crate::approved::confirm(&s.queue_file()?, &s.game, &looks, m, "CONFIRM", false) {
+                Ok(r) => Ok(Response::json(&json!({"mechanic": m, "row": r}))),
+                Err(e) => Ok(Response::error(409, &format!("{e:#}"))),
+            }
+        }
+        // LAND IT on a row marked iterating: the person says to gate it now.
+        // The mark comes off and the row goes to next, to be gated as one
+        // patch on one card (gp_mcp::iterating refused it till now).
+        ("POST", "/api/land-it") => {
+            let v: Value = serde_json::from_slice(&req.body)?;
+            let m = v["mechanic"].as_str().context("mechanic")?;
+            match land_it(&s.queue_file()?, &s.game, m) {
                 Ok(r) => Ok(Response::json(&json!({"mechanic": m, "row": r}))),
                 Err(e) => Ok(Response::error(409, &format!("{e:#}"))),
             }
@@ -2037,6 +2142,41 @@ mod tests {
             "the-get-ready-screen"
         );
         assert_eq!(super::row_name("  !! "), "item");
+    }
+
+    /// LAND IT on a row marked iterating takes the mark off and sends it to
+    /// next to be gated as one patch; a row iterating on the same working
+    /// copy waits on it, its mark off too; a row not marked is refused.
+    #[test]
+    fn land_it_sends_an_iterating_row_to_be_gated_as_one_patch() {
+        let d = tempfile::tempdir().unwrap();
+        let f = d.path().join("queue.json");
+        let copy = json!(["rooftop/themes/night"]);
+        write_queue(
+            &f,
+            &[
+                json!({"mechanic": "theme", "status": "in line", "parked": "iterating",
+                    "iterating": "the owner tries it", "iterating_on": copy}),
+                json!({"mechanic": "tip-money", "status": "in line",
+                    "iterating": "the owner tries it", "iterating_on": copy}),
+                json!({"mechanic": "jump", "status": "next"}),
+            ],
+        )
+        .unwrap();
+        let r = land_it(&f, "rooftop", "theme").unwrap();
+        assert_eq!(r["status"], "next");
+        assert!(r.get("iterating").is_none() && r.get("parked").is_none());
+        let note = r["note"].as_str().unwrap();
+        assert!(
+            note.contains("one patch (all of rooftop/themes/night) with the work of tip-money"),
+            "{note}"
+        );
+        let q = read_queue(&f);
+        assert_eq!(q[1]["status"], "in line");
+        assert_eq!(q[1]["waits_on"], "rooftop/theme");
+        assert!(q[1].get("iterating").is_none());
+        assert!(land_it(&f, "rooftop", "jump").is_err());
+        assert!(land_it(&f, "rooftop", "nope").is_err());
     }
     use super::*;
     use crate::mechanic::session::write_queue;

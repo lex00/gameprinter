@@ -1043,6 +1043,31 @@ function confirmButton(r) {
   return b;
 }
 
+/** LAND IT on a row marked iterating (`r.iterating`): the person says to
+ * gate it now, as one patch on one card (api/land-it); null for any other
+ * row. */
+function landItButton(r) {
+  if (!r.iterating) return null;
+  const b = el("button", "judge confirm", "LAND IT");
+  b.type = "button";
+  b.title = "You are done trying it: a worker gates all of its work as one patch and puts one card up for your YES. Nothing lands before that YES";
+  b.addEventListener("click", async (e) => {
+    e.stopPropagation();
+    const btn = e.currentTarget;
+    btn.blur();
+    btn.disabled = true;
+    try {
+      await api("api/land-it", { mechanic: r.mechanic });
+      note(`${cardTitle(r.mechanic)}: a worker puts all of it on one card for your YES.`, 6000);
+      await refreshLists(true);
+    } catch (err) {
+      btn.disabled = false;
+      fault(`LAND IT didn't save: ${err.message ?? err}`, 8000);
+    }
+  });
+  return b;
+}
+
 /** A clip's play from power-on on both screens, from `c.start` for
  * `c.frames`, stood at `f`. */
 async function showClipLog(c, f) {
@@ -1637,11 +1662,13 @@ function queueRow(r, g, open) {
   if (what) li.append(el("div", "qline", what));
   const judge = rowToJudge(r);
   const yes = confirmButton(r);
+  const land = landItButton(r);
   // COMMENT is on the card's face, as it was before the cards: the person
   // can say something about any row without opening it.
   const face = el("div", "qacts qface");
   if (judge) face.append(judgeButton(judge));
   if (yes) face.append(yes);
+  if (land) face.append(land);
   face.append(commentBox(face, r.mechanic, [], `A comment on ${r.mechanic} for your agent`));
   li.append(face);
   const more = el("div", "qmore");
@@ -1652,6 +1679,8 @@ function queueRow(r, g, open) {
   else if (r.measure_needed) more.append(noteLine("NO MEASURE YET", `what would measure it: ${r.measure_needed}`, "qscore"));
   // Parked on another row: the runner moves it to next when that one lands.
   if (r.waits_on && r.status === "in line") more.append(noteLine("WAITS ON", `${r.waits_on}: the loop takes it up when that lands or is done`, "qscore"));
+  // Iterating: nothing of it is gated until the person's LAND IT.
+  if (r.iterating) more.append(noteLine("ITERATING", `${r.iterating}: nothing lands until you press LAND IT${r.iterating_on?.length ? ` (its work: ${r.iterating_on.join(", ")})` : ""}`, "qscore"));
   // Who wrote it: the person's words from the page (by: person) stay theirs
   // (asked) once the agent's note takes the row over.
   if (r.asked) more.append(noteLine("YOU ASKED", r.asked));
@@ -1842,6 +1871,26 @@ function askRow(a) {
   return (step?.touches ?? []).find((t) => t.startsWith("row:"))?.split("/").slice(1).join("/") ?? null;
 }
 
+/** Whether card `a` lands a change: a model gate (a game) or a tool gate
+ * (Game Printer itself). */
+function isGate(a) {
+  return a?.command === "model gate" || a?.command === "tool gate";
+}
+
+/** The buttons of open card `a`, as [word, answer, title]: a gate's say
+ * what they do (LAND IT, LOOKS GOOD, KEEP GOING, which lands nothing and
+ * keeps its row iterating, and NO); any other card's are YES and NO. */
+function cardButtons(a) {
+  const no = ["NO", "no", "Your agent won't do this; with words, its row goes back to its worker with them"];
+  if (!isGate(a)) return [["YES", "yes", "Let your agent do this, once (with your words, if you wrote any)"], no];
+  const where = a.command === "tool gate" ? "GAME PRINTER" : "THE GAME";
+  return [
+    [`LAND IT IN ${where}`, "yes", "Run the checks and land it on main: about 30 minutes, and other landings wait behind it"],
+    ["LOOKS GOOD, KEEP GOING", "keep", "Lands nothing: you like it for now and are still trying it. Its row waits, and no worker gates it, until you press LAND IT on the row"],
+    ["NO", "no", "Lands nothing; with words, its row goes back to its worker to change it as you say"],
+  ];
+}
+
 /** The card whose change a LOOK AT IT on card `a` plays (its id), when it
  * lands a change to a game (a model gate's, ask_look.rs); null for any
  * other card, whose clip plays main's model. */
@@ -1998,21 +2047,27 @@ async function refreshAsks() {
         if (ev.code === "Escape") t.blur();
         if (ev.code === "Enter") { ev.preventDefault(); void sendWords(); }
       });
-      for (const [word, val] of [["YES", "yes"], ["NO", "no"]]) {
+      // A gate's card says what its buttons do: LAND IT runs the checks and
+      // lands (half an hour, other landings wait); LOOKS GOOD, KEEP GOING
+      // lands nothing and keeps the row iterating until LAND IT on the row
+      // (owner, 2026-11-23: "pressing YES is not obvious to me that it's
+      // doing anything other than confirming its what i want").
+      for (const [word, val, title] of cardButtons(a)) {
         const b = el("button", `ask-${val}`, word);
         b.type = "button";
-        b.title = val === "yes"
-          ? "Let your agent do this, once (with your words, if you wrote any)"
-          : "Your agent won't do this; with words, its row goes back to its worker with them";
+        b.title = title;
         b.addEventListener("click", async (e) => {
           e.currentTarget.blur();
           for (const x of card.querySelectorAll("button")) x.disabled = true;
           const words = t.value.trim() ? withSeen(t.value.trim()) : "";
+          const body = { answer: val === "keep" ? "no" : val };
+          if (val === "keep") body.keep_going = true;
+          if (words) body.words = words;
           try {
             const r = await fetch(`/api/asks/${encodeURIComponent(a.id)}`, {
               method: "POST",
               headers: { "content-type": "application/json" },
-              body: JSON.stringify(words ? { answer: val, words } : { answer: val }),
+              body: JSON.stringify(body),
             });
             const out = await r.json().catch(() => ({}));
             if (!r.ok) says.textContent = `${a.says} (Your answer didn't save: ${out.error ?? r.status}.)`;
@@ -2020,6 +2075,8 @@ async function refreshAsks() {
               askWords.delete(a.id);
               asksWording.delete(a.id);
               if (out.talk_error) fault(`Your answer saved, but your words didn't reach the row: ${out.talk_error}`, 8000);
+              else if (val === "keep") note("Nothing lands. Its row stays as it is until you press LAND IT on it.", 6000);
+              else if (val === "yes" && isGate(a)) note("Landing it: the checks run first, about half an hour, and other landings wait.", 6000);
               else if (words && out.row) note(`Your words went to ${out.row.split("/").slice(1).join("/")}.`, 5000);
             }
           } catch (err) {

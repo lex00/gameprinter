@@ -1508,6 +1508,22 @@ pub fn run_in(
     if let Some(r) = loop_check(config, &path, &decision, a.step.as_deref(), &row) {
         return Ok(Reply::refused(r));
     }
+    // A row the person is still iterating on isn't gated by its worker, dry
+    // run or card, until they press LAND IT on it (crate::iterating).
+    let step = a.step.clone().filter(|s| !s.trim().is_empty()).or_else(|| {
+        std::env::var(steps::STEP_ENV)
+            .ok()
+            .filter(|s| !cfg!(test) && !s.trim().is_empty())
+    });
+    if let Some(why) =
+        crate::iterating::refused(&config.home, &path, step.as_deref(), &built.values)
+    {
+        return Ok(Reply::refused(json!({
+            "refused": why,
+            "needs": "land it",
+            "rule": row.rule.name(),
+        })));
+    }
     if !path.starts_with("loop ")
         && matches!(
             decision,

@@ -6,7 +6,7 @@
 //! | Endpoint | What |
 //! |---|---|
 //! | `GET /api/asks` | The asks still open, and the yeses not yet used, newest first |
-//! | `POST /api/asks/{id}` | `{answer: "yes" \| "no", words?, duplicate_of?}`: the person's answer to an open ask, with what they wrote beside it: kept on the ask, written to its row's talk as their turn, and put in the row's note when the runner settles the row by the card (a NO with words sends the row to next with them). A NO with `duplicate_of` (another open card of the game, the card's DUPLICATE OF) parks the row in line waiting on that card's row, instead of sending it back to make the same card again |
+//! | `POST /api/asks/{id}` | `{answer: "yes" \| "no", words?, duplicate_of?, keep_going?}`: the person's answer to an open ask, with what they wrote beside it: kept on the ask, written to its row's talk as their turn, and put in the row's note when the runner settles the row by the card (a NO with words sends the row to next with them). A NO with `duplicate_of` (another open card of the game, the card's DUPLICATE OF) parks the row in line waiting on that card's row, instead of sending it back to make the same card again. A NO with `keep_going` (a gate card's LOOKS GOOD, KEEP GOING) lands nothing and parks the row in line marked iterating: no worker gates it until the person presses LAND IT on the row |
 
 use serde_json::{Value, json};
 
@@ -56,6 +56,13 @@ fn answer(ctx: &Ctx, req: &Request, params: &Params) -> Result<Response, Fail> {
         _ => return Err(Fail::bad_request("answer is yes or no")),
     };
     let words = v["words"].as_str().unwrap_or("").trim();
+    // LOOKS GOOD, KEEP GOING on a gate's card: a NO that lands nothing and
+    // marks the row iterating when the runner settles it
+    // (runner::settle_row_by_card).
+    let keep_going = v["keep_going"].as_bool() == Some(true);
+    if keep_going && a != asks::Answer::No {
+        return Err(Fail::bad_request("keep_going goes with a NO"));
+    }
     let home = &ctx.paths.home;
     let dup = duplicate_of(home, id, a, &v)?;
     let mut done = asks::answer_with(home, id, a, words).map_err(Fail::conflict)?;
@@ -63,16 +70,30 @@ fn answer(ctx: &Ctx, req: &Request, params: &Params) -> Result<Response, Fail> {
         asks::mark(home, id, "duplicate_of", json!(d)).map_err(Fail::conflict)?;
         done["duplicate_of"] = json!(d);
     }
+    if keep_going {
+        asks::mark(home, id, "keep_going", json!(true)).map_err(Fail::conflict)?;
+        done["keep_going"] = json!(true);
+    }
     // The words go to the card's row as the person's turn, so its worker
     // reads them with the row; the row's status is the runner's to set
     // when it settles the card (runner::settle_card_rows).
     let mut out = done.clone();
-    if let Some(w) = done["words"].as_str()
+    let said_words = done["words"]
+        .as_str()
+        .map(str::to_owned)
+        .or_else(|| keep_going.then(String::new));
+    if let Some(w) = said_words
         && let Some((game, row)) = super::runner::ask_row(&ctx.paths.home, &done)
     {
         let said = match a {
+            _ if keep_going => "LOOKS GOOD, KEEP GOING",
             asks::Answer::Yes => "YES",
             asks::Answer::No => "NO",
+        };
+        let w = if w.is_empty() {
+            "nothing lands; it stays iterating until LAND IT on the row".to_owned()
+        } else {
+            w
         };
         let text = match &dup {
             Some(d) => format!(
