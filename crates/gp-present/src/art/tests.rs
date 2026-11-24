@@ -739,3 +739,143 @@ fn an_also_picture_comes_with_its_pose() {
     let out = Painter::new().frame(&a, &p, &f, 224);
     assert_eq!(out.draws[2].x, 44 * ART_SUB);
 }
+
+/// A `#+ under` line draws its stage piece once under each body of its
+/// entity, by the middle of the body's picture box and its bottom row,
+/// never turned, the piece its cycle has on the game's frame; another
+/// entity's body gets none. A `#+ on` before it keeps it to those screens.
+/// Lines it can't read are passed over.
+#[test]
+fn an_under_piece_follows_its_entitys_bodies_on_its_own_cycle() {
+    let pic = |f: &str, w, h| Picture {
+        file: f.into(),
+        size: [w, h],
+    };
+    let p = Present {
+        pictures: vec![
+            pic("screen_a", 512, 480),
+            pic("screen_b", 512, 480),
+            pic("screen_b-1", 512, 480),
+            pic("sprite-hero-41", 32, 32),
+            pic("sprite-hero-1c2", 32, 32),
+            pic("sprite-hero-cap-41", 32, 32),
+            pic("sprite-foe-41", 32, 32),
+        ],
+        ..Present::default()
+    };
+    assert!(of_entity("sprite-hero-41", "hero"));
+    assert!(of_entity("sprite-hero-cap-41", "hero-cap"));
+    assert!(!of_entity("sprite-hero-cap-41", "hero"));
+    assert!(!of_entity("sprite-hero-", "hero"));
+    assert!(!of_entity("hero-41", "hero"));
+    let head = "gp-art 1\nscale 2\nstage 2 0 0 0 0 0 0\n\
+        stage_piece disc-a a/disc-a.png 48 16\n\
+        stage_piece disc-b a/disc-b.png 40 12\n\
+        stage_piece glow a/glow.png 20 20\n";
+    let text = format!(
+        "{head}#+ under hero 3 -4 disc-a:2 disc-b:3\n\
+         #+ on screen_b under foe 0 0 glow:1\n\
+         #+ under hero 0 0 lost:1\n\
+         #+ under hero 0 0\n\
+         #+ under hero 0 0 disc-a:0\n\
+         #+ under hero x 0 disc-a:1\n\
+         #+ on under hero 0 0 disc-a:1\n\
+         #+ on screen_zz under hero 0 0 disc-a:1\n"
+    );
+    let r = ArtRules::read(&text).unwrap();
+    // Without steps, with a step of no frames, with a word that isn't a
+    // number, with `on` and no screen: passed over.
+    assert_eq!(
+        r.skipped.iter().map(|x| x.0).collect::<Vec<_>>(),
+        [10, 11, 12, 13]
+    );
+    assert_eq!(r.under.len(), 4);
+    assert_eq!(
+        r.under[0],
+        Under {
+            entity: "hero".into(),
+            offset: [3, -4],
+            cycle: vec![("disc-a".into(), 2), ("disc-b".into(), 3)],
+            screens: vec![],
+            line: 7,
+        }
+    );
+    assert_eq!(r.under[1].screens, ["screen_b"]);
+    // An `on` line's screens are names the build must have.
+    assert_eq!(
+        r.passed_over(&["screen_a", "screen_b", "sprite-hero-41"]),
+        ["screen_zz"]
+    );
+    let a = Art::new(r, &p).unwrap();
+    let file = |n: &str| a.files.iter().position(|f| f == n).unwrap() as u32;
+    // Two of the hero's bodies (the first turned), one of another entity
+    // whose name starts the same, and a foe.
+    let mut bodies = vec![
+        draw(3, 100, 200),
+        draw(4, 300, 80),
+        draw(5, 10, 10),
+        draw(6, 400, 300),
+    ];
+    bodies[0].as_mut().unwrap().flip_x = true;
+    let u = ART_SUB;
+    let at = |level: u32, frame: u64| -> Vec<(u32, [i64; 4], bool)> {
+        a.under_draws(&bodies, Some(level), frame, [0, 0])
+            .iter()
+            .map(|d| {
+                let Src::Art(f) = d.src else {
+                    panic!("{:?}", d.src)
+                };
+                assert_eq!((d.of, d.clip, d.alpha), (Of::Other, None, 255));
+                (f, [d.x, d.y, d.w, d.h], d.flip_x)
+            })
+            .collect()
+    };
+    // Frame 0, disc-a: 48 by 16 stage pixels at scale 2 is 24 by 8 on the
+    // screen. Its middle 3 right of the box's middle (100 + 16), its top 4
+    // above the box's bottom (200 + 32). One for each hero, none turned,
+    // none for the others (the piece named `lost` has no stage_piece).
+    let a_at = |x: i64, y: i64| [(x + 16 + 3 - 12) * u, (y + 32 - 4) * u, 24 * u, 8 * u];
+    assert_eq!(
+        at(0, 0),
+        [
+            (file("a/disc-a.png"), a_at(100, 200), false),
+            (file("a/disc-a.png"), a_at(300, 80), false)
+        ]
+    );
+    // Frame 2, disc-b: 20 by 6 on the screen, by the same middle and top.
+    let b_at = |x: i64, y: i64| [(x + 16 + 3 - 10) * u, (y + 32 - 4) * u, 20 * u, 6 * u];
+    assert_eq!(
+        at(0, 2),
+        [
+            (file("a/disc-b.png"), b_at(100, 200), false),
+            (file("a/disc-b.png"), b_at(300, 80), false)
+        ]
+    );
+    // The cycle by the game's frame, round in 5.
+    let files: Vec<u32> = (0..7).map(|f| at(0, f)[0].0).collect();
+    let (da, db) = (file("a/disc-a.png"), file("a/disc-b.png"));
+    assert_eq!(files, [da, da, db, db, db, da, da]);
+    // The foe's glow on screen_b and on a board's stage of it only, after
+    // the heroes' discs (the order of the lines).
+    for level in [1, 2] {
+        let d = at(level, 0);
+        assert_eq!(d.len(), 3, "level {level}");
+        assert_eq!(
+            d[2],
+            (
+                file("a/glow.png"),
+                [(400 + 16 - 5) * u, (300 + 32) * u, 10 * u, 10 * u],
+                false
+            )
+        );
+    }
+    // From a window's corner, moved with it.
+    let d = a.under_draws(&bodies, Some(0), 0, [-8, 5]);
+    assert_eq!([d[0].x, d[0].y], [a_at(92, 205)[0], a_at(92, 205)[1]]);
+    // No level picture: the plain lines hold, the `on` line doesn't.
+    assert_eq!(a.under_draws(&bodies, None, 0, [0, 0]).len(), 2);
+    // Before the `stage` line it has no pieces to draw: passed over.
+    let r = ArtRules::read("gp-art 1\n#+ under hero 0 0 disc-a:1\n").unwrap();
+    assert_eq!(r.skipped.len(), 1);
+    assert!(r.under.is_empty());
+}

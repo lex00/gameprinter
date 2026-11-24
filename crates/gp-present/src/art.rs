@@ -67,6 +67,19 @@
 //!   rule that holds (its timed ones that hold, then its picture), and its
 //!   `on` `also` pictures are drawn in place of its plain ones; on any
 //!   other screen the plain rules hold, as before.
+//! - `#+ under ENTITY DX DY PIECE:FRAMES...`, after the `stage` line: a
+//!   stage piece drawn under every body of that entity (a board's body
+//!   whose picture is named `sprite-ENTITY-CODE`), whatever its pose: a
+//!   shadow, a disc a character hovers on. Its middle is `DX` screen
+//!   pixels right of the middle of the body's picture box and its top `DY`
+//!   screen pixels below the box's bottom row (either may be negative);
+//!   the piece keeps its own size (`stage_piece`'s `W H`, in stage
+//!   pixels) and is not turned when the body is. Each `PIECE` in turn is
+//!   held `FRAMES` game frames, over and over, by the game's own frame
+//!   number as a `#+ room_react` cycle is, so a clip replays the same. It
+//!   is drawn after the room and its `room_react` pieces and before the
+//!   bodies ([`Art::under_draws`]). `#+ on SCREEN... under ...` holds only
+//!   on those screens; a plain line holds on every screen.
 //! - `#+ room SCREEN...`, `#+ room_cells`, `#+ room_fill`, `#+ room_run`,
 //!   `#+ room_box`, `#+ room_at`, `#+ room_react` and `#+ room_scroll`: an
 //!   arcade game's screens built from the stage's pieces on the cells of the screen the player's lift gives
@@ -220,6 +233,9 @@ pub struct ArtRules {
     /// `#+ on SCREEN... pic|timed|also ...`: rules that hold only on those
     /// screens.
     pub on_screen: Vec<OnScreen>,
+    /// `#+ under ENTITY DX DY PIECE:FRAMES...`: stage pieces drawn under an
+    /// entity's bodies.
+    pub under: Vec<Under>,
     /// `#+ room SCREEN...` and the lines after it: screens built from the
     /// stage's pieces ([`room`]).
     pub rooms: Vec<RoomRules>,
@@ -252,6 +268,7 @@ impl Default for ArtRules {
             region_pics: Vec::new(),
             region_timed: Vec::new(),
             on_screen: Vec::new(),
+            under: Vec::new(),
             rooms: Vec::new(),
             skipped: Vec::new(),
         }
@@ -288,6 +305,32 @@ impl OnRule {
             OnRule::Timed(t) => &t.art.art,
         }
     }
+}
+
+/// `#+ under ENTITY DX DY PIECE:FRAMES...`: a stage piece drawn under each
+/// body of an entity, chosen from its cycle by the game's frame.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Under {
+    pub entity: String,
+    /// `DX DY`, in screen pixels: from the middle of the body's picture
+    /// box to the piece's middle, and from the box's bottom to its top.
+    pub offset: [i64; 2],
+    /// Each piece of the cycle and the game frames it holds (1 or more).
+    pub cycle: Vec<(String, u64)>,
+    /// The screens a `#+ on` before it names; none, every screen.
+    pub screens: Vec<String>,
+    /// Its line in the rules.
+    pub line: usize,
+}
+
+/// Whether the picture `file` is one of the entity `entity`'s bodies: a
+/// board names a body's picture `sprite-ENTITY-CODE`, the code in hex.
+#[must_use]
+pub fn of_entity(file: &str, entity: &str) -> bool {
+    file.strip_prefix("sprite-")
+        .and_then(|r| r.strip_prefix(entity))
+        .and_then(|r| r.strip_prefix('-'))
+        .is_some_and(|c| !c.is_empty() && c.bytes().all(|b| b.is_ascii_hexdigit()))
 }
 
 /// Whether the level picture `file` is the screen `screen`: that screen's
@@ -487,13 +530,23 @@ impl ArtRules {
                     _ => return Err(()),
                 }
             }
+            ["under", ..] => {
+                let u = self.under_line(&[], w, line)?;
+                self.under.push(u);
+            }
             ["on", rest @ ..] => {
                 let k = rest
                     .iter()
-                    .position(|x| matches!(*x, "pic" | "timed" | "also"))
+                    .position(|x| matches!(*x, "pic" | "timed" | "also" | "under"))
                     .filter(|k| *k > 0)
                     .ok_or(())?;
-                let (screens, line) = rest.split_at(k);
+                let (screens, rule) = rest.split_at(k);
+                if rule[0] == "under" {
+                    let u = self.under_line(screens, rule, line)?;
+                    self.under.push(u);
+                    return Ok(());
+                }
+                let line = rule;
                 let mut one = ArtRules::default();
                 one.rule(line)?;
                 let rule = match line[0] {
@@ -509,6 +562,30 @@ impl ArtRules {
             _ => return Err(()),
         }
         Ok(())
+    }
+
+    /// An `under ENTITY DX DY PIECE:FRAMES...` line's words, on `screens`
+    /// (none, every screen), at line `line`. It needs the stage, whose
+    /// pieces and scale it draws with.
+    fn under_line(&self, screens: &[&str], w: &[&str], line: usize) -> Result<Under, ()> {
+        let ["under", entity, dx, dy, steps @ ..] = w else {
+            return Err(());
+        };
+        let word = |n: &str| {
+            !n.is_empty()
+                && n.bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+        };
+        if self.stage.is_none() || !word(entity) {
+            return Err(());
+        }
+        Ok(Under {
+            entity: (*entity).to_owned(),
+            offset: [dx.parse().map_err(|_| ())?, dy.parse().map_err(|_| ())?],
+            cycle: room::cycle_steps(steps)?,
+            screens: names(screens),
+            line,
+        })
     }
 
     /// One line's words, read into the rules.
@@ -688,6 +765,9 @@ impl ArtRules {
             }
             named.extend(o.screens.iter().map(String::as_str));
         }
+        for u in &self.under {
+            named.extend(u.screens.iter().map(String::as_str));
+        }
         let mut seen = std::collections::BTreeSet::new();
         named.retain(|n| seen.insert(*n));
         named
@@ -847,6 +927,23 @@ pub struct Art {
     on_screen: Vec<Vec<(Vec<u32>, InRegion)>>,
     /// By the build's picture: its `#+ on` `also` pictures, likewise.
     on_also: Vec<Vec<(Vec<u32>, Placed)>>,
+    /// The `#+ under` rules, in the order given.
+    under: Vec<UnderAt>,
+}
+
+/// A `#+ under` rule resolved: the build's pictures that are its entity's
+/// bodies, the level pictures it holds on (None, all), its offset in
+/// screen pixels, its cycle, and each step's piece as an [`Art::files`]
+/// number with its size in stage pixels (None for a piece the stage has no
+/// `stage_piece` for), at the stage's scale.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct UnderAt {
+    bodies: Vec<bool>,
+    on: Option<Vec<u32>>,
+    offset: [i64; 2],
+    cycle: Vec<(String, u64)>,
+    pieces: Vec<Option<(u32, [i64; 2])>>,
+    scale: i64,
 }
 
 /// The drift's level and each art's number and size.
@@ -967,21 +1064,46 @@ impl Art {
                 also[i as usize].push(placed(&a.art));
             }
         }
+        // The screens' pictures and the board's stages of them; a screen
+        // the build hasn't got matches none.
+        let screens_of = |screens: &[String]| -> Vec<u32> {
+            p.pictures
+                .iter()
+                .enumerate()
+                .filter(|(_, x)| screens.iter().any(|s| of_screen(&x.file, s)))
+                .map(|(k, _)| k as u32)
+                .collect()
+        };
+        let mut under = Vec::new();
+        for r in &rules.under {
+            let Some(st) = &rules.stage else { continue };
+            under.push(UnderAt {
+                bodies: p
+                    .pictures
+                    .iter()
+                    .map(|x| of_entity(&x.file, &r.entity))
+                    .collect(),
+                on: (!r.screens.is_empty()).then(|| screens_of(&r.screens)),
+                offset: r.offset,
+                cycle: r.cycle.clone(),
+                pieces: r
+                    .cycle
+                    .iter()
+                    .map(|(name, _)| {
+                        let piece = st.pieces.iter().find(|x| x.0 == *name)?;
+                        Some((file(&piece.1), piece.2))
+                    })
+                    .collect(),
+                scale: st.scale.max(1),
+            });
+        }
         let mut on_screen = vec![Vec::new(); n];
         let mut on_also = vec![Vec::new(); n];
         for o in &rules.on_screen {
             let Some(i) = pic(o.rule.build()) else {
                 continue;
             };
-            // The screens' pictures and the board's stages of them; a
-            // screen the build hasn't got matches none.
-            let on: Vec<u32> = p
-                .pictures
-                .iter()
-                .enumerate()
-                .filter(|(_, x)| o.screens.iter().any(|s| of_screen(&x.file, s)))
-                .map(|(k, _)| k as u32)
-                .collect();
+            let on = screens_of(&o.screens);
             match &o.rule {
                 OnRule::Pic(a) => on_screen[i as usize].push((on, InRegion::Pic(placed(&a.art)))),
                 OnRule::Also(a) => on_also[i as usize].push((on, placed(&a.art))),
@@ -1046,8 +1168,59 @@ impl Art {
             regions,
             on_screen,
             on_also,
+            under,
             rules,
         })
+    }
+
+    /// The `#+ under` pieces as game frame `frame` shows them: for each
+    /// rule that holds on level picture `level`, in the order of the
+    /// lines, one draw for each of `bodies` (a scene's, in window pixels
+    /// from `origin`) that is its entity's, the piece its cycle has on
+    /// that frame. The piece's middle is the rule's `DX` from the middle
+    /// of the body's picture box, its top the rule's `DY` below the box's
+    /// bottom row, and it is never turned. To paint over the room and its
+    /// `#+ room_react` pieces and under the bodies.
+    #[must_use]
+    pub fn under_draws(
+        &self,
+        bodies: &[Option<Draw>],
+        level: Option<u32>,
+        frame: u64,
+        origin: [i64; 2],
+    ) -> Vec<ArtDraw> {
+        let u = ART_SUB;
+        let mut out = Vec::new();
+        for r in &self.under {
+            if let Some(on) = &r.on
+                && !level.is_some_and(|l| on.contains(&l))
+            {
+                continue;
+            }
+            let step = room::cycle_at(&r.cycle, frame);
+            let Some((file, [w, h])) = r.pieces.get(step).copied().flatten() else {
+                continue;
+            };
+            let (w, h) = (w * u / r.scale, h * u / r.scale);
+            for d in bodies.iter().flatten() {
+                if !Art::is(&r.bodies, d.pic) {
+                    continue;
+                }
+                let [pw, ph] = self
+                    .sizes
+                    .get(d.pic as usize)
+                    .copied()
+                    .unwrap_or([BODY, BODY]);
+                out.push(ArtDraw::new(
+                    Src::Art(file),
+                    (origin[0] + d.x + r.offset[0]) * u + pw * u / 2 - w / 2,
+                    (origin[1] + d.y + ph + r.offset[1]) * u,
+                    w,
+                    h,
+                ));
+            }
+        }
+        out
     }
 
     /// The `also` pictures of build picture `pic` on level `level`: its

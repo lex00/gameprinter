@@ -1467,7 +1467,8 @@ fn added_checks(
         let why = match word {
             "hud_over" => "`#+ hud_over` takes no row or rows of the HUD, each a number from 0 to 63 (8 pixels each from the screen's top)".to_owned(),
             "in" => "`#+ in` takes a region's name (lowercase letters, digits, - and _) and then a whole `pic` or `timed` line".to_owned(),
-            "on" => "`#+ on` takes one or more of the game's screens and then a whole `pic`, `timed` or `also` line".to_owned(),
+            "on" => "`#+ on` takes one or more of the game's screens and then a whole `pic`, `timed`, `also` or `under` line".to_owned(),
+            "under" => "`#+ under` comes after the `stage` line and takes an entity (the ENTITY of its bodies' pictures, sprite-ENTITY-CODE), its offset DX DY in screen pixels (from the middle of the body's box to the piece's middle, and from the box's bottom to the piece's top), then each piece of its cycle with the game frames it holds, PIECE:FRAMES (1 or more)".to_owned(),
             "room" => "`#+ room` takes one or more screens, after the `stage` line".to_owned(),
             "room_cells" => "`#+ room_cells` takes a new class's name (lowercase letters, digits, - and _) after a `#+ room` line, then its tests: tile=N or tile=LO-HI, bank=N, prio=N (0 to 3), share=P (1 to 100), !CLASS for a class given before, and colour tests such as r>g+40".to_owned(),
             "room_fill" | "room_box" => format!("`#+ {word}` takes a class its room gives and a piece"),
@@ -1476,9 +1477,10 @@ fn added_checks(
             "room_react" => "`#+ room_react` takes a class its room gives, its offset DX DY in screen pixels, then each piece of its cycle with the game frames it holds, PIECE:FRAMES (1 or more), and no pick=".to_owned(),
             "room_react_when" => "`#+ room_react_when` comes after a `#+ room_react` and takes a piece and one or more tests, COUNTER CMP VALUE, CMP one of < <= == != >= >".to_owned(),
             "room_react_drift" => "`#+ room_react_drift` comes once after a `#+ room_react` and takes VX VY, the screen pixels it moves (whole numbers from -64 to 64, not both 0), and PER, the game frames each move takes (1 or more)".to_owned(),
+            "room_react_stagger" => "`#+ room_react_stagger` comes once after a `#+ room_react` and takes N, the game frames (1 or more) each placement's cycle is further on than the one before it".to_owned(),
             "room_scroll" => "`#+ room_scroll` takes one piece (no `a|b` list) after a `#+ room` line, the stage pixels it slides, DX (negative for left), and the game frames each slide takes, EVERY (1 or more), once for a piece in a room".to_owned(),
             "" => "it says nothing after `#+`".to_owned(),
-            w => format!("no page knows `#+ {w}`; the lines are `#+ hud_over`, `#+ in`, `#+ on` and the room lines (`#+ room`, `room_cells`, `room_fill`, `room_run`, `room_box`, `room_at`, `room_react`, `room_react_when`, `room_react_drift`, `room_scroll`, `room_front`, `room_mask`), and `#+ recolor`"),
+            w => format!("no page knows `#+ {w}`; the lines are `#+ hud_over`, `#+ in`, `#+ on`, `#+ under` and the room lines (`#+ room`, `room_cells`, `room_fill`, `room_run`, `room_box`, `room_at`, `room_react`, `room_react_when`, `room_react_drift`, `room_react_stagger`, `room_scroll`, `room_front`, `room_mask`), and `#+ recolor`"),
         };
         r.add(
             Group::Files,
@@ -1559,7 +1561,8 @@ fn added_checks(
     let used = rules.hud_over.is_some()
         || !rules.regions().is_empty()
         || !rules.rooms.is_empty()
-        || !rules.on_screen.is_empty();
+        || !rules.on_screen.is_empty()
+        || !rules.under.is_empty();
     if used {
         r.add(
             Group::Files,
@@ -1628,6 +1631,9 @@ fn names_check(rules: &ArtRules, text: &str, art_rel: &str, b: &Built, r: &mut R
                 if names.len() == 1 { "it" } else { "them" },
             ),
         );
+    }
+    for (line, said) in under_problems(rules, &pictures) {
+        r.add(Group::Kit, Level::Problem, Some(art_rel), Some(line), said);
     }
     if let Some(k) = &b.board {
         board_seen(rules, text, art_rel, k, r);
@@ -1700,6 +1706,61 @@ fn room_checks(
     for (line, said) in scroll_problems(rules) {
         r.add(Group::Kit, Level::Problem, Some(art_rel), Some(line), said);
     }
+}
+
+/// What is wrong with the `#+ under` lines, each with its line: a piece no
+/// `stage_piece` line gives draws nothing on its frames, and an entity
+/// none of the game's pictures (`pictures`) is a body of draws nothing at
+/// all.
+fn under_problems(rules: &ArtRules, pictures: &[&str]) -> Vec<(usize, String)> {
+    let pieces: BTreeSet<&str> = rules
+        .stage
+        .iter()
+        .flat_map(|st| st.pieces.iter().map(|p| p.0.as_str()))
+        .collect();
+    // The entities the game's bodies are of: sprite-ENTITY-CODE.
+    let entities: BTreeSet<&str> = pictures
+        .iter()
+        .filter_map(|n| n.strip_prefix("sprite-")?.rsplit_once('-'))
+        .filter(|(e, _)| pictures.iter().any(|n| gp_present::art::of_entity(n, e)))
+        .map(|(e, _)| e)
+        .collect();
+    let mut out = Vec::new();
+    for u in &rules.under {
+        let mut missing: Vec<&str> = Vec::new();
+        for (p, _) in &u.cycle {
+            if !pieces.contains(p.as_str()) && !missing.contains(&p.as_str()) {
+                missing.push(p);
+            }
+        }
+        if !missing.is_empty() {
+            out.push((
+                u.line,
+                format!(
+                    "names {} no `stage_piece` line gives, and the page draws nothing on {} frames. Add `stage_piece NAME ART W H` or fix the name",
+                    missing.join(", "),
+                    if missing.len() == 1 { "its" } else { "their" }
+                ),
+            ));
+        }
+        if !entities.contains(u.entity.as_str()) {
+            let have: Vec<&str> = entities.iter().copied().collect();
+            out.push((
+                u.line,
+                format!(
+                    "names the entity `{}`, which this game draws no body of (no picture named sprite-{}-CODE), so the page draws nothing under it. {}",
+                    u.entity,
+                    u.entity,
+                    if have.is_empty() {
+                        "The game's bodies aren't drawn by a board, so `#+ under` has nothing to follow".to_owned()
+                    } else {
+                        format!("Its entities are {}", have.join(", "))
+                    }
+                ),
+            ));
+        }
+    }
+    out
 }
 
 /// What is wrong with the rooms' `#+ room_scroll` lines, each with its
@@ -3995,6 +4056,76 @@ mod tests {
         assert!(
             p.iter().all(|t| !t.contains("screen with nothing drawn")),
             "{p:?}"
+        );
+    }
+
+    /// The check reads a `#+ under` line and a `#+ room_react_stagger`
+    /// line; it names an `under` piece no `stage_piece` line gives and an
+    /// entity the game draws no body of; and of a line of either it can't
+    /// read it says what the line takes.
+    #[test]
+    fn the_check_knows_the_under_and_stagger_lines_and_names_a_piece_the_look_hasnt_got() {
+        let head = "gp-art 1\nscale 2\nstage 2 0 0 0 0 0 0\nstage_piece disc art/disc.png 48 16\nstage_piece lamp art/lamp.png 16 16\n#+ room rooftop\n#+ room_cells all\n#+ room_react all 0 0 lamp:4 disc:4\n";
+        let read = |line: &str| ArtRules::read(&format!("{head}{line}\n")).unwrap();
+        let have = [
+            "rooftop",
+            "sprite-cab-4d",
+            "sprite-cab-4e",
+            "sprite-tall-cab-1",
+        ];
+        let rules = read("#+ room_react_stagger 3\n#+ under cab 0 -2 disc:4 lamp:2");
+        assert!(rules.skipped.is_empty(), "{:?}", rules.skipped);
+        assert_eq!(rules.under.len(), 1);
+        assert!(under_problems(&rules, &have).is_empty());
+        let rules = read("#+ on rooftop under tall-cab 0 0 disc:1");
+        assert!(rules.skipped.is_empty(), "{:?}", rules.skipped);
+        assert!(under_problems(&rules, &have).is_empty());
+        // A piece the look hasn't got, named once, by its line.
+        let p = under_problems(&read("#+ under cab 0 0 disc:2 halo:2 halo:1"), &have);
+        assert_eq!(p.len(), 1, "{p:?}");
+        assert!(
+            p[0].0 == 9 && p[0].1.starts_with("names halo no `stage_piece` line gives"),
+            "{p:?}"
+        );
+        // An entity the game draws no body of, with those it does.
+        let p = under_problems(&read("#+ under van 0 0 disc:2"), &have);
+        assert_eq!(p.len(), 1, "{p:?}");
+        assert!(
+            p[0].0 == 9
+                && p[0]
+                    .1
+                    .starts_with("names the entity `van`, which this game draws no body of")
+                && p[0].1.ends_with("Its entities are cab, tall-cab"),
+            "{p:?}"
+        );
+        // Lines the page can't read: the report says what each takes.
+        let g = tempfile::tempdir().unwrap();
+        let game = game(g.path());
+        let t = tempfile::tempdir().unwrap();
+        let art = "gp-art 1\nscale 4\npic frame-0-0.png art/roll.png 16 16 0 0\npic frame-1-0.png art/roll.png 16 16 0 0\n\
+                   #+ under cab 0 0\n#+ room_react_stagger 0\n";
+        theme(t.path(), GOOD_PACKAGE, GOOD_LOOK, art);
+        put(
+            t.path(),
+            "theme/art/roll.png",
+            &picture(64, 64, [8, 8, 56, 64]).png(),
+        );
+        let o = report(t.path(), &game, Ok(built()), None).unwrap();
+        let problems = levels(&o, "problem");
+        assert_eq!(problems.len(), 2, "{}", o.text);
+        assert!(
+            problems[0].starts_with(
+                "theme/art.txt 5 the page can't read this line (`#+ under` comes after the `stage` line and takes an entity"
+            ),
+            "{}",
+            o.text
+        );
+        assert!(
+            problems[1].starts_with(
+                "theme/art.txt 6 the page can't read this line (`#+ room_react_stagger` comes once after a `#+ room_react` and takes N"
+            ),
+            "{}",
+            o.text
         );
     }
 

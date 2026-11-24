@@ -58,6 +58,15 @@
 //!   the game's frame number as its cycle is; once it has left the screen
 //!   by one edge it comes back in by the other. A cloud, a blimp, a bird.
 //!   Where its cell is mirrored it drifts the other way.
+//! - `#+ room_react_stagger N`, once after a `room_react`: each placement
+//!   of the piece shows the cycle `N` game frames (1 or more) further on
+//!   than the placement before it, the placements counted in the order of
+//!   their anchor cells, row by row and left to right in each row. With
+//!   `N` no multiple of the cycle's length, lamps that blink on one cycle
+//!   blink out of step. Without the line every placement shows the same
+//!   picture on the same frame. Only the cycle is moved on: a
+//!   `room_react_when` test holds for every placement alike, and a drift
+//!   moves each by the game's own frame.
 //!
 //! - `#+ room_mask CLASS PIECE TEST...`: the piece laid on the class's
 //!   cells, cell by cell as a fill of one cell, but only on the cell's own
@@ -156,6 +165,43 @@ pub struct React {
     /// `#+ room_react_drift VX VY PER`: it moves `VX, VY` screen pixels
     /// every `PER` game frames, wrapping round the screen.
     pub drift: Option<([i64; 2], u64)>,
+    /// `#+ room_react_stagger N`: each placement shows the cycle `N` game
+    /// frames further on than the one before it; 0, the default, keeps
+    /// them all in step.
+    pub stagger: u64,
+}
+
+/// A cycle's steps as a line gives them, `PIECE:FRAMES...`: each piece and
+/// the game frames it holds (1 or more), at least one step.
+pub(crate) fn cycle_steps(steps: &[&str]) -> Result<Vec<(String, u64)>, ()> {
+    let mut cycle = Vec::new();
+    for s in steps {
+        let (p, n) = s.split_once(':').ok_or(())?;
+        let n: u64 = n.parse().map_err(|_| ())?;
+        if p.is_empty() || p == "-" || n == 0 {
+            return Err(());
+        }
+        cycle.push((p.to_owned(), n));
+    }
+    if cycle.is_empty() {
+        return Err(());
+    }
+    Ok(cycle)
+}
+
+/// The number of the cycle's step shown on game frame `frame`: each step
+/// in turn for the frames it holds, over and over.
+#[must_use]
+pub fn cycle_at(cycle: &[(String, u64)], frame: u64) -> usize {
+    let all: u64 = cycle.iter().map(|(_, n)| *n).sum();
+    let mut at = frame % all.max(1);
+    for (i, (_, n)) in cycle.iter().enumerate() {
+        if at < *n {
+            return i;
+        }
+        at -= n;
+    }
+    0
 }
 
 impl React {
@@ -182,15 +228,7 @@ impl React {
         {
             return self.cycle.len() + k;
         }
-        let all: u64 = self.cycle.iter().map(|(_, n)| *n).sum();
-        let mut at = frame % all.max(1);
-        for (i, (_, n)) in self.cycle.iter().enumerate() {
-            if at < *n {
-                return i;
-            }
-            at -= n;
-        }
-        0
+        cycle_at(&self.cycle, frame)
     }
 }
 
@@ -205,17 +243,21 @@ pub struct Live {
     /// drift moves in and wraps round.
     pub screen: [i64; 2],
     pub scale: i64,
+    /// The game frames its cycle runs ahead of the frame shown (`#+
+    /// room_react_stagger`): its place among the rule's placements times
+    /// the rule's `N`.
+    pub ahead: u64,
 }
 
 impl Live {
-    /// Its draw on game frame `frame` ([`React::shown`]), if any, moved by
-    /// its drift: `VX, VY` screen pixels each `PER` frames from where it is
+    /// Its draw on game frame `frame` ([`React::shown`], its cycle
+    /// [`Live::ahead`] frames further on), if any, moved by its drift: `VX, VY` screen pixels each `PER` frames from where it is
     /// placed (`VX` the other way where its cell is mirrored), and once it
     /// has left the screen by one edge, coming back in by the other.
     pub fn draw(&self, frame: u64, holds: impl Fn(&str, &str, i64) -> bool) -> Option<StageDraw> {
         let mut d = self
             .draws
-            .get(self.react.shown(frame, holds))
+            .get(self.react.shown(frame.saturating_add(self.ahead), holds))
             .and_then(Option::as_ref)?
             .clone();
         let Some(([vx, vy], per)) = self.react.drift else {
@@ -460,6 +502,21 @@ impl RoomRules {
                 }
                 r.drift = Some((v, per));
             }
+            ["room_react_stagger", n] => {
+                let room = rooms.last_mut().ok_or(())?;
+                let Some(Place {
+                    lay: Lay::React(r, _),
+                    ..
+                }) = room.places.last_mut()
+                else {
+                    return Err(());
+                };
+                let n: u64 = n.parse().map_err(|_| ())?;
+                if r.stagger != 0 || n == 0 {
+                    return Err(());
+                }
+                r.stagger = n;
+            }
             [
                 k
                 @ ("room_fill" | "room_run" | "room_box" | "room_at" | "room_mask" | "room_react"),
@@ -496,18 +553,9 @@ impl RoomRules {
                         [dx.parse().map_err(|_| ())?, dy.parse().map_err(|_| ())?],
                     ),
                     ("room_react", [dx, dy, steps @ ..]) if !steps.is_empty() && pick.is_none() => {
-                        let mut cycle = Vec::new();
-                        for s in steps {
-                            let (p, n) = s.split_once(':').ok_or(())?;
-                            let n: u64 = n.parse().map_err(|_| ())?;
-                            if p.is_empty() || p == "-" || n == 0 {
-                                return Err(());
-                            }
-                            cycle.push((p.to_owned(), n));
-                        }
                         Lay::React(
                             React {
-                                cycle,
+                                cycle: cycle_steps(steps)?,
                                 ..React::default()
                             },
                             [dx.parse().map_err(|_| ())?, dy.parse().map_err(|_| ())?],
@@ -944,7 +992,8 @@ pub fn build_seeded(st: &StageRules, r: &RoomRules, cells: &Cells, seed: u64) ->
             Lay::React(r, d) => {
                 // Not in the stage, which is painted once: each frame
                 // draws the piece it shows.
-                for (i, _) in grid.iter().enumerate().filter(|(_, c)| **c) {
+                let cells = grid.iter().enumerate().filter(|(_, c)| **c);
+                for (k, (i, _)) in cells.enumerate() {
                     live.push(Live {
                         react: r.clone(),
                         draws: r
@@ -954,6 +1003,7 @@ pub fn build_seeded(st: &StageRules, r: &RoomRules, cells: &Cells, seed: u64) ->
                             .collect(),
                         screen: [cols as i64 * side, rows as i64 * side],
                         scale: s,
+                        ahead: (k as u64).saturating_mul(r.stagger),
                     });
                 }
             }
@@ -1220,6 +1270,120 @@ mod tests {
                 "{bad}"
             );
         }
+    }
+
+    /// `#+ room_react_stagger` moves each placement's cycle on from the one
+    /// before it, in the order of the anchor cells, so the same frame shows
+    /// different pictures; without it they stay in step. A `when` piece
+    /// shows on every placement alike, and a drift moves each by the game's
+    /// own frame. Lines it can't read are refused.
+    #[test]
+    fn staggered_placements_show_the_cycle_out_of_step() {
+        // Four anchors: cells 8 and 16 (the door's) and two more of tile 3
+        // in the last row, given here right to left.
+        let mut sc = screen();
+        sc.cells[45] = sc.cells[8].clone();
+        sc.cells[42] = sc.cells[8].clone();
+        let lines = [
+            "room s",
+            "room_cells door tile=3",
+            "room_react door 0 0 wall:2 top:2 end:2",
+            "room_react_when door lives == 0",
+            "room_react_stagger 1",
+        ];
+        let (st, r) = rules(&lines);
+        let Lay::React(react, _) = &r.places[0].lay else {
+            panic!("{:?}", r.places[0].lay)
+        };
+        assert_eq!(react.stagger, 1);
+        let room = build(&st, &r, &sc);
+        assert_eq!(room.live.len(), 4);
+        let none = |_: &str, _: &str, _: i64| false;
+        let shown = |room: &Room, f: u64| -> Vec<(i64, i64, StageSrc)> {
+            room.live
+                .iter()
+                .map(|l| {
+                    let d = l.draw(f, none).unwrap();
+                    (d.x, d.y, d.src)
+                })
+                .collect()
+        };
+        let (wall, top, end) = (StageSrc::Piece(0), StageSrc::Piece(1), StageSrc::Piece(2));
+        // Row by row, left to right: cells 8, 16, 42, 45, each a frame on.
+        assert_eq!(
+            shown(&room, 0),
+            [
+                (0, 32, wall),
+                (0, 64, wall),
+                (64, 160, top),
+                (160, 160, top)
+            ]
+        );
+        assert_eq!(
+            shown(&room, 1).iter().map(|d| d.2).collect::<Vec<_>>(),
+            [wall, top, top, end]
+        );
+        // The first placement is on the game's own frame; the last is three
+        // frames on, and the cycle (6 frames) comes round for each.
+        for f in 0..20 {
+            let s = shown(&room, f);
+            assert_eq!(s[3].2, shown(&room, f + 3)[0].2, "frame {f}");
+            assert_eq!(s, shown(&room, f + 6), "frame {f}");
+        }
+        // A `when` piece on every placement, whatever its place.
+        let out = |c: &str, cmp: &str, v: i64| (c, cmp, v) == ("lives", "==", 0);
+        assert!(
+            room.live
+                .iter()
+                .all(|l| l.draw(1, out).unwrap().src == StageSrc::Piece(3))
+        );
+        // Without the line, in step on every frame.
+        let (st, r) = rules(&lines[..4]);
+        let room = build(&st, &r, &sc);
+        assert!(room.live.iter().all(|l| l.ahead == 0));
+        for f in 0..12 {
+            let s = shown(&room, f);
+            assert!(s.iter().all(|d| d.2 == s[0].2), "frame {f}");
+        }
+        // With a drift, each is moved by the game's frame, not its own.
+        let (st, r) = rules(&[
+            "room s",
+            "room_cells door tile=3",
+            "room_react door 0 0 wall:2 top:2",
+            "room_react_drift 1 0 2",
+            "room_react_stagger 2",
+        ]);
+        let room = build(&st, &r, &sc);
+        let s = shown(&room, 4);
+        assert_eq!([s[0].0, s[1].0], [4, 4]);
+        assert_eq!([s[0].2, s[1].2], [wall, top]);
+        // Refused: no react before it, no frames, a word that isn't a
+        // number, a second one.
+        let mut rooms = Vec::new();
+        for l in ["room s", "room_cells c", "room_at c wall 0 0"] {
+            let w: Vec<&str> = l.split_whitespace().collect();
+            RoomRules::line(&mut rooms, Some(&st), &w, 1).unwrap();
+        }
+        let w: Vec<&str> = "room_react_stagger 3".split_whitespace().collect();
+        assert_eq!(RoomRules::line(&mut rooms, Some(&st), &w, 4), Err(()));
+        let w: Vec<&str> = "room_react c 0 0 wall:3".split_whitespace().collect();
+        RoomRules::line(&mut rooms, Some(&st), &w, 5).unwrap();
+        for bad in [
+            "room_react_stagger 0",
+            "room_react_stagger x",
+            "room_react_stagger",
+            "room_react_stagger 1 2",
+        ] {
+            let w: Vec<&str> = bad.split_whitespace().collect();
+            assert_ne!(
+                RoomRules::line(&mut rooms, Some(&st), &w, 6),
+                Ok(true),
+                "{bad}"
+            );
+        }
+        let w: Vec<&str> = "room_react_stagger 3".split_whitespace().collect();
+        assert_eq!(RoomRules::line(&mut rooms, Some(&st), &w, 6), Ok(true));
+        assert_eq!(RoomRules::line(&mut rooms, Some(&st), &w, 7), Err(()));
     }
 
     /// `#+ room_react_drift` moves its piece by the game's frame from where

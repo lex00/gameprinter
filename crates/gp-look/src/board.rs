@@ -2007,9 +2007,21 @@ impl BoardArt {
         }
         let mut draws: Vec<ArtDraw> = Vec::with_capacity(f.draws.len());
         let mut board_at = 0;
+        // The pieces drawn under the bodies (`#+ under`), as this game
+        // frame has them: after the screen, before the bodies.
+        let mut under = Some(theme.art.under_draws(
+            &framed.scene.bodies,
+            framed.scene.level,
+            w.frame,
+            [0, 0],
+        ));
         for d in f.draws.iter() {
             match (d.of, d.src) {
-                (Of::Level, Src::Own(_)) => board_at = draws.len(),
+                // The screen is the board's, in its picture: over that.
+                (Of::Level, Src::Own(_)) => {
+                    board_at = draws.len();
+                    draws.extend(under.take().into_iter().flatten());
+                }
                 (Of::Level, _) => {
                     draws.push(d.clone());
                     // The room's pieces that change (`#+ room_react`), as
@@ -2028,6 +2040,8 @@ impl BoardArt {
                         };
                         draws.extend(theme.art.live_draws(l, w.frame, [d.x / u, d.y / u], holds));
                     }
+                    // Over the theme's screen, under the board's picture.
+                    draws.extend(under.take().into_iter().flatten());
                     board_at = draws.len();
                 }
                 // The room over the bodies in its front boxes, after the
@@ -2045,6 +2059,10 @@ impl BoardArt {
                 (_, Src::Own(_) | Src::Tint(..) | Src::Stage(_) | Src::Backdrop) => {}
                 _ => draws.push(d.clone()),
             }
+        }
+        // No screen drawn: first over the board's picture.
+        if let Some(under) = under {
+            draws.splice(board_at..board_at, under);
         }
         let mut picture = if omit.screen
             || omit.bodies.iter().any(|b| *b)
@@ -3982,6 +4000,104 @@ asset = "stage2"
         w.counters[c("cleared")] = 0;
         w.frame = 12;
         assert_eq!(shown(&mut theme, &w), "right.png");
+    }
+
+    /// A `#+ under` piece is drawn once under each body of its entity, by
+    /// the body's box, the piece its cycle has on the game's frame: over a
+    /// screen the theme draws and under the board's picture, and where the
+    /// screen is the board's, over that picture and under the theme's
+    /// bodies. A `#+ on` line holds only on its screens.
+    #[test]
+    fn an_under_piece_is_drawn_between_the_screen_and_the_bodies() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_, art, mut w) = two_bodies(dir.path());
+        let pieces =
+            "stage 2 0 0 0 0 0 0\nstage_piece d0 d0.png 48 16\nstage_piece d1 d1.png 40 12\n";
+        let u = gp_present::art::ART_SUB;
+        let seen = |theme: &BoardTheme, t: &Themed| -> Vec<(String, [i64; 4])> {
+            t.frame
+                .draws
+                .iter()
+                .filter_map(|d| match d.src {
+                    gp_present::art::Src::Art(f) => {
+                        Some((theme.art.files[f as usize].clone(), [d.x, d.y, d.w, d.h]))
+                    }
+                    _ => None,
+                })
+                .collect()
+        };
+        // The bodies' boxes are 32 square at (100, 100) and (300, 100).
+        let d0 = |x: i64| {
+            (
+                "d0.png".to_owned(),
+                [(x + 16 - 12) * u, 134 * u, 24 * u, 8 * u],
+            )
+        };
+        let d1 = |x: i64| {
+            (
+                "d1.png".to_owned(),
+                [(x + 16 - 10) * u, 134 * u, 20 * u, 6 * u],
+            )
+        };
+        // A screen the theme draws: the screen, the pieces, then the
+        // board's picture with the bodies.
+        let text = format!(
+            "gp-art 1\nscale 2\npic stage saloon.png 512 480 0 0\n{pieces}#+ under player 0 2 d0:2 d1:1\n"
+        );
+        let mut theme = art.theme(&text).unwrap();
+        assert!(theme.art.rules.skipped.is_empty());
+        let mut files = Vec::new();
+        for f in 0..4 {
+            w.frame = f;
+            let t = art
+                .themed(&mut theme, &w, &[true, true], &[u32::MAX; 2])
+                .unwrap();
+            assert_eq!(t.frame.draws[0].of, gp_present::art::Of::Level);
+            assert_eq!(t.board_at, 3, "frame {f}");
+            let s = seen(&theme, &t);
+            let want = if f == 2 {
+                [d1(100), d1(300)]
+            } else {
+                [d0(100), d0(300)]
+            };
+            assert_eq!(s[1..], want, "frame {f}");
+            files.push(s[1].0.clone());
+        }
+        assert_eq!(files, ["d0.png", "d0.png", "d1.png", "d0.png"]);
+        // The same frame from a theme loaded fresh: the same picture.
+        w.frame = 2;
+        let mut again = art.theme(&text).unwrap();
+        let t = art
+            .themed(&mut again, &w, &[true, true], &[u32::MAX; 2])
+            .unwrap();
+        assert_eq!(seen(&again, &t)[1..], [d1(100), d1(300)]);
+        // The board's own screen: its picture first, then the pieces, then
+        // the body the theme draws.
+        w.frame = 0;
+        let text = format!(
+            "gp-art 1\nscale 2\npic sprite-player-02 mug.png 40 40 -4 -4\n{pieces}#+ under player 0 2 d0:2 d1:1\n"
+        );
+        let mut theme = art.theme(&text).unwrap();
+        let t = art
+            .themed(&mut theme, &w, &[true, true], &[u32::MAX; 2])
+            .unwrap();
+        assert_eq!(t.board_at, 0);
+        let s = seen(&theme, &t);
+        assert_eq!(s[..2], [d0(100), d0(300)]);
+        assert_eq!(s[2].0, "mug.png");
+        assert_eq!(s.len(), 3);
+        // On another screen only: none here. On this one: both.
+        for (screen, n) in [("stage9", 0), ("stage", 2)] {
+            let text = format!(
+                "gp-art 1\nscale 2\npic stage saloon.png 512 480 0 0\n{pieces}#+ on {screen} under player 0 2 d0:2 d1:1\n"
+            );
+            let mut theme = art.theme(&text).unwrap();
+            let t = art
+                .themed(&mut theme, &w, &[true, true], &[u32::MAX; 2])
+                .unwrap();
+            assert_eq!(t.frame.draws.len(), 1 + n, "{screen}");
+            assert_eq!(t.board_at, 1 + n, "{screen}");
+        }
     }
 
     /// A room's `#+ room_scroll` piece is drawn after the room and before
