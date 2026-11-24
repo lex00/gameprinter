@@ -41,6 +41,18 @@
 //!   its offset with it, so a room the game draws mirrored needs no rules
 //!   of its own.
 //!
+//! - `#+ room_react CLASS DX DY PIECE:FRAMES...`: a piece placed as
+//!   `room_at` places it, mirrored with its cell, whose picture is chosen
+//!   on each frame rather than once with the room: each `PIECE` in turn,
+//!   held `FRAMES` game frames (1 or more), over and over, counted on the
+//!   game's own frame number so a clip replays the same (a trophy's eyes
+//!   looking left, ahead, right). Drawn over the room, under the bodies.
+//! - `#+ room_react_when PIECE COUNTER CMP VALUE...`, after a
+//!   `room_react`: on the frames every test holds (a model counter's name,
+//!   one of `<` `<=` `==` `!=` `>=` `>`, a whole number), that piece is
+//!   drawn instead of the cycle's; the first such line that holds wins. A
+//!   counter the model hasn't got holds no test.
+//!
 //! - `#+ room_mask CLASS PIECE TEST...`: the piece laid on the class's
 //!   cells, cell by cell as a fill of one cell, but only on the cell's own
 //!   pixels whose colour passes every test (as `room_cells` takes them):
@@ -102,6 +114,77 @@ pub enum Lay {
     At(String, [i64; 2]),
     /// A piece on each cell's pixels that pass the tests.
     Mask(String, Vec<Test>),
+    /// A piece at each cell, offset in screen pixels, its picture chosen
+    /// each frame (`#+ room_react`).
+    React(React, [i64; 2]),
+}
+
+/// A test of a model counter: its name, its comparison (one of
+/// [`super::CMPS`]) and the value.
+pub type CounterTest = (String, String, i64);
+
+/// A `#+ room_react` piece's pictures: its cycle, and the pictures its
+/// `#+ room_react_when` lines draw in its place while their tests hold.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct React {
+    /// Each piece of the cycle and the game frames it holds (1 or more).
+    pub cycle: Vec<(String, u64)>,
+    /// Each piece drawn instead while every test holds.
+    pub when: Vec<(String, Vec<CounterTest>)>,
+}
+
+impl React {
+    /// Every piece it names, the cycle's then the `when` lines', by the
+    /// number [`React::shown`] gives.
+    #[must_use]
+    pub fn pieces(&self) -> Vec<&str> {
+        self.cycle
+            .iter()
+            .map(|(p, _)| p.as_str())
+            .chain(self.when.iter().map(|(p, _)| p.as_str()))
+            .collect()
+    }
+
+    /// The number (as [`React::pieces`] has it) of the piece shown on game
+    /// frame `frame`: the first `when` line whose tests all hold, `holds`
+    /// answering each test (counter, comparison, value), else the cycle's
+    /// piece at that frame.
+    pub fn shown(&self, frame: u64, holds: impl Fn(&str, &str, i64) -> bool) -> usize {
+        if let Some(k) = self
+            .when
+            .iter()
+            .position(|(_, tests)| tests.iter().all(|(c, cmp, v)| holds(c, cmp, *v)))
+        {
+            return self.cycle.len() + k;
+        }
+        let all: u64 = self.cycle.iter().map(|(_, n)| *n).sum();
+        let mut at = frame % all.max(1);
+        for (i, (_, n)) in self.cycle.iter().enumerate() {
+            if at < *n {
+                return i;
+            }
+            at -= n;
+        }
+        0
+    }
+}
+
+/// A `#+ room_react` piece placed at one cell of a built room: the rule's
+/// pictures and, for each piece by [`React::pieces`]' number, its draw
+/// there (None for a piece the stage has no `stage_piece` for).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Live {
+    pub react: React,
+    pub draws: Vec<Option<StageDraw>>,
+}
+
+impl Live {
+    /// Its draw on game frame `frame` ([`React::shown`]), if any.
+    pub fn draw(&self, frame: u64, holds: impl Fn(&str, &str, i64) -> bool) -> Option<&StageDraw> {
+        self.draws
+            .get(self.react.shown(frame, holds))
+            .and_then(Option::as_ref)
+    }
 }
 
 /// A rule laying pieces on a class's cells, with its line in the rules.
@@ -123,6 +206,7 @@ impl Place {
         match &self.lay {
             Lay::Fill(p) | Lay::Box(p) | Lay::At(p, _) | Lay::Mask(p, _) => p.split('|').collect(),
             Lay::Run(r) => r.iter().flatten().flat_map(|p| p.split('|')).collect(),
+            Lay::React(r, _) => r.pieces(),
         }
     }
 }
@@ -216,8 +300,34 @@ impl RoomRules {
                 }
                 room.front.push(b);
             }
+            ["room_react_when", p, tests @ ..]
+                if *p != "-" && !tests.is_empty() && tests.len() % 3 == 0 =>
+            {
+                let room = rooms.last_mut().ok_or(())?;
+                let Some(Place {
+                    lay: Lay::React(r, _),
+                    ..
+                }) = room.places.last_mut()
+                else {
+                    return Err(());
+                };
+                let mut when = Vec::new();
+                for t in tests.chunks(3) {
+                    let [c, cmp, v] = t else { return Err(()) };
+                    if !super::counter_word(c) || !super::CMPS.contains(cmp) {
+                        return Err(());
+                    }
+                    when.push((
+                        (*c).to_owned(),
+                        (*cmp).to_owned(),
+                        v.parse().map_err(|_| ())?,
+                    ));
+                }
+                r.when.push(((*p).to_owned(), when));
+            }
             [
-                k @ ("room_fill" | "room_run" | "room_box" | "room_at" | "room_mask"),
+                k
+                @ ("room_fill" | "room_run" | "room_box" | "room_at" | "room_mask" | "room_react"),
                 class,
                 pieces @ ..,
             ] => {
@@ -250,6 +360,24 @@ impl RoomRules {
                         (*p).to_owned(),
                         [dx.parse().map_err(|_| ())?, dy.parse().map_err(|_| ())?],
                     ),
+                    ("room_react", [dx, dy, steps @ ..]) if !steps.is_empty() && pick.is_none() => {
+                        let mut cycle = Vec::new();
+                        for s in steps {
+                            let (p, n) = s.split_once(':').ok_or(())?;
+                            let n: u64 = n.parse().map_err(|_| ())?;
+                            if p.is_empty() || p == "-" || n == 0 {
+                                return Err(());
+                            }
+                            cycle.push((p.to_owned(), n));
+                        }
+                        Lay::React(
+                            React {
+                                cycle,
+                                when: Vec::new(),
+                            },
+                            [dx.parse().map_err(|_| ())?, dy.parse().map_err(|_| ())?],
+                        )
+                    }
                     ("room_run", [l, m, r]) => {
                         let run = [piece(l), piece(m), piece(r)];
                         if run.iter().all(Option::is_none) {
@@ -302,6 +430,9 @@ impl CellClass {
 pub struct Room {
     pub stage: Stage,
     pub cells: Vec<usize>,
+    /// The `#+ room_react` pieces, one for each cell of their class, in
+    /// the order of their rules: drawn frame by frame over the stage.
+    pub live: Vec<Live>,
 }
 
 /// Each class's cells, by class, as a grid of `cols` by `rows`.
@@ -468,6 +599,22 @@ pub fn build_seeded(st: &StageRules, r: &RoomRules, cells: &Cells, seed: u64) ->
     };
     let classes = classify(r, cells);
     let mut counts = Vec::with_capacity(r.places.len());
+    let mut live = Vec::new();
+    // A piece at its own size at cell `i`, its top left `d` screen pixels
+    // from the cell's; where the board mirrors the cell's tile, mirrored,
+    // its left edge mirrored about the cell's middle.
+    let at = |i: usize, (p, [w, h]): (u32, [i64; 2]), [dx, dy]: [i64; 2]| {
+        let (x, y) = ((i % cols) as i64 * side, (i / cols) as i64 * side);
+        let mirror = cells.cells[i].flip[0];
+        let x = if mirror {
+            x + side - dx * s - w
+        } else {
+            x + dx * s
+        };
+        let mut d = StageDraw::piece(p, x, y + dy * s, w, h);
+        d.flip_x = mirror;
+        d
+    };
     for place in &r.places {
         let piece = |name: &str| {
             let name = pick_named(name, place.pick.as_deref(), seed);
@@ -564,23 +711,26 @@ pub fn build_seeded(st: &StageRules, r: &RoomRules, cells: &Cells, seed: u64) ->
                         .push(StageDraw::piece(p, x0, y0, x1 - x0, y1 - y0));
                 }
             }
-            Lay::At(p, [dx, dy]) => {
-                let Some((p, [w, h])) = piece(p) else {
+            Lay::At(p, d) => {
+                let Some(p) = piece(p) else {
                     continue;
                 };
                 for (i, _) in grid.iter().enumerate().filter(|(_, c)| **c) {
-                    let (x, y) = ((i % cols) as i64 * side, (i / cols) as i64 * side);
-                    let mirror = cells.cells[i].flip[0];
-                    // Mirrored, the piece's left edge mirrors about the
-                    // cell's middle.
-                    let x = if mirror {
-                        x + side - dx * s - w
-                    } else {
-                        x + dx * s
-                    };
-                    let mut d = StageDraw::piece(p, x, y + dy * s, w, h);
-                    d.flip_x = mirror;
-                    out.draws.push(d);
+                    out.draws.push(at(i, p, *d));
+                }
+            }
+            Lay::React(r, d) => {
+                // Not in the stage, which is painted once: each frame
+                // draws the piece it shows.
+                for (i, _) in grid.iter().enumerate().filter(|(_, c)| **c) {
+                    live.push(Live {
+                        react: r.clone(),
+                        draws: r
+                            .pieces()
+                            .iter()
+                            .map(|p| Some(at(i, piece(p)?, *d)))
+                            .collect(),
+                    });
                 }
             }
             Lay::Run([l, m, rr]) => {
@@ -630,6 +780,7 @@ pub fn build_seeded(st: &StageRules, r: &RoomRules, cells: &Cells, seed: u64) ->
     Room {
         stage: out,
         cells: counts,
+        live,
     }
 }
 
@@ -731,6 +882,98 @@ mod tests {
         assert!(RoomRules::line(&mut rooms, Some(&st), &w, 3).is_err());
     }
     use crate::art::stage::StageSrc;
+
+    /// `#+ room_react` places a piece at each cell as `room_at` does
+    /// (mirrored with its cell), outside the stage, which is painted once;
+    /// it shows its cycle by the game's frame, the same for the same frame,
+    /// and a `#+ room_react_when` piece on the frames its tests hold, the
+    /// first that holds winning. Lines it can't read are refused.
+    #[test]
+    fn a_reacting_piece_cycles_and_shows_what_the_counters_say() {
+        let (st, r) = rules(&[
+            "room s",
+            "room_cells door tile=3",
+            "room_react door 2 -4 wall:2 top:3",
+            "room_react_when end lives == 0",
+            "room_react_when door lost >= 1 lives < 9",
+        ]);
+        let Lay::React(react, off) = &r.places[0].lay else {
+            panic!("{:?}", r.places[0].lay)
+        };
+        assert_eq!(*off, [2, -4]);
+        assert_eq!(react.pieces(), ["wall", "top", "end", "door"]);
+        assert_eq!(r.places[0].pieces(), react.pieces());
+        let mut sc = screen();
+        sc.cells[16].flip[0] = true;
+        let room = build(&st, &r, &sc);
+        // The stage draws nothing of it; one for each of the class's cells.
+        assert!(room.stage.draws.is_empty());
+        assert_eq!(room.cells, [2]);
+        assert_eq!(room.live.len(), 2);
+        let none = |_: &str, _: &str, _: i64| false;
+        let cycle: Vec<usize> = (0..12).map(|f| react.shown(f, none)).collect();
+        assert_eq!(cycle, [0, 0, 1, 1, 1, 0, 0, 1, 1, 1, 0, 0]);
+        let lives = |n: i64| {
+            move |c: &str, cmp: &str, v: i64| match (c, cmp) {
+                ("lives", "==") => n == v,
+                ("lives", "<") => n < v,
+                ("lost", ">=") => 1 >= v,
+                _ => false,
+            }
+        };
+        // No lives: the first `when` line, on every frame.
+        assert!((0..12).all(|f| react.shown(f, lives(0)) == 2));
+        // Lives, and one lost: the second.
+        assert!((0..12).all(|f| react.shown(f, lives(3)) == 3));
+        // Each piece at its own size (the stage's 2 to a screen pixel),
+        // 2, -4 screen pixels from the door's cell at row 1; the mirrored
+        // cell's (row 2) mirrored about its middle.
+        let (a, b) = (&room.live[0], &room.live[1]);
+        let d = a.draw(2, none).unwrap();
+        assert_eq!(
+            (d.src, d.x, d.y, d.w, d.h, d.flip_x),
+            (StageSrc::Piece(1), 4, 32 - 8, 32, 16, false)
+        );
+        let d = b.draw(2, none).unwrap();
+        assert_eq!((d.x, d.y, d.flip_x), (32 - 4 - 32, 64 - 8, true));
+        assert_eq!(a.draw(0, none).unwrap().src, StageSrc::Piece(0));
+        assert_eq!(a.draw(0, lives(0)).unwrap().src, StageSrc::Piece(2));
+        // Refused: a when line with no react before it, a step of no
+        // frames or none at all, a bad comparison, pick=.
+        let mut rooms = Vec::new();
+        for l in ["room s", "room_cells c", "room_at c wall 0 0"] {
+            let w: Vec<&str> = l.split_whitespace().collect();
+            RoomRules::line(&mut rooms, Some(&st), &w, 1).unwrap();
+        }
+        for bad in [
+            "room_react_when end lives == 0",
+            "room_react c 0 0 wall:0",
+            "room_react c 0 0 wall",
+            "room_react c 0 0",
+            "room_react c 0 0 wall:3 pick=x",
+        ] {
+            let w: Vec<&str> = bad.split_whitespace().collect();
+            assert_ne!(
+                RoomRules::line(&mut rooms, Some(&st), &w, 4),
+                Ok(true),
+                "{bad}"
+            );
+        }
+        let w: Vec<&str> = "room_react c 0 0 wall:3".split_whitespace().collect();
+        RoomRules::line(&mut rooms, Some(&st), &w, 4).unwrap();
+        for bad in [
+            "room_react_when end lives = 0",
+            "room_react_when end lives ==",
+            "room_react_when end lives == x",
+        ] {
+            let w: Vec<&str> = bad.split_whitespace().collect();
+            assert_ne!(
+                RoomRules::line(&mut rooms, Some(&st), &w, 5),
+                Ok(true),
+                "{bad}"
+            );
+        }
+    }
 
     /// Reads `#+` room lines (without the `#+`) after a stage.
     fn rules(lines: &[&str]) -> (StageRules, RoomRules) {

@@ -1472,8 +1472,10 @@ fn added_checks(
             "room_fill" | "room_box" => format!("`#+ {word}` takes a class its room gives and a piece"),
             "room_at" => "`#+ room_at` takes a class its room gives, a piece and its offset from each cell, DX DY in screen pixels".to_owned(),
             "room_run" => "`#+ room_run` takes a class its room gives and three pieces, left, middle and right, `-` for none".to_owned(),
+            "room_react" => "`#+ room_react` takes a class its room gives, its offset DX DY in screen pixels, then each piece of its cycle with the game frames it holds, PIECE:FRAMES (1 or more), and no pick=".to_owned(),
+            "room_react_when" => "`#+ room_react_when` comes after a `#+ room_react` and takes a piece and one or more tests, COUNTER CMP VALUE, CMP one of < <= == != >= >".to_owned(),
             "" => "it says nothing after `#+`".to_owned(),
-            w => format!("no page knows `#+ {w}`; the lines are `#+ hud_over`, `#+ in` and the room lines (`#+ room`, `room_cells`, `room_fill`, `room_run`, `room_box`, `room_at`, `room_front`, `room_mask`), and `#+ recolor`"),
+            w => format!("no page knows `#+ {w}`; the lines are `#+ hud_over`, `#+ in` and the room lines (`#+ room`, `room_cells`, `room_fill`, `room_run`, `room_box`, `room_at`, `room_react`, `room_react_when`, `room_front`, `room_mask`), and `#+ recolor`"),
         };
         r.add(
             Group::Files,

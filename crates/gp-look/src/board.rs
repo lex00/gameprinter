@@ -2012,6 +2012,19 @@ impl BoardArt {
                 (Of::Level, Src::Own(_)) => board_at = draws.len(),
                 (Of::Level, _) => {
                     draws.push(d.clone());
+                    // The room's pieces that change (`#+ room_react`), as
+                    // this game frame and the model's counters show them.
+                    if let Src::Stage(l) = d.src {
+                        let u = gp_present::art::ART_SUB;
+                        let holds = |c: &str, cmp: &str, v: i64| {
+                            let at = self.counter_names.iter().position(|n| n == c);
+                            match (at.and_then(|i| w.counters.get(i)), cmp_of(cmp)) {
+                                (Some(x), Some(cmp)) => cmp.holds(*x, v),
+                                _ => false,
+                            }
+                        };
+                        draws.extend(theme.art.live_draws(l, w.frame, [d.x / u, d.y / u], holds));
+                    }
                     board_at = draws.len();
                 }
                 // The room over the bodies in its front boxes, after the
@@ -3861,6 +3874,103 @@ asset = "stage2"
             tops.iter()
                 .all(|d| d.clip == Some([4 * 32, 10 * 32, 16 * 32, 32]))
         );
+    }
+
+    /// A room's `#+ room_react` piece is drawn over the room and under the
+    /// board's picture, at its place from its cell, its picture picked on
+    /// each frame: the cycle by the game's frame number (the same for the
+    /// same frame), and the `#+ room_react_when` piece on the frames the
+    /// model's counters hold its test.
+    #[test]
+    fn a_room_piece_cycles_and_shows_its_picture_while_the_counters_say() {
+        let dir = tempfile::tempdir().unwrap();
+        let (model, _, _) = with_looks_and_counters(dir.path());
+        // One cell of tile 0 in colour bank 2 at column 10, row 5.
+        let rows: Vec<String> = (0..30)
+            .map(|y| {
+                let row: Vec<&str> = (0..32)
+                    .map(|x| {
+                        if (x, y) == (10, 5) {
+                            "0x2000"
+                        } else {
+                            "0x1001"
+                        }
+                    })
+                    .collect();
+                format!("[{}]", row.join(", "))
+            })
+            .collect();
+        std::fs::write(
+            dir.path().join("stage.toml"),
+            format!("rows = [{}]\n", rows.join(",\n")),
+        )
+        .unwrap();
+        let lifted = gp_interp::Lifted::read_dir(dir.path(), &model).unwrap();
+        let spec = gp_interp::compile::compile(&model, &lifted).unwrap();
+        let art = BoardArt::load(&model, &spec, dir.path()).unwrap().unwrap();
+        let text = "gp-art 1\nscale 2\nstage 2 0 0 0 0 0 0\n\
+                    stage_piece left left.png 32 32\nstage_piece right right.png 32 32\n\
+                    stage_piece oh oh.png 32 32\n\
+                    #+ room stage\n#+ room_cells trophy bank=2\n\
+                    #+ room_react trophy 4 -8 left:2 right:3\n\
+                    #+ room_react_when oh lives == 0 cleared == 1\n";
+        let mut theme = art.theme(text).unwrap();
+        assert!(
+            theme.art.rules.skipped.is_empty(),
+            "{:?}",
+            theme.art.rules.skipped
+        );
+        assert_eq!(theme.rooms[0].cells, [1]);
+        let c = |n: &str| spec.counters.index_of(n).unwrap();
+        let mut w = World {
+            counters: vec![0; spec.counters.len()],
+            ..Default::default()
+        };
+        w.counters[c("lives")] = 3;
+        let u = gp_present::art::ART_SUB;
+        let shown = |theme: &mut BoardTheme, w: &World| {
+            let t = art.themed(theme, w, &[], &[]).unwrap();
+            assert_eq!(t.board_at, 2);
+            let d = &t.frame.draws[1];
+            assert_eq!(
+                (d.x, d.y, d.w, d.h),
+                ((160 + 4) * u, (80 - 8) * u, 16 * u, 16 * u)
+            );
+            let gp_present::art::Src::Art(f) = d.src else {
+                panic!("{:?}", d.src)
+            };
+            theme.art.files[f as usize].clone()
+        };
+        let mut seen = Vec::new();
+        for f in 0..6 {
+            w.frame = f;
+            seen.push(shown(&mut theme, &w));
+        }
+        assert_eq!(
+            seen,
+            [
+                "left.png",
+                "left.png",
+                "right.png",
+                "right.png",
+                "right.png",
+                "left.png"
+            ]
+        );
+        // The same frame again, from a theme loaded fresh: the same picture.
+        w.frame = 3;
+        let mut again = art.theme(text).unwrap();
+        assert_eq!(shown(&mut again, &w), "right.png");
+        // A life lost (no lives, while `cleared` is 1): the "oh" on every frame.
+        w.counters[c("lives")] = 0;
+        w.counters[c("cleared")] = 1;
+        for f in 6..12 {
+            w.frame = f;
+            assert_eq!(shown(&mut theme, &w), "oh.png", "frame {f}");
+        }
+        w.counters[c("cleared")] = 0;
+        w.frame = 12;
+        assert_eq!(shown(&mut theme, &w), "right.png");
     }
 
     #[test]

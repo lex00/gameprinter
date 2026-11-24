@@ -61,7 +61,7 @@
 //!   in the game's kit and given with [`Art::set_regions`]; until then no
 //!   `in` rule holds.
 //! - `#+ room SCREEN...`, `#+ room_cells`, `#+ room_fill`, `#+ room_run`,
-//!   `#+ room_box` and `#+ room_at`: an arcade game's screens built from the stage's
+//!   `#+ room_box`, `#+ room_at` and `#+ room_react`: an arcade game's screens built from the stage's
 //!   pieces on the cells of the screen the player's lift gives
 //!   ([`room`]). The runtime gives each screen's cells with
 //!   [`Art::build_room`].
@@ -737,6 +737,9 @@ pub struct Art {
     /// By the build's picture: the stage built over that level picture
     /// ([`Art::build_stage`]), its pieces as [`Art::files`] numbers.
     stages: Vec<Option<Stage>>,
+    /// By the build's picture: the room's `#+ room_react` pieces
+    /// ([`room::Room::live`]), their pieces as [`Art::files`] numbers.
+    live: Vec<Vec<room::Live>>,
     /// The seed a room's piece alternatives (`#+ room_box picture a|b`)
     /// are picked by ([`room::pick`]); the page gives a new one each time
     /// it loads a theme, so each is as likely.
@@ -899,6 +902,7 @@ impl Art {
         Ok(Art {
             room_seed: 0,
             stages: vec![None; n],
+            live: vec![Vec::new(); n],
             holes,
             held: set(&rules.held)?,
             also,
@@ -1054,7 +1058,11 @@ impl Art {
             ));
         }
         let mut built = room::build_seeded(st, &self.rules.rooms[k], cells, self.room_seed);
-        for d in &mut built.stage.draws {
+        let live_draws = built
+            .live
+            .iter_mut()
+            .flat_map(|l| l.draws.iter_mut().flatten());
+        for d in built.stage.draws.iter_mut().chain(live_draws) {
             if let StageSrc::Piece(i) = d.src {
                 let art = &st.pieces[i as usize].1;
                 d.src =
@@ -1062,7 +1070,43 @@ impl Art {
             }
         }
         self.stages[pic as usize] = Some(built.stage);
+        self.live[pic as usize] = built.live;
         Ok(built.cells)
+    }
+
+    /// The `#+ room_react` pieces of the room over screen picture `pic` as
+    /// shown on game frame `frame`, `holds` answering each `when` test
+    /// (a counter's name, its comparison and the value): each one's draw
+    /// in the window, its top left at the screen's `[ox, oy]` (window
+    /// pixels), to paint over the room and under the bodies.
+    pub fn live_draws(
+        &self,
+        pic: u32,
+        frame: u64,
+        origin: [i64; 2],
+        holds: impl Fn(&str, &str, i64) -> bool,
+    ) -> Vec<ArtDraw> {
+        let (Some(live), Some(st)) = (self.live.get(pic as usize), self.stage(pic)) else {
+            return Vec::new();
+        };
+        let (u, s) = (ART_SUB, st.scale.max(1));
+        live.iter()
+            .filter_map(|l| l.draw(frame, &holds))
+            .filter_map(|d| {
+                let StageSrc::Piece(file) = d.src else {
+                    return None;
+                };
+                let mut a = ArtDraw::new(
+                    Src::Art(file),
+                    origin[0] * u + d.x * u / s,
+                    origin[1] * u + d.y * u / s,
+                    d.w * u / s,
+                    d.h * u / s,
+                );
+                a.flip_x = d.flip_x;
+                Some(a)
+            })
+            .collect()
     }
 
     /// The stage built over level picture `pic`, if any.
