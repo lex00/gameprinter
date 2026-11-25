@@ -351,4 +351,61 @@ mod tests {
         let own = fs::read_to_string(game.join("inputs/t.nes.1.presses")).unwrap();
         assert_eq!(own, "gp-presses 0\nframes 1\nright+a@0-0\n");
     }
+
+    /// A card's clip must play on the page: an arcade game's corpus clip
+    /// in NES buttons is refused, one with its arcade line plays, and a
+    /// session clip or an unknown id is said as such.
+    #[test]
+    fn a_cards_clip_in_nes_buttons_is_refused_for_an_arcade_game() {
+        use crate::clip_score::unplayable_on_page;
+        let d = tempfile::tempdir().unwrap();
+        let game = d.path().join("t");
+        fs::create_dir_all(&game).unwrap();
+        fs::write(game.join("corpus.toml"), PLAN).unwrap();
+        let paths = Paths {
+            home: d.path().join("home"),
+            roms: d.path().join("roms"),
+            ..Paths::from_env().unwrap()
+        };
+        let about = About {
+            name: "a clip",
+            why: "",
+            level: "",
+            source: "played",
+        };
+        let arcade = d.path().join("a.input");
+        fs::write(
+            &arcade,
+            "gp-arcade-input 0\nsystem madeupa\ncolumns CSRLDUT\n10 .......\n4 C......\n6 .......\n",
+        )
+        .unwrap();
+        let nes = d.path().join("n.input");
+        fs::write(
+            &nes,
+            "gp-input-log 0\ncontrollers 1\nP ........\nP R......A\n",
+        )
+        .unwrap();
+        let log = |file| From::Log {
+            file,
+            start: 1,
+            frames: None,
+        };
+        run(&paths, &game, "t.arcade.1", &log(&arcade), &about, None).unwrap();
+        run(&paths, &game, "t.nes.1", &log(&nes), &about, None).unwrap();
+        // Not an arcade game yet: the NES clip plays, the arcade one doesn't.
+        assert_eq!(unplayable_on_page(&game, "t.nes.1"), None);
+        let why = unplayable_on_page(&game, "t.arcade.1").unwrap();
+        assert!(why.contains("arcade set madeupa"), "{why}");
+        fs::write(
+            game.join("package.toml"),
+            "[[rom.entry]]\nplatform = \"arcade\"\n",
+        )
+        .unwrap();
+        assert_eq!(unplayable_on_page(&game, "t.arcade.1"), None);
+        let why = unplayable_on_page(&game, "t.nes.1").unwrap();
+        assert!(why.contains("name no arcade board"), "{why}");
+        assert_eq!(unplayable_on_page(&game, "3"), None);
+        assert_eq!(unplayable_on_page(&game, "move/2"), None);
+        assert!(unplayable_on_page(&game, "t.none.1").is_some());
+    }
 }

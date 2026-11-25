@@ -101,8 +101,9 @@ pub struct GateArgs {
     /// The clip that shows what the change does: N (a clip of the step's
     /// row), ROW/N, or a corpus clip's id (rooftop.attract.001). Its card on
     /// the person's page gets LOOK AT IT, which sets the clip up on their
-    /// screens. The gate itself doesn't read it; gp_run refuses a card for a
-    /// patch without it.
+    /// screens. A dry run fails a corpus clip the page can't play (an arcade
+    /// game's clip in NES buttons); gp_run refuses a card for a patch
+    /// without it.
     #[arg(long)]
     pub clip: Option<String>,
     /// The frames of --clip to watch: A-B or A, from the clip's start.
@@ -1630,6 +1631,15 @@ fn trial(
         Err((i, f)) => return Ok(Tried::Item(i, f)),
     };
     let fail = |why: String, phase: &'static str| Ok(Tried::Fail(Failed { why, phase }));
+    // The card's clip must play on the person's page, as the patched tree
+    // has it: a dry run (which batches with no other) says so before the
+    // card goes up. A YES isn't refused for it.
+    if a.dry_run
+        && let Some(clip) = &a.clip
+        && let Some(why) = crate::clip_score::unplayable_on_page(&game, clip)
+    {
+        return fail(format!("--clip {}: {why}", clip.trim()), "clip");
+    }
     let module = match module_at(c, &game, lines) {
         Ok(m) => m,
         Err(e) => return fail(format!("{e:#}"), "module"),

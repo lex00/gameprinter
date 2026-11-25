@@ -313,6 +313,38 @@ pub(crate) fn corpus_clip(game: &Path, spec: &str) -> Result<CorpusClip> {
         .with_context(|| format!("{} has no clip {spec}", game.display()))
 }
 
+/// Why the screen page can't play `spec`, a card's or a row's clip, when
+/// it is a corpus clip of the game at `game`; None when it plays there, or
+/// when it is a session clip (N, ROW/N), which the page records itself.
+/// An arcade game's clip whose presses files name no arcade board reaches
+/// the page's arcade player as an NES log, and LOOK AT IT shows the person
+/// "an NES input log can't play on an arcade board".
+pub(crate) fn unplayable_on_page(game: &Path, spec: &str) -> Option<String> {
+    let spec = spec.trim();
+    if spec.parse::<u64>().is_ok() || spec.contains('/') {
+        return None;
+    }
+    let c = match corpus_clip(game, spec) {
+        Ok(c) => c,
+        Err(e) => return Some(format!("{e:#}")),
+    };
+    let log = match c.log() {
+        Ok((log, _)) => log,
+        Err(e) => return Some(format!("{e:#}")),
+    };
+    let arcade = crate::publish_rule::is_arcade_game(game);
+    match (arcade, &log.arcade) {
+        (true, None) => Some(format!(
+            "corpus clip {spec}'s presses files name no arcade board (no `arcade SYSTEM COLUMNS` line), so the page's arcade player takes it for an NES log and LOOK AT IT fails: give a clip whose presses files carry the line"
+        )),
+        (false, Some(a)) => Some(format!(
+            "corpus clip {spec} is of the arcade set {}, and the game plays on an NES: LOOK AT IT can't play it",
+            a.system
+        )),
+        _ => None,
+    }
+}
+
 fn log_cmd(
     paths: &Paths,
     game: &Path,
