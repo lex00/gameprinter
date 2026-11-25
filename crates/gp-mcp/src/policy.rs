@@ -646,6 +646,9 @@ pub const TABLE: &[Row] = &[
     r("loop health", S, Read),
     r("loop hook", S, Read),
     r("loop clean", S, Write),
+    // Puts the games checkout's local changes under a game in a git stash
+    // (the person's files, so their yes on a card that lists them).
+    r("loop set-aside", S, Rule::Ask(Ask::Replace, DRY_RUN)),
     r("loop wrong", S, Rule::Refuse(PERSON_SETS_LOOP)),
 ];
 

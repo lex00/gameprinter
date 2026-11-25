@@ -55,6 +55,20 @@ pub enum LoopCmd {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Set aside the games checkout's local changes under GAME/ (the files
+    /// gp loop health names under its problem), so a landing there can go
+    /// on: they go into a git stash of the checkout named for the game and
+    /// the day, files git doesn't track too, and `git stash apply` brings
+    /// them back. Nothing is removed. Through gp_run it needs the person's
+    /// yes (its card lists the files), and runs in the person's checkout,
+    /// never a worker's worktree.
+    SetAside {
+        /// The game's folder in the games checkout ("rooftop").
+        game: String,
+        /// List the files it would set aside, and change nothing.
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Change the home's loop settings ($GP_HOME/loop.toml) and print them.
     /// With no flag, print them. Only the person runs this: gp_run refuses
     /// it, so an agent can't turn the loop's rules off.
@@ -395,6 +409,13 @@ pub(crate) fn run(cmd: &LoopCmd, paths: &gp_evidence::Paths) -> Result<Outcome> 
                 crate::builds::clean(home, &none, g, cache.as_deref())
             };
             Ok(clean_outcome(home, *dry_run, &done, &skipped))
+        }
+        LoopCmd::SetAside { game, dry_run } => {
+            let games = crate::roms_cmd::games_dir(None)
+                .ok_or_else(|| anyhow::anyhow!("no games checkout: give $GP_GAMES_DIR"))?;
+            let v = set_aside(&games, game, *dry_run, &crate::game_new::today())?;
+            let text = v["says"].as_str().unwrap_or("").to_owned();
+            Ok(Outcome::ok(v, text))
         }
         LoopCmd::Hook { event } => crate::loop_hook::run(*event, paths),
         LoopCmd::Steps => {
@@ -972,6 +993,9 @@ fn checks(paths: &gp_evidence::Paths, games_dir: Option<&std::path::Path>) -> Va
                 // The files on a line of their own, so the problem's words
                 // (and the trouble row they file into) stay the same.
                 lines.push(format!("           {}", local_changes(&out)));
+                lines.push(format!(
+                    "           gp loop set-aside {g} puts them in a git stash of the checkout, on the person's yes"
+                ));
             } else {
                 ok(
                     &mut lines,
@@ -1094,6 +1118,113 @@ fn local_changes(porcelain: &str) -> String {
     parts.join("; ")
 }
 
+/// `git status --porcelain` of `game`/ in the games checkout, every file
+/// git doesn't track named on its own.
+fn game_status(games: &std::path::Path, game: &str) -> Result<String> {
+    let o = std::process::Command::new("git")
+        .args(["status", "--porcelain", "--untracked-files=all", "--", game])
+        .current_dir(games)
+        .output()?;
+    if !o.status.success() {
+        anyhow::bail!(
+            "git status in {} failed: {}",
+            games.display(),
+            String::from_utf8_lossy(&o.stderr).trim()
+        );
+    }
+    Ok(String::from_utf8_lossy(&o.stdout).into_owned())
+}
+
+/// gp loop set-aside: the games checkout's local changes under `game`/
+/// put in a git stash of the checkout named for the game and `day`, files
+/// git doesn't track too, so nothing is lost and a landing there goes on;
+/// with `dry_run` only listed. `replaces` names each file with `says`:
+/// gp_run's card shows it as the plan, and the person's yes holds only
+/// while the plan is the same (trouble-the-games-checkout-has-local-changes:
+/// a refused corpus import stayed in the person's checkout for a day, since
+/// no worker may run git stash and no gp command put it aside).
+fn set_aside(games: &std::path::Path, game: &str, dry_run: bool, day: &str) -> Result<Value> {
+    if game.is_empty()
+        || game.starts_with('.')
+        || game.contains(['/', '\\'])
+        || !games.join(game).is_dir()
+    {
+        anyhow::bail!(
+            "{game} is no game's folder in the games checkout {}",
+            games.display()
+        );
+    }
+    let out = game_status(games, game)?;
+    let files: Vec<&str> = out
+        .lines()
+        .filter(|l| l.len() > 3)
+        .map(|l| l[3..].trim())
+        .collect();
+    let replaces: Vec<Value> = out
+        .lines()
+        .filter(|l| l.len() > 3)
+        .map(|l| {
+            let path = l[3..].trim();
+            let how = if l.starts_with("??") {
+                "not in git"
+            } else {
+                "changed"
+            };
+            json!({"path": path, "says": format!("{path} ({how}): set aside in a git stash")})
+        })
+        .collect();
+    let dir = games.display().to_string();
+    let mut v = json!({
+        "game": game, "games": dir, "dry_run": dry_run,
+        "files": files, "replaces": replaces, "stash": null,
+    });
+    let n = files.len();
+    if n == 0 {
+        v["says"] = json!(format!(
+            "Nothing to set aside: the games checkout is clean under {game}/."
+        ));
+        return Ok(v);
+    }
+    let named = local_changes(&out);
+    if dry_run {
+        v["says"] = json!(format!(
+            "Would set aside {n} local changes under {game}/ in a git stash of the games checkout ({dir}): {named}"
+        ));
+        return Ok(v);
+    }
+    let message = format!("gp loop set-aside {game} {day}: {n} local changes");
+    let o = std::process::Command::new("git")
+        .args([
+            "stash",
+            "push",
+            "--include-untracked",
+            "-m",
+            &message,
+            "--",
+            game,
+        ])
+        .current_dir(games)
+        .output()?;
+    if !o.status.success() {
+        anyhow::bail!(
+            "git stash in {dir} failed, and nothing was set aside: {}",
+            String::from_utf8_lossy(&o.stderr).trim()
+        );
+    }
+    let left = game_status(games, game)?.lines().count();
+    v["stash"] = json!(message);
+    v["left"] = json!(left);
+    v["says"] = json!(format!(
+        "Set aside {n} local changes under {game}/ in a git stash of the games checkout ({dir}), \"{message}\" in git stash list: {named}. `git stash apply` with that entry brings them back.{}",
+        if left == 0 {
+            format!(" The checkout is clean under {game}/.")
+        } else {
+            format!(" {left} are still there.")
+        }
+    ));
+    Ok(v)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1116,6 +1247,77 @@ mod tests {
             "{said}"
         );
         assert_eq!(local_changes("?? rooftop/a\n"), "not in git (1): rooftop/a");
+    }
+
+    /// gp loop set-aside puts a game's local changes, untracked files too,
+    /// in a named git stash and leaves the checkout clean under the game;
+    /// another game's changes stay, a dry run changes nothing, and
+    /// `git stash apply` brings them back.
+    #[test]
+    fn set_aside_stashes_a_games_local_changes_and_nothing_else() {
+        let t = tempfile::tempdir().unwrap();
+        let g = t.path();
+        let git = |args: &[&str]| {
+            let o = std::process::Command::new("git")
+                .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+                .args(args)
+                .current_dir(g)
+                .output()
+                .unwrap();
+            assert!(o.status.success(), "git {args:?}: {o:?}");
+            String::from_utf8_lossy(&o.stdout).into_owned()
+        };
+        git(&["init", "-q", "-b", "main"]);
+        for d in ["rooftop/inputs", "other"] {
+            std::fs::create_dir_all(g.join(d)).unwrap();
+        }
+        std::fs::write(g.join("rooftop/corpus.toml"), "a\n").unwrap();
+        std::fs::write(g.join("other/model.toml"), "a\n").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-qm", "first"]);
+
+        let v = set_aside(g, "rooftop", false, "2026-11-25").unwrap();
+        assert_eq!(v["files"], json!([]), "{v}");
+        assert!(
+            v["says"]
+                .as_str()
+                .unwrap()
+                .starts_with("Nothing to set aside")
+        );
+
+        std::fs::write(g.join("rooftop/corpus.toml"), "b\n").unwrap();
+        std::fs::write(g.join("rooftop/inputs/c1.presses"), "p\n").unwrap();
+        std::fs::write(g.join("other/model.toml"), "b\n").unwrap();
+        let dry = set_aside(g, "rooftop", true, "2026-11-25").unwrap();
+        assert_eq!(
+            dry["files"],
+            json!(["rooftop/corpus.toml", "rooftop/inputs/c1.presses"])
+        );
+        assert_eq!(dry["replaces"].as_array().unwrap().len(), 2);
+        assert_eq!(game_status(g, "rooftop").unwrap().lines().count(), 2);
+
+        let done = set_aside(g, "rooftop", false, "2026-11-25").unwrap();
+        assert_eq!(done["left"], json!(0), "{done}");
+        assert_eq!(
+            done["replaces"], dry["replaces"],
+            "the card's plan is the run's"
+        );
+        assert_eq!(game_status(g, "rooftop").unwrap(), "");
+        assert_eq!(game_status(g, "other").unwrap().lines().count(), 1);
+        assert!(
+            git(&["stash", "list"])
+                .contains("gp loop set-aside rooftop 2026-11-25: 2 local changes")
+        );
+        git(&["stash", "apply", "-q"]);
+        assert_eq!(
+            std::fs::read_to_string(g.join("rooftop/corpus.toml")).unwrap(),
+            "b\n"
+        );
+        assert!(g.join("rooftop/inputs/c1.presses").is_file());
+
+        for bad in ["", "../x", ".git", "nope"] {
+            assert!(set_aside(g, bad, true, "d").is_err(), "{bad}");
+        }
     }
 
     /// A yes the runner holds for the cards it stands on, or a put-back

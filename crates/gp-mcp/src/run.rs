@@ -1230,10 +1230,13 @@ pub fn plan_of(config: &Config, c: &CommandDef, path: &str, argv: &[String]) -> 
 /// person's. A gate always runs in the person's, the checkout it lands on,
 /// and so does gp loop health, which reports on the person's setup: from a
 /// worker's worktree it said the checkout was clean while the person's held
-/// a refused import (loop-health-misses-checkout-changes).
+/// a refused import (loop-health-misses-checkout-changes). gp loop
+/// set-aside, which puts the local changes health names in a stash, runs
+/// there too: a worker's card for it lists the person's files, not its own.
 pub(crate) fn games_for<'a>(config: &'a Config, path: &str) -> Option<&'a Path> {
+    const PERSONS: &[&str] = &["loop health", "loop set-aside"];
     match &config.worker_games {
-        Some(w) if !path.ends_with(" gate") && path != "loop health" => Some(w),
+        Some(w) if !path.ends_with(" gate") && !PERSONS.contains(&path) => Some(w),
         _ => config.games.as_deref(),
     }
 }
@@ -1873,6 +1876,10 @@ mod tests {
         assert_eq!(games_for(&c, "tool gate"), Some(d.join("games").as_path()));
         assert_eq!(
             games_for(&c, "loop health"),
+            Some(d.join("games").as_path())
+        );
+        assert_eq!(
+            games_for(&c, "loop set-aside"),
             Some(d.join("games").as_path())
         );
     }
