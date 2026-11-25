@@ -559,7 +559,7 @@ pub fn make(home: &Path, n: &New) -> Result<Value, String> {
         "key": k,
         "game": game,
         "needs": n.needs.name(),
-        "says": n.held.as_ref().map_or_else(|| says(n), |(_, s)| s.clone()),
+        "says": capped(&n.held.as_ref().map_or_else(|| says(n), |(_, s)| s.clone())),
         "made_ms": made,
         "state": "open",
     });
@@ -683,6 +683,60 @@ pub(crate) fn patch_files(path: &str) -> Vec<String> {
     out
 }
 
+/// The first sentence of `text` with its long asides in brackets left out
+/// and no closing stop, at most 240 characters: a card's words are read at
+/// a glance, and the whole text stays in the ask's own values.
+pub(crate) fn brief(text: &str) -> String {
+    let mut out = String::new();
+    let mut rest = text.trim();
+    while let Some(open) = rest.find('(') {
+        let Some(len) = rest[open..].find(')') else {
+            break;
+        };
+        let keep = if len > 30 { open } else { open + len + 1 };
+        out.push_str(&rest[..keep]);
+        rest = &rest[open + len + 1..];
+        if len > 30 {
+            out.truncate(out.trim_end().len());
+        }
+    }
+    out.push_str(rest);
+    let first = out.split(". ").next().unwrap_or_default();
+    let first = first.lines().next().unwrap_or_default().trim();
+    let first = first.trim_end_matches('.');
+    if first.chars().count() <= 240 {
+        return first.to_owned();
+    }
+    let cut: String = first.chars().take(237).collect();
+    format!("{}...", cut.trim_end())
+}
+
+/// The most words a card says (owner, 2026-11-25: "cards should have like
+/// 150-200 words maximum, probably less").
+pub const CARD_WORDS: usize = 150;
+
+/// `text` as a card says it: its first [`CARD_WORDS`] words, with `...`
+/// when it had more. The whole text stays in the ask's own values.
+pub fn capped(text: &str) -> String {
+    let mut words = text.split_whitespace();
+    let kept: Vec<&str> = words.by_ref().take(CARD_WORDS).collect();
+    if words.next().is_none() {
+        return text.to_owned();
+    }
+    format!("{}...", kept.join(" "))
+}
+
+/// A list a card can show: all of up to three, or how many `kind` there are
+/// and the first two.
+pub(crate) fn few(all: &[&str], kind: &str, sep: &str) -> String {
+    match all {
+        [a, b, rest @ ..] if rest.len() > 1 => {
+            format!("{} {kind} ({a}{sep}{b} and {} more)", all.len(), rest.len())
+        }
+        _ => all.join(sep),
+    }
+}
+
 /// What the ask says to the person: what it does, in words they can judge,
 /// and what it publishes and where.
 pub fn says(n: &New) -> String {
@@ -706,15 +760,23 @@ pub fn says(n: &New) -> String {
         ),
         // What lands, in the patch's own words, and the files it changes.
         "model gate" => {
-            let what = v(&["message"]).map_or_else(
+            let message = v(&["message"]);
+            let what = message.map_or_else(
                 || format!("the changed model{of}"),
-                |m| format!("\"{}\"", m.trim()),
+                |m| format!("\"{}\"", brief(m)),
             );
+            let expect = message
+                .and_then(|m| m.split_once("Expect: "))
+                .map(|(_, e)| format!(" Expect: {}.", brief(e)))
+                .unwrap_or_default();
             let files = v(&["patch"]).map(patch_files).filter(|f| !f.is_empty());
             let files = files
-                .map(|f| format!(" It changes {}.", f.join(", ")))
+                .map(|f| {
+                    let f: Vec<&str> = f.iter().map(String::as_str).collect();
+                    format!(" It changes {}.", few(&f, "files", ", "))
+                })
                 .unwrap_or_default();
-            format!("Land {what}{of}, once it passes the game's checks.{files}")
+            format!("Land {what}{of}, once it passes the game's checks.{expect}{files}")
         }
         "registry publish" => format!(
             "Publish{} in the registry{to}. Anyone who reads that registry can get it.",
@@ -763,7 +825,7 @@ pub fn says(n: &New) -> String {
             "Read the answer key of a test set, which the work is graded against.".to_owned()
         }
         _ => {
-            let about = n.about.trim().trim_end_matches('.');
+            let about = brief(n.about);
             let lead = match n.needs {
                 Ask::Publish => "Publish or land something others get",
                 Ask::Spend => "Spend money",
@@ -780,7 +842,14 @@ pub fn says(n: &New) -> String {
     let main = match n.plan.as_ref().and_then(|p| p["says"].as_array()) {
         Some(each) if !each.is_empty() => {
             let each: Vec<&str> = each.iter().filter_map(Value::as_str).collect();
-            format!("{main} It {}.", each.join("; it "))
+            let each = match each.as_slice() {
+                // The card lists them all under its plan; its words name two.
+                [a, b, rest @ ..] if rest.len() > 1 => {
+                    format!("{a}; it {b}; and {} more like these", rest.len())
+                }
+                _ => each.join("; it "),
+            };
+            format!("{main} It {each}.")
         }
         _ => main,
     };
@@ -966,6 +1035,32 @@ mod tests {
         let s = says(&n);
         assert!(s.starts_with("Land \"The ball bounces\" of g"), "{s}");
         assert!(s.contains("It changes g/model.toml."), "{s}");
+        // A long message: its first sentence and what to expect, in brief,
+        // and the card's words within the most a card says.
+        let long = format!(
+            "The ball bounces (as the original's $1234 does over its sixteen frames of flight). {} Expect: the ball lands on frame 40. Checked: {}",
+            "It reads the table again. ".repeat(80),
+            "every clip. ".repeat(80)
+        );
+        let values = vec![
+            ("game".to_owned(), "g".to_owned()),
+            ("message".to_owned(), long),
+        ];
+        let n = New {
+            command: "model gate",
+            needs: Ask::Publish,
+            ..new(&argv, &values)
+        };
+        let s = says(&n);
+        assert_eq!(
+            s,
+            "Land \"The ball bounces\" of g, once it passes the game's checks. Expect: the ball lands on frame 40."
+        );
+        let many = "word ".repeat(400);
+        let c = capped(&many);
+        assert_eq!(c.split_whitespace().count(), CARD_WORDS);
+        assert!(c.ends_with("word..."), "{c}");
+        assert_eq!(capped("a few words"), "a few words");
     }
 
     /// A model gate card carries the clip and frames its call names, and
