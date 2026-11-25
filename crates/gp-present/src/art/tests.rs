@@ -740,6 +740,102 @@ fn an_also_picture_comes_with_its_pose() {
     assert_eq!(out.draws[2].x, 44 * ART_SUB);
 }
 
+/// An `also` line reads its range: none is every frame, `from` and `to`
+/// alone are from the first frame and without end, and `#+ also` and
+/// `#+ on SCREEN... also` take the same options. A word that is no option
+/// is refused, on a `#+` line passed over.
+#[test]
+fn an_also_line_reads_the_frames_it_is_drawn_on() {
+    let r = ArtRules::read(
+        "gp-art 1\n\
+         also hero.png a/lever.png 8 8 4 -6\n\
+         also hero.png a/full.png 8 8 4 -6 to=20\n\
+         also hero.png a/half.png 8 8 4 -6 from=20 to=40 every=90\n\
+         also hero.png a/dry.png 8 8 4 -6 from=40\n\
+         #+ also foe.png a/hat.png 8 8 0 -8 from=3 to=5\n\
+         #+ on level.png also foe.png a/cap.png 8 8 0 -8 from=5 to=7\n\
+         #+ also foe.png a/hat.png 8 8 0 -8 soon\n",
+    )
+    .unwrap();
+    let ranges: Vec<_> = r.also.iter().map(|a| (a.from, a.to, a.every)).collect();
+    assert_eq!(
+        ranges,
+        [
+            (0, u64::MAX, 0),
+            (0, 20, 0),
+            (20, 40, 90),
+            (40, u64::MAX, 0),
+            (3, 5, 0)
+        ]
+    );
+    assert_eq!(r.also[4].build, "foe.png");
+    let OnRule::Also(on) = &r.on_screen[0].rule else {
+        panic!("{:?}", r.on_screen[0].rule);
+    };
+    assert_eq!((on.from, on.to, on.every), (5, 7, 0));
+    assert_eq!(r.skipped.iter().map(|x| x.0).collect::<Vec<_>>(), [8]);
+    for bad in [
+        "also hero.png a/full.png 8 8 4 -6 soon",
+        "also hero.png a/full.png 8 8 4 -6 from=late",
+        "also hero.png a/full.png 8 8 4 -6 wait=3",
+    ] {
+        assert!(
+            ArtRules::read(&format!("gp-art 1\n{bad}")).is_err(),
+            "{bad}"
+        );
+    }
+}
+
+/// An `also` picture with a range is drawn only while its body has shown
+/// the picture that long, the frames a `timed` rule counts, so lines with
+/// ranges that follow each other are an overlay that changes while the
+/// body's own picture stays; with `every` it repeats on the look's clock.
+/// One with no range is drawn on every frame, and a body that shows the
+/// picture again starts its ranges over.
+#[test]
+fn an_also_picture_with_a_range_follows_how_long_its_pose_has_shown() {
+    let p = present();
+    let a = art("also hero.png a/full.png 8 8 4 -6 to=2\n\
+         also hero.png a/half.png 8 8 4 -6 from=2 to=4\n\
+         #+ also hero.png a/froth.png 8 8 4 -12 from=1 to=3 every=4\n\
+         also foe.png a/hat.png 8 8 0 -8");
+    assert_eq!(
+        a.files,
+        ["a/full.png", "a/half.png", "a/froth.png", "a/hat.png"]
+    );
+    let scene = |hero: u32| Scene {
+        level: Some(0),
+        bodies: vec![draw(hero, 40, 100), draw(2, 80, 100)],
+        ..Scene::default()
+    };
+    let mut pt = Painter::new();
+    let mut seen = Vec::new();
+    // Six frames of the hero's picture, one of another, then it again.
+    for hero in [1, 1, 1, 1, 1, 1, 7, 1] {
+        let s = scene(hero);
+        pt.step(&a, &s);
+        let out = pt.frame(&a, &p, &framed(s), 224);
+        // The bodies keep their own pictures throughout.
+        for own in [hero, 2] {
+            assert!(out.draws.iter().any(|d| d.src == Src::Own(own)), "{own}");
+        }
+        seen.push(arts(&out).iter().map(|d| d.0).collect::<Vec<_>>());
+    }
+    assert_eq!(
+        seen,
+        [
+            vec![0, 2, 3],
+            vec![0, 2, 3],
+            vec![1, 3],
+            vec![1, 3],
+            vec![2, 3],
+            vec![2, 3],
+            vec![3],
+            vec![0, 3]
+        ]
+    );
+}
+
 /// A `#+ under` line draws its stage piece once under each body of its
 /// entity, by the middle of the body's picture box and its bottom row,
 /// never turned, the piece its cycle has on the game's frame; another

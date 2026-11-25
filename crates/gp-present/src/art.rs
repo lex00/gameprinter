@@ -24,6 +24,16 @@
 //!   shown `BUILD` that long. The first rule of a picture that holds wins.
 //!   `hide`: the pose holds something, and the `held` pictures by it
 //!   aren't drawn.
+//! - `also BUILD ART W H DX DY [from=A] [to=B] [every=N]`: `ART` drawn
+//!   with a body while it shows `BUILD`, over it, placed as a `pic` line
+//!   places its art. With `from` or `to`, only while the body has shown
+//!   `BUILD` for `A` up to `B` frames (from 0 and without end when one
+//!   isn't given), the frames a `timed` rule counts; with `every`, at
+//!   that point of a repeat of `N` frames on the look's clock, as `timed`
+//!   has it. Lines of one picture with ranges that follow each other are
+//!   an overlay that changes while the body's own picture stays (a glass
+//!   draining in a hand). `#+ also ...` is the same rule, written so that
+//!   a reader from before the ranges passes the line over.
 //! - `held BUILD...`: not drawn within 48 by 38 pixels of a body in a
 //!   `hide` pose (a ball in hand).
 //! - `face BUILD...`: turned the way the body really moves, once it has
@@ -127,6 +137,22 @@ pub struct ArtPic {
     pub art: Sized,
 }
 
+/// Another picture drawn with a body while it shows one, over it: always,
+/// or while the body has shown its picture for `from` up to `to` frames.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Also {
+    /// The build's picture, by file name.
+    pub build: String,
+    pub art: Sized,
+    /// The first frame it is drawn on, 0 when the line gives none.
+    pub from: u64,
+    /// The first frame it is no longer drawn on, `u64::MAX` when the line
+    /// gives none.
+    pub to: u64,
+    /// A repeat on the look's clock, 0 for none, as a [`Timed`] has it.
+    pub every: u64,
+}
+
 /// Another picture while a body has shown one for a time.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Timed {
@@ -184,9 +210,11 @@ pub struct ArtRules {
     /// Whether the console's sprite limit is drawn.
     pub limit: bool,
     pub pics: Vec<ArtPic>,
-    /// `also BUILD ART W H DX DY`: another picture drawn with a body while
-    /// it shows BUILD, over it (a tap's lever in a pose that holds it).
-    pub also: Vec<ArtPic>,
+    /// `also BUILD ART W H DX DY [from=A] [to=B] [every=N]`: another
+    /// picture drawn with a body while it shows BUILD, over it (a tap's
+    /// lever in a pose that holds it), with a range only while the body
+    /// has shown BUILD that long (a glass draining in a hand).
+    pub also: Vec<Also>,
     pub timed: Vec<Timed>,
     pub held: Vec<String>,
     pub face: Vec<String>,
@@ -288,20 +316,22 @@ pub struct OnScreen {
 pub enum OnRule {
     Pic(ArtPic),
     Timed(Timed),
-    Also(ArtPic),
+    Also(Also),
 }
 
 impl OnRule {
     fn build(&self) -> &str {
         match self {
-            OnRule::Pic(p) | OnRule::Also(p) => &p.build,
+            OnRule::Pic(p) => &p.build,
+            OnRule::Also(a) => &a.build,
             OnRule::Timed(t) => &t.build,
         }
     }
 
     fn art(&self) -> &str {
         match self {
-            OnRule::Pic(p) | OnRule::Also(p) => &p.art.art,
+            OnRule::Pic(p) => &p.art.art,
+            OnRule::Also(a) => &a.art.art,
             OnRule::Timed(t) => &t.art.art,
         }
     }
@@ -534,6 +564,13 @@ impl ArtRules {
                 let u = self.under_line(&[], w, line)?;
                 self.under.push(u);
             }
+            // The plain rule, on a line a reader from before its ranges
+            // passes over where it would refuse the whole file.
+            ["also", ..] => {
+                let mut one = ArtRules::default();
+                one.rule(w)?;
+                self.also.push(one.also.pop().ok_or(())?);
+            }
             ["on", rest @ ..] => {
                 let k = rest
                     .iter()
@@ -616,10 +653,24 @@ impl ArtRules {
                 build: (*b).to_owned(),
                 art: art(a, ww, h, dx, dy)?,
             }),
-            ["also", b, a, ww, h, dx, dy] => r.also.push(ArtPic {
-                build: (*b).to_owned(),
-                art: art(a, ww, h, dx, dy)?,
-            }),
+            ["also", b, a, ww, h, dx, dy, rest @ ..] => {
+                let mut o = Also {
+                    build: (*b).to_owned(),
+                    art: art(a, ww, h, dx, dy)?,
+                    from: 0,
+                    to: u64::MAX,
+                    every: 0,
+                };
+                for x in rest {
+                    match x.split_once('=') {
+                        Some(("from", v)) => o.from = count(v)?,
+                        Some(("to", v)) => o.to = count(v)?,
+                        Some(("every", v)) => o.every = count(v)?,
+                        _ => return Err(()),
+                    }
+                }
+                r.also.push(o);
+            }
             ["timed", b, from, to, a, ww, h, dx, dy, rest @ ..] => {
                 let mut t = Timed {
                     build: (*b).to_owned(),
@@ -833,6 +884,15 @@ struct Placed {
     offset: [i64; 2],
 }
 
+/// An `also` picture and the frames of its body's picture it is drawn on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct AlsoAt {
+    art: Placed,
+    from: u64,
+    to: u64,
+    every: u64,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct TimedAt {
     from: u64,
@@ -888,7 +948,7 @@ pub struct Art {
     timed: Vec<Vec<TimedAt>>,
     held: Vec<bool>,
     /// By the build's picture: the `also` pictures drawn with it.
-    also: Vec<Vec<Placed>>,
+    also: Vec<Vec<AlsoAt>>,
     face: Vec<bool>,
     near: Option<(Placed, Vec<bool>, Vec<bool>)>,
     elsewhere: Vec<(Option<u32>, [i64; 2], Vec<bool>)>,
@@ -926,7 +986,7 @@ pub struct Art {
     /// in the order given.
     on_screen: Vec<Vec<(Vec<u32>, InRegion)>>,
     /// By the build's picture: its `#+ on` `also` pictures, likewise.
-    on_also: Vec<Vec<(Vec<u32>, Placed)>>,
+    on_also: Vec<Vec<(Vec<u32>, AlsoAt)>>,
     /// The `#+ under` rules, in the order given.
     under: Vec<UnderAt>,
 }
@@ -1058,10 +1118,16 @@ impl Art {
                 in_region[i as usize].push((region(r), InRegion::Pic(placed(&a.art))));
             }
         }
+        let also_at = |a: &Also| AlsoAt {
+            art: placed(&a.art),
+            from: a.from,
+            to: a.to,
+            every: a.every,
+        };
         let mut also = vec![Vec::new(); n];
         for a in &rules.also {
             if let Some(i) = pic(&a.build) {
-                also[i as usize].push(placed(&a.art));
+                also[i as usize].push(also_at(a));
             }
         }
         // The screens' pictures and the board's stages of them; a screen
@@ -1106,7 +1172,7 @@ impl Art {
             let on = screens_of(&o.screens);
             match &o.rule {
                 OnRule::Pic(a) => on_screen[i as usize].push((on, InRegion::Pic(placed(&a.art)))),
-                OnRule::Also(a) => on_also[i as usize].push((on, placed(&a.art))),
+                OnRule::Also(a) => on_also[i as usize].push((on, also_at(a))),
                 OnRule::Timed(t) => {
                     let after = t.after.as_ref().map(|a| pic(a).unwrap_or(u32::MAX));
                     on_screen[i as usize].push((
@@ -1224,9 +1290,10 @@ impl Art {
     }
 
     /// The `also` pictures of build picture `pic` on level `level`: its
-    /// `#+ on` ones for that screen when it has any, else its plain ones.
-    fn also_on(&self, pic: u32, level: Option<u32>) -> Vec<Placed> {
-        let on: Vec<Placed> = self
+    /// `#+ on` ones for that screen when it has any, else its plain ones,
+    /// whatever frames each is drawn on.
+    fn also_on(&self, pic: u32, level: Option<u32>) -> Vec<AlsoAt> {
+        let on: Vec<AlsoAt> = self
             .on_also
             .get(pic as usize)
             .into_iter()
@@ -1719,6 +1786,14 @@ impl Painter {
         });
     }
 
+    /// The frames body `i` has shown build picture `pic`, 0 on the frame
+    /// it first shows it: what a `timed` rule and an `also` picture's
+    /// range both count.
+    fn age(&self, i: usize, pic: u32) -> u64 {
+        let a = self.ages.get(i).filter(|a| a.pic == Some(pic));
+        a.map_or(0, |a| self.clock - a.since)
+    }
+
     /// The picture body `i` shows this frame, `d` on level `level`: in a
     /// region, the first of its `#+ in` rules there that holds (a timed
     /// one that holds now, or a picture); else a timed one, or its own.
@@ -1732,7 +1807,7 @@ impl Painter {
             return (base, false);
         }
         let a = self.ages.get(i).filter(|a| a.pic == Some(pic));
-        let age = a.map_or(0, |a| self.clock - a.since);
+        let age = self.age(i, pic);
         let before = a.and_then(|a| a.before.iter().rev().nth(1).copied().flatten());
         let holds = |r: &TimedAt| {
             if (r.wait > 0 && age < r.wait) || (r.after.is_some() && r.after != before) {
@@ -1891,7 +1966,18 @@ impl Painter {
             a.of = Of::Body(i);
             let (ax, ay, alpha) = (d.x + ox, d.y + oy, a.alpha);
             out.draws.push(a);
-            for p in &art.also_on(d.pic, s.level) {
+            let age = self.age(i, d.pic);
+            for r in &art.also_on(d.pic, s.level) {
+                // Its frames, counted as a `timed` rule counts its own.
+                let g = if r.every > 0 {
+                    self.clock % r.every
+                } else {
+                    age
+                };
+                if g < r.from || g >= r.to {
+                    continue;
+                }
+                let p = &r.art;
                 let mut e = placed(Some(*p), d.pic, ax, ay);
                 // Turned with the body about the body's own picture: a
                 // thing drawn at its right hand is at its left when the

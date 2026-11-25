@@ -3824,6 +3824,44 @@ asset = "stage2"
         assert_eq!(file(&mut theme, &w), "a.png");
     }
 
+    /// An `also` picture's range counts the frames a `timed` rule counts:
+    /// those a body has shown its picture, one step a game frame however
+    /// often the frame is drawn, and a seek starts it over. The body's own
+    /// picture is drawn throughout.
+    #[test]
+    fn an_also_pictures_range_counts_game_frames() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_, art, mut w) = two_bodies(dir.path());
+        let mut theme = art
+            .theme(
+                "gp-art 1\npic sprite-player-02 b.png 32 32 0 0\n\
+                 also sprite-player-02 a.png 8 8 0 0 to=2\n\
+                 also sprite-player-02 c.png 8 8 0 0 from=2\n",
+            )
+            .unwrap();
+        let files = |theme: &mut BoardTheme, w: &World| {
+            let t = art.themed(theme, w, &[true, true], &[u32::MAX; 2]).unwrap();
+            let mut out = Vec::new();
+            for d in &t.frame.draws {
+                if let gp_present::art::Src::Art(f) = d.src {
+                    out.push(theme.art.files[f as usize].clone());
+                }
+            }
+            out
+        };
+        let mut seen = Vec::new();
+        for f in 0..4 {
+            w.frame = f;
+            seen.push(files(&mut theme, &w));
+            // Drawn twice: the same frame.
+            assert_eq!(files(&mut theme, &w), *seen.last().unwrap());
+        }
+        let (early, late) = (["b.png", "a.png"], ["b.png", "c.png"]);
+        assert_eq!(seen, [early, early, late, late]);
+        w.frame = 40;
+        assert_eq!(files(&mut theme, &w), early);
+    }
+
     /// A room built from the theme's pieces on the screen's own cells: a
     /// counter where the lift's screen has cells of colour bank 2, the
     /// back wall on the rest, drawn as the stage under the board's

@@ -1492,6 +1492,7 @@ fn added_checks(
             "hud_over" => "`#+ hud_over` takes no row or rows of the HUD, each a number from 0 to 63 (8 pixels each from the screen's top)".to_owned(),
             "in" => "`#+ in` takes a region's name (lowercase letters, digits, - and _) and then a whole `pic` or `timed` line".to_owned(),
             "on" => "`#+ on` takes one or more of the game's screens and then a whole `pic`, `timed`, `also` or `under` line".to_owned(),
+            "also" => "`#+ also` takes a whole `also` line: the game's picture, the art, its size W H and its offset DX DY, then any of from=A, to=B and every=N, each a whole number of frames".to_owned(),
             "under" => "`#+ under` comes after the `stage` line and takes an entity (the ENTITY of its bodies' pictures, sprite-ENTITY-CODE), its offset DX DY in screen pixels (from the middle of the body's box to the piece's middle, and from the box's bottom to the piece's top), then each piece of its cycle with the game frames it holds, PIECE:FRAMES (1 or more)".to_owned(),
             "room" => "`#+ room` takes one or more screens, after the `stage` line".to_owned(),
             "room_cells" => "`#+ room_cells` takes a new class's name (lowercase letters, digits, - and _) after a `#+ room` line, then its tests: tile=N or tile=LO-HI, bank=N, prio=N (0 to 3), share=P (1 to 100), !CLASS for a class given before, and colour tests such as r>g+40".to_owned(),
