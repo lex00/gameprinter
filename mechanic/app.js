@@ -1142,7 +1142,12 @@ function onSettings(m) {
 window.addEventListener("message", (e) => {
   if (!liveRb || e.origin !== location.origin || e.source !== $("rb-frame").contentWindow) return;
   const m = e.data;
-  if (m?.gp === "ready") { liveRb.ready = true; liveRb.onReady?.(); }
+  if (m?.gp === "ready") {
+    liveRb.ready = true;
+    // A frame loaded again starts with its sound on: told when it is off.
+    if (!soundOn) rbPost({ gp: "sound", on: false });
+    liveRb.onReady?.();
+  }
   else if (m?.gp === "failed") liveRb.onFailed?.(m.message);
   else if (m?.gp === "loading") liveRb.onLoading?.(m.step);
   else if (m?.gp === "settings") onSettings(m);
@@ -2512,6 +2517,8 @@ function setSound(on) {
   soundOn = on;
   try { localStorage.setItem(SOUND_KEY, on ? "on" : "off"); } catch (e) { /* not kept */ }
   if (on) unlockAudio(); else flushAudio();
+  // The rebuild's frame plays its own sound as it is stepped: told too.
+  rbPost({ gp: "sound", on });
   showSound();
   toast(on ? "Sound on (U turns it off)." : "Sound off (U turns it on).");
 }

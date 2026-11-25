@@ -1438,10 +1438,11 @@ async function main() {
   let boardHeard = 0;
   t.boardSoundFrames = () => ({ frames: boardFrames, heard: boardHeard });
   // `heard` unset steps the board without queueing its sound (slow motion).
-  const playBoard = (heard = true) => {
+  // `from` is the model whose requests the board takes (the one played).
+  const playBoard = (heard = true, from = p) => {
     let f;
     try {
-      f = boardSound.frame(p.soundRequests());
+      f = boardSound.frame(from.soundRequests());
     } catch (e) {
       console.warn(`gp: the board's sound stopped: ${e.message ?? e}`);
       boardSound = null;
@@ -1492,6 +1493,39 @@ async function main() {
     src.start(audioAt);
     audioAt += f.length / 44100;
   };
+  // The sound of a model the page around it steps (control mode): each
+  // step of the watched model sounds through `frame`, heard or not, so the
+  // board's sound CPU is where the game is; `restart` powers the board on
+  // again when the model starts again; `wake` makes or resumes the context
+  // once the page around the frame has had a key or a click, since those
+  // never reach this frame. `boots` says the sound is a board's, which
+  // must hear the game's power-on before it sounds: `frame`'s `from` is
+  // then the model whose requests it takes. Null for a game with no sound.
+  const steppedSound = hasSound
+    ? {
+        get boots() {
+          return !!boardSound;
+        },
+        frame(heard, from = p) {
+          if (boardSound) playBoard(heard, from);
+          else if (heard) play();
+        },
+        restart() {
+          if (boardSound) boardSound.load(boardZip);
+          audioAt = 0;
+        },
+        wake() {
+          if (sound()?.state === "running" || performance.now() - audioAsked < 500) return;
+          let acted = false;
+          try {
+            acted = !!navigator.userActivation?.hasBeenActive || (parent !== window && !!parent.navigator.userActivation?.hasBeenActive);
+          } catch {
+            acted = false;
+          }
+          if (acted) unlock();
+        },
+      }
+    : null;
   mark("model-loaded");
   // Every picture the presentation names, by number (gp_present).
   const pics = await Promise.all(cfg.pictures.map((f) => image(`assets/${f}`)));
@@ -2026,7 +2060,7 @@ async function main() {
     // The look drawn now, read when the control's models start again: its
     // present text, large art and stages live in this function.
     const lookNow = () => ({ present: lookPresent, art: lookArt, stages: artStages });
-    control(p, stills, bundle, lookNow, canvas, draw, profile, st, cfg.regions, t.game);
+    control(p, stills, bundle, lookNow, canvas, draw, profile, st, cfg.regions, t.game, steppedSound);
     placeInView(canvas, cfg.visible, cfg.view);
     return;
   }
@@ -2884,7 +2918,14 @@ function placeInView(canvas, visible, view) {
   });
 }
 
-function control(p, stills, bundle, lookNow, canvas, drawGame, profile, st, regions, game) {
+function control(p, stills, bundle, lookNow, canvas, drawGame, profile, st, regions, game, sound) {
+  // The watched model's sound (main's `steppedSound`): on by default, and
+  // the page around the frame turns it off and on ({gp: "sound", on}).
+  let soundOn = true;
+  // Steps at most this many frames on are heard: a clip played at the
+  // game's speed and live play come a frame or a few at a time. A seek
+  // further on, or back, steps the board with nothing heard.
+  const HEARD_STEPS = 4;
   // The settings screen over the picture while the parent has it open.
   const draw = (pl = p) => {
     drawGame(pl);
@@ -2949,13 +2990,43 @@ function control(p, stills, bundle, lookNow, canvas, drawGame, profile, st, regi
     if (start) m.p.loadState(start);
     else if (keptStart !== null) m.p.keptLoad(keptStart);
     m.at = 0;
+    // The watched model starts again, and so does its board's sound.
+    if (m === watched && sound) {
+      sound.restart();
+      if (start && sound.boots) bootSound();
+    }
+  };
+  // A board's sound CPU does nothing until it has had the commands the
+  // game sends as it powers on (the screen page's live play and its clips
+  // start from a state past them: the board, never told to start, gave
+  // only silence). So before a model that starts from a loaded state, the
+  // still model plays the power-on with no button held and the board
+  // hears its requests, with nothing heard; the still model then starts
+  // again where the watched one does.
+  const BOOT_FRAMES = 240;
+  const bootSound = () => {
+    const from = start;
+    start = null;
+    try {
+      reset(still);
+      for (let i = 0; i < BOOT_FRAMES; i++) {
+        still.p.step(0, 0);
+        sound.frame(false, still.p);
+      }
+    } finally {
+      start = from;
+    }
+    reset(still);
   };
   const step = (m, n) => {
     const to = Math.max(0, Math.min(Number(n) || 0, steps.length));
     if (to < m.at) reset(m);
+    const heard = m === watched && soundOn && to > m.at && to - m.at <= HEARD_STEPS;
+    if (heard) sound?.wake();
     for (; m.at < to; m.at++) {
       const [b, r] = steps[m.at];
       m.p.step(b, r);
+      if (m === watched) sound?.frame(heard);
     }
   };
   const seek = (n) => {
@@ -3062,6 +3133,11 @@ function control(p, stills, bundle, lookNow, canvas, drawGame, profile, st, regi
           }
         }
         draw(watched.p);
+        return;
+      } else if (m.gp === "sound") {
+        // The parent turns the watched model's sound off or on; the board
+        // is stepped all the same, so turned on it is where the game is.
+        soundOn = m.on !== false;
         return;
       } else if (m.gp === "snap") {
         step(still, m.frame);

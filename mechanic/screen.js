@@ -99,13 +99,13 @@ const LAYOUTS = {
     fps: 60.0988,
     keys: [["KeyX", "Space"], ["KeyZ", "ShiftLeft"], ["ShiftRight", "Tab"], ["Enter"], ["ArrowUp", "KeyW"], ["ArrowDown", "KeyS"], ["ArrowLeft", "KeyA"], ["ArrowRight", "KeyD"]],
     keys2: [["KeyM"], ["KeyN"], ["KeyH"], ["KeyY"], ["KeyI"], ["KeyK"], ["KeyJ"], ["KeyL"]],
-    footer: "Arrows move, X is A, Z is B, Enter is Start. R records.",
+    footer: "Arrows move, X is A, Z is B, Enter is Start. R records. U turns the sound off and on.",
   },
   arcade: {
     fps: 30,
     keys: [["Digit5"], ["Digit1"], ["ArrowRight", "KeyD"], ["ArrowLeft", "KeyA"], ["ArrowDown", "KeyS"], ["ArrowUp", "KeyW"], ["KeyX", "Space"]],
     keys2: [],
-    footer: "5 drops a coin and 1 starts. Arrows move, X or Space taps. On a controller: Select is the coin, Start starts, A or the right stick taps. R records.",
+    footer: "5 drops a coin and 1 starts. Arrows move, X or Space taps. On a controller: Select is the coin, Start starts, A or the right stick taps. R records. U turns the sound off and on.",
   },
 };
 let LAYOUT = LAYOUTS.nes;
@@ -570,10 +570,29 @@ function modelPost(m) {
   $("model-frame").contentWindow?.postMessage(m, location.origin);
 }
 
+// The model's sound: its frame plays it as the page steps it a frame at a
+// time (live play, a clip at the game's speed), and is told here when the
+// person turns it off or on. On unless this browser kept "off".
+const SOUND_KEY = "gp-screen-sound";
+let soundOn = true;
+try { soundOn = localStorage.getItem(SOUND_KEY) !== "off"; } catch (e) { /* no storage: on */ }
+
+function setSound(on) {
+  soundOn = on;
+  try { localStorage.setItem(SOUND_KEY, on ? "on" : "off"); } catch (e) { /* not kept */ }
+  modelPost({ gp: "sound", on });
+  note(on ? "Sound on (U turns it off)." : "Sound off (U turns it on).");
+}
+
 window.addEventListener("message", (e) => {
   if (e.origin !== location.origin || e.source !== $("model-frame").contentWindow) return;
   const m = e.data;
-  if (m?.gp === "ready") { model.ready = true; model.onReady?.(); }
+  if (m?.gp === "ready") {
+    model.ready = true;
+    // A frame loaded again starts with its sound on: told when it is off.
+    if (!soundOn) modelPost({ gp: "sound", on: false });
+    model.onReady?.();
+  }
   else if (m?.gp === "failed") model.onFailed?.(m.message);
   else if (m?.gp === "loading") model.onLoading?.(m.step);
   else if (m?.gp === "at") {
@@ -3342,6 +3361,12 @@ window.addEventListener("keydown", (e) => {
     return;
   }
   if (e.code === "F1") { e.preventDefault(); if (!e.repeat) openSettings(); return; }
+  // U turns the model's sound off and on, kept in this browser.
+  if (e.code === "KeyU") {
+    e.preventDefault();
+    if (!e.repeat) setSound(!soundOn);
+    return;
+  }
   if (e.code === "KeyR" && !e.repeat) {
     e.preventDefault();
     // Following the work, R takes the screen back and records.
