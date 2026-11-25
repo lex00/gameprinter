@@ -5,7 +5,7 @@
 While the loop's runner is on (docs/loop.md), the workers do the quest log's work and the person answers the cards. The agent in the person's chat watches the setup and keeps it running; it does no row's work itself:
 
 1. `gp loop health` at the start and after anything changes. It lists each PROBLEM with its fix, and says IDLE with what the loop waits on when no worker runs.
-2. Fix what it lists: a gp serve down or on an older build than the published gp, restarted on the published one (after every tool landing that changes gp serve); a row marked working with no worker, set from its worker's report; a yes card no runner took, or one that failed, with why; a local change in the games checkout, which blocks every landing, set aside or gated.
+2. Fix what it lists: a gp serve down or on an older build than the published gp, restarted on the published one (after every tool landing that changes gp serve); a row marked working with no worker, set from its worker's report; a yes card no runner took, or one that failed, with why; a local change in the games checkout, which blocks every landing, set aside or gated (the line under that problem names the files, git's changed ones apart from those not in git, the first eight of each).
 3. A bug in the loop or the tools is fixed in gameprinter and landed through `gp tool gate`.
 4. What the person reports goes into the quest log as a row (`gp mechanic queue GAME ROW --status next --note "Owner: ..."`, `--repo tools` for the tool's own work) for a worker; the agent tells the person in one line what is on their page.
 

@@ -969,6 +969,9 @@ fn checks(paths: &gp_evidence::Paths, games_dir: Option<&std::path::Path>) -> Va
                         "The games checkout has {n} local changes under {g}/: a landing there fails until they are committed through a gate or set aside."
                     ),
                 );
+                // The files on a line of their own, so the problem's words
+                // (and the trouble row they file into) stay the same.
+                lines.push(format!("           {}", local_changes(&out)));
             } else {
                 ok(
                     &mut lines,
@@ -1054,9 +1057,66 @@ fn yes_card_line(a: &Value, now: u64) -> Option<Result<String, String>> {
     )))
 }
 
+/// The local changes `git status --porcelain` printed, for the line under
+/// the games checkout's problem: the files git changed, then the ones it
+/// doesn't track, the first few of each by path, so whoever clears them
+/// knows what they are without a shell in the checkout.
+fn local_changes(porcelain: &str) -> String {
+    const SHOWN: usize = 8;
+    let (mut changed, mut untracked) = (Vec::new(), Vec::new());
+    for l in porcelain.lines().filter(|l| l.len() > 3) {
+        let (how, path) = l.split_at(3);
+        if how.starts_with("??") {
+            untracked.push(path.trim());
+        } else {
+            changed.push(path.trim());
+        }
+    }
+    let part = |what: &str, files: &[&str]| {
+        let more = files.len().saturating_sub(SHOWN);
+        let mut s = format!(
+            "{what} ({}): {}",
+            files.len(),
+            files[..files.len().min(SHOWN)].join(", ")
+        );
+        if more > 0 {
+            s.push_str(&format!(" and {more} more"));
+        }
+        s
+    };
+    let mut parts = Vec::new();
+    if !changed.is_empty() {
+        parts.push(part("changed", &changed));
+    }
+    if !untracked.is_empty() {
+        parts.push(part("not in git", &untracked));
+    }
+    parts.join("; ")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The line under the games checkout's problem names the files, git's
+    /// changed ones apart from those it doesn't track, a few of each.
+    #[test]
+    fn the_checkouts_local_changes_are_named() {
+        let mut out = String::from(" M rooftop/model.toml\nA  rooftop/new.toml\n");
+        for i in 0..10 {
+            out.push_str(&format!("?? rooftop/inputs/c{i}.presses\n"));
+        }
+        let said = local_changes(&out);
+        assert!(
+            said.starts_with("changed (2): rooftop/model.toml, rooftop/new.toml; not in git (10): rooftop/inputs/c0.presses"),
+            "{said}"
+        );
+        assert!(
+            said.ends_with("rooftop/inputs/c7.presses and 2 more"),
+            "{said}"
+        );
+        assert_eq!(local_changes("?? rooftop/a\n"), "not in git (1): rooftop/a");
+    }
 
     /// A yes the runner holds for the cards it stands on, or a put-back
     /// yes waiting its minute, is an OK line; once the runner's last look
