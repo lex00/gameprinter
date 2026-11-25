@@ -25,7 +25,7 @@
 //! clean` clears them, and gp serve's runner every hour. A cleared score
 //! is only scored again.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
@@ -260,8 +260,10 @@ const INCREMENTAL_IDLE: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 /// it `incremental` (docs/gate.md, 2026-11-24). Each
 /// crate's folder there keeps only its newest finished session (what the
 /// next build starts from) and that session's lock; older sessions, the
-/// `-working` ones a stopped lane left, and a crate folder whose newest
-/// session is older than [`INCREMENTAL_IDLE`] go. The bytes freed.
+/// `-working` ones a stopped lane left, a crate folder whose newest
+/// session is older than [`INCREMENTAL_IDLE`], and one a newer build of
+/// the same crate superseded ([`INCREMENTAL_SUPERSEDED`]: gp of an older
+/// version) go. The bytes freed.
 pub(crate) fn prune_gate_incremental(gate_home: &Path) -> u64 {
     let now = SystemTime::now();
     let mut freed = 0;
@@ -278,16 +280,78 @@ pub(crate) fn prune_gate_incremental(gate_home: &Path) -> u64 {
     freed
 }
 
-/// [`prune_gate_incremental`] on one `incremental` folder.
+/// A crate's incremental folder whose newest session is this much older
+/// than the newest of another folder of the same crate name belongs to a
+/// build the gate no longer makes. Each release stamps gp-cli's version
+/// into crates/gp-cli/Cargo.toml, which gives gp and every one of its
+/// test binaries a new hash: on 2026-11-24 the gate's target-tests held
+/// seven builds of gp (0.1.1 to 0.1.7), 9 GB of its 12 GB incremental,
+/// all newer than [`INCREMENTAL_IDLE`]. A crate's lib, bin and tests
+/// build together, minutes apart.
+const INCREMENTAL_SUPERSEDED: Duration = Duration::from_secs(24 * 60 * 60);
+
+/// A crate folder's name, `NAME-HASH`, without its hash.
+fn crate_name(folder: &str) -> &str {
+    folder.rsplit_once('-').map_or(folder, |(n, _)| n)
+}
+
+/// [`prune_gate_incremental`] on one `incremental` folder: a crate folder
+/// superseded by a newer one of its name ([`INCREMENTAL_SUPERSEDED`]) goes
+/// whole; every other is pruned by [`prune_crate`]. Build scripts all
+/// share one name, `build_script_build`, whatever their package, so they
+/// are never superseded.
 fn prune_incremental(dir: &Path, now: SystemTime) -> u64 {
-    fs::read_dir(dir)
+    let crates: Vec<(PathBuf, String, Option<SystemTime>)> = fs::read_dir(dir)
         .into_iter()
         .flatten()
         .flatten()
         .map(|e| e.path())
         .filter(|p| p.is_dir())
-        .map(|krate| prune_crate(&krate, now))
+        .map(|p| {
+            let name = crate_name(&p.file_name().unwrap_or_default().to_string_lossy()).to_owned();
+            let at = newest_session(&p).map(|(t, _)| t);
+            (p, name, at)
+        })
+        .collect();
+    let mut newest: BTreeMap<&str, SystemTime> = BTreeMap::new();
+    for (_, name, at) in &crates {
+        if let Some(at) = *at {
+            let e = newest.entry(name.as_str()).or_insert(at);
+            *e = (*e).max(at);
+        }
+    }
+    crates
+        .iter()
+        .map(|(krate, name, at)| {
+            let superseded = name != "build_script_build"
+                && at.zip(newest.get(name.as_str())).is_some_and(|(at, top)| {
+                    top.duration_since(at)
+                        .is_ok_and(|d| d >= INCREMENTAL_SUPERSEDED)
+                });
+            if superseded {
+                remove(krate)
+            } else {
+                prune_crate(krate, now)
+            }
+        })
         .sum()
+}
+
+/// A crate folder's newest finished session: its time and folder name.
+fn newest_session(krate: &Path) -> Option<(SystemTime, String)> {
+    fs::read_dir(krate)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| e.path().is_dir())
+        .filter_map(|e| {
+            let n = e.file_name().to_string_lossy().into_owned();
+            if !n.starts_with("s-") || n.ends_with("-working") {
+                return None;
+            }
+            Some((e.metadata().ok()?.modified().ok()?, n))
+        })
+        .max()
 }
 
 /// A session's stem, `s-TIME-RANDOM`, of its folder `s-TIME-RANDOM-SVH`
@@ -301,20 +365,7 @@ fn session_stem(name: &str) -> String {
 /// session's lock kept, the rest removed; the whole folder when it has no
 /// finished session or its newest is older than [`INCREMENTAL_IDLE`].
 fn prune_crate(krate: &Path, now: SystemTime) -> u64 {
-    let newest = fs::read_dir(krate)
-        .into_iter()
-        .flatten()
-        .flatten()
-        .filter(|e| e.path().is_dir())
-        .filter_map(|e| {
-            let n = e.file_name().to_string_lossy().into_owned();
-            if !n.starts_with("s-") || n.ends_with("-working") {
-                return None;
-            }
-            Some((e.metadata().ok()?.modified().ok()?, n))
-        })
-        .max();
-    let Some((at, keep)) = newest else {
+    let Some((at, keep)) = newest_session(krate) else {
         return remove(krate);
     };
     if now.duration_since(at).is_ok_and(|d| d >= INCREMENTAL_IDLE) {
@@ -614,6 +665,52 @@ mod tests {
             session_stem("s-hoe1t7j0u8-0jvpybx-85r3edlsn4i0sp7njs9vo7nh8"),
             "s-hoe1t7j0u8-0jvpybx"
         );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn the_gate_drops_a_crates_builds_a_newer_build_of_it_superseded() {
+        let root = tmp("superseded");
+        let g = root.join("gate");
+        let inc = g.join("tool/target-tests/fastdev/incremental");
+        let days = Duration::from_secs(2 * 24 * 60 * 60);
+        let minutes = Duration::from_secs(10 * 60);
+        let new = Duration::from_secs(60);
+        let session = |krate: &str, bytes: usize, ago: Duration| {
+            let s = inc.join(krate).join("s-t-r-svh");
+            file_aged(&s.join("query-cache.bin"), bytes, ago);
+            file_aged(&inc.join(krate).join("s-t-r.lock"), 0, ago);
+            fs::File::open(&s)
+                .unwrap()
+                .set_modified(SystemTime::now() - ago)
+                .unwrap();
+        };
+        // gp of an older version, two days older than the current one.
+        session("gp-old0version", 40, days);
+        session("mcp-old0version", 3, days);
+        // The current gp: its lib and its bin, minutes apart.
+        session("gp-lib0current", 20, new);
+        session("gp-bin0current", 20, minutes);
+        session("mcp-new0version", 2, new);
+        // Two packages' build scripts, one built long ago: both stay.
+        session("build_script_build-0aaa", 5, days);
+        session("build_script_build-0bbb", 5, new);
+        assert_eq!(prune_gate_incremental(&g), 40 + 3);
+        assert!(!inc.join("gp-old0version").exists());
+        assert!(!inc.join("mcp-old0version").exists());
+        for k in [
+            "gp-lib0current",
+            "gp-bin0current",
+            "mcp-new0version",
+            "build_script_build-0aaa",
+            "build_script_build-0bbb",
+        ] {
+            assert!(
+                inc.join(k).join("s-t-r-svh/query-cache.bin").exists(),
+                "{k}"
+            );
+        }
+        assert_eq!(crate_name("gp_sound_bank-0yl8m1fq2a1tb"), "gp_sound_bank");
         let _ = fs::remove_dir_all(&root);
     }
 
