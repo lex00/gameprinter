@@ -139,6 +139,29 @@ pub enum LookCmd {
         #[arg(long, short)]
         out: Option<PathBuf>,
     },
+    /// Bring named pictures from a theme folder (your copy, under
+    /// $GP_HOME/work/themes) into a theme folder in a games checkout or a
+    /// worktree of one (GAME/themes/NAME), for a change that lands them:
+    /// each file under the paths named is written at the same place under
+    /// the target's theme/ folder, put in the repo's Git LFS store when the
+    /// repo keeps it in LFS, and marked to add, so `git diff` in the repo
+    /// shows it as its LFS pointer. Nothing else in either folder changes.
+    ///
+    /// Example: gp theme look take ~/.gameprinter/work/themes/neon/repo
+    /// --into ~/games/rooftop/themes/neon --only pieces/punk
+    Take {
+        /// The theme folder to take from (holding package.toml and theme/),
+        /// or its theme/ folder.
+        copy: PathBuf,
+        /// The theme folder in a games checkout to write into
+        /// (GAME/themes/NAME, or its theme/ folder).
+        #[arg(long)]
+        into: PathBuf,
+        /// A file or folder under the copy's theme/ folder (pieces/punk);
+        /// a folder brings every file under it. Repeatable.
+        #[arg(long, required = true)]
+        only: Vec<String>,
+    },
 }
 
 pub(crate) fn run(cmd: &LookCmd, paths: &Paths) -> Result<Outcome> {
@@ -161,6 +184,7 @@ pub(crate) fn run(cmd: &LookCmd, paths: &Paths) -> Result<Outcome> {
         LookCmd::Sheet { game, rom, out } => {
             crate::theme_board::sheet(game, rom.as_deref(), out.as_deref(), paths)
         }
+        LookCmd::Take { copy, into, only } => crate::theme_take::take(copy, into, only),
     }
 }
 

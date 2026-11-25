@@ -243,6 +243,14 @@ It reads the game's theme list the way the page does and prints `OFFERED`, or `N
 
 The page opens in its own theme, Turnips. A link with `&c=YOUR/THEME` opens it in yours instead.
 
+Themes that ship in a game's folder of the games repo (`GAME/themes/NAME`) land through the model gate like any change to the game. `gp theme look take` brings the pictures you name from your copy into that folder:
+
+```sh
+gp theme look take ~/.gameprinter/work/themes/my-theme/repo --into GAME/themes/my-theme --only pieces/punk
+```
+
+Every file under those paths goes to the same place in the target's `theme/` folder. It is also put in the repo's Git LFS store and marked to add, so `git diff` shows it as its LFS pointer and the gate finds the picture.
+
 ## A theme from the game's theme kit
 
 The older way to make a theme comes from game-printer, the tool before this one. A theme folder (`theme.toml`, with pictures as `.pix` files and tunes as `.tune` files) is fitted to the game's own sprite slots, at the game's own size. Every game has a theme kit in `themes/kit/` in its folder, which describes each art slot (its role, size and frames) and the cue for each sound role. The kit holds no names or pictures from the original. These commands work with it:

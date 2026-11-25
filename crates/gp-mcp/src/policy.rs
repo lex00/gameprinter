@@ -379,6 +379,7 @@ pub const TABLE: &[Row] = &[
         ),
     ),
     r("theme look sheet", J, Write),
+    r("theme look take", J, Write),
     r("theme paint", J, Write),
     r("theme picture accept", J, Rule::Refuse(PERSON_DECIDES)),
     r("theme picture list", J, Read),

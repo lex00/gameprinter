@@ -262,6 +262,11 @@ const PHRASES: &[(&str, &str, &str)] = &[
     ("theme look check", "check", "the theme"),
     ("theme look new", "start", "a new theme"),
     (
+        "theme look take",
+        "copy",
+        "your theme's pictures into the change",
+    ),
+    (
         "theme picture propose",
         "propose",
         "a new picture for your theme",

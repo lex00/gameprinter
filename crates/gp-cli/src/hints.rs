@@ -706,6 +706,12 @@ pub const ROWS: &[Row] = &[
         8,
         "the theme into GAME/themes/NAME in the games repo, then gp registry publish (step 9)",
     ),
+    r(
+        "theme look take",
+        &THEME,
+        8,
+        "git diff in the games checkout into a patch, then gp model gate GAME --patch FILE --dry-run",
+    ),
     // Hosting your own, and shipping a theme.
     r(
         "registry host",

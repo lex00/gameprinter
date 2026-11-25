@@ -212,6 +212,7 @@ mod theme_sheet;
 mod theme_slots;
 mod theme_sound;
 mod theme_style;
+mod theme_take;
 mod theme_template;
 mod theme_words;
 mod tool_gate;
