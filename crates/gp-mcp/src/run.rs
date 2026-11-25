@@ -1082,6 +1082,16 @@ fn the_yes(
             {
                 return Err(refusal(format!("gp {path}: {why}."), None));
             }
+            // And its LOOK AT IT plays: the clip on the game's board, its
+            // frames inside it, the model as the patch leaves it built.
+            if path == "model gate"
+                && !["dry-run", "import", "score-only"]
+                    .iter()
+                    .any(|n| built.given.contains(*n))
+                && let Some(why) = card_look_refused(config, &built.argv, a.step.as_deref())
+            {
+                return Err(refusal(format!("gp {path}: {why}."), None));
+            }
             let other = matches!(found, asks::Found::Other(_));
             let cost = (ask == policy::Ask::Spend && c.args.iter().any(|d| d.name == "dry-run"))
                 .then(|| dry_run_cost(config, c, path, &built.argv))
@@ -1126,6 +1136,83 @@ fn the_yes(
             }
         }
     }
+}
+
+/// The longest a card's look check runs: it may build the game's module.
+const CARD_CHECK_LIMIT: Duration = Duration::from_secs(900);
+
+/// A model gate call's words for `gp model gate --card-check`: the switch
+/// first, and a bare clip number (a clip of the step's row) given as
+/// ROW/N when the step's row is known (`row`).
+pub fn card_check_words(argv: &[String], row: Option<&str>) -> Vec<String> {
+    let mut words = vec!["--card-check".to_owned()];
+    let mut it = argv.iter().filter(|x| *x != "--yes").peekable();
+    while let Some(w) = it.next() {
+        words.push(w.clone());
+        if w == "--clip"
+            && let Some(v) = it.next()
+        {
+            match row {
+                Some(r) if v.trim().parse::<u64>().is_ok() => {
+                    words.push(format!("{r}/{}", v.trim()));
+                }
+                _ => words.push(v.clone()),
+            }
+        }
+    }
+    words
+}
+
+/// Why a model gate card can't be shown because its LOOK AT IT wouldn't
+/// play, from `gp model gate --card-check` (on 2026-11-25 three of four
+/// cards of one game named clips the page refused and one frames past its
+/// clip's end); None when it would.
+fn card_look_refused(config: &Config, argv: &[String], step: Option<&str>) -> Option<String> {
+    let step = step
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned)
+        .or_else(|| std::env::var(crate::steps::STEP_ENV).ok())
+        .map(|s| s.trim().to_owned());
+    let row = step
+        .as_deref()
+        .and_then(|s| crate::iterating::step_row(&config.home, s))
+        .map(|(_, r)| r);
+    let mut cmd = Command::new(&config.gp);
+    cmd.env(crate::CALLER_ENV, "mcp");
+    cmd.env("GP_NO_HINTS", "1");
+    cmd.env("GP_HOME", &config.home);
+    cmd.args(["--json", "model", "gate"])
+        .args(card_check_words(argv, row.as_deref()));
+    match games_for(config, "model gate") {
+        Some(g) => {
+            cmd.env("GP_GAMES_DIR", g).current_dir(g);
+        }
+        None => {
+            cmd.current_dir(&config.work);
+        }
+    }
+    let ran = match run_limited(cmd, CARD_CHECK_LIMIT) {
+        Ok(r) => r,
+        Err(e) => return Some(format!("the card's LOOK AT IT couldn't be checked: {e}")),
+    };
+    if ran.timed_out {
+        return Some(format!(
+            "the card's LOOK AT IT couldn't be checked in {} s",
+            CARD_CHECK_LIMIT.as_secs()
+        ));
+    }
+    if ran.code == Some(0) {
+        return None;
+    }
+    let v: Value = serde_json::from_slice(&ran.stdout).unwrap_or(Value::Null);
+    Some(match v["refused"].as_str() {
+        Some(why) => why.to_owned(),
+        None => format!(
+            "the card's LOOK AT IT couldn't be checked: {}",
+            String::from_utf8_lossy(&ran.stderr).trim()
+        ),
+    })
 }
 
 /// The note on a call that ran with no page open on the agent's
@@ -2658,5 +2745,34 @@ mod tests {
             "{w}"
         );
         assert!(!w.contains("set higher"), "{w}");
+    }
+
+    /// The card check runs the gate's own words with --card-check first, a
+    /// bare clip number given as the step's row's clip, and no --yes.
+    #[test]
+    fn a_cards_look_check_names_the_rows_clip() {
+        let s = |v: &[&str]| v.iter().map(|x| (*x).to_owned()).collect::<Vec<_>>();
+        let argv = s(&[
+            "--patch", "p.diff", "--clip", "3", "--frames", "0-9", "--yes", "rooftop",
+        ]);
+        assert_eq!(
+            card_check_words(&argv, Some("jump")),
+            s(&[
+                "--card-check",
+                "--patch",
+                "p.diff",
+                "--clip",
+                "jump/3",
+                "--frames",
+                "0-9",
+                "rooftop"
+            ])
+        );
+        assert_eq!(card_check_words(&argv, None)[4], "3");
+        let id = s(&["--clip", "rooftop.attract.001", "rooftop"]);
+        assert_eq!(
+            card_check_words(&id, Some("jump"))[2],
+            "rooftop.attract.001"
+        );
     }
 }

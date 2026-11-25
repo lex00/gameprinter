@@ -20,7 +20,7 @@ pub fn is_gate(command: &str) -> bool {
 
 /// The quest-log row step `step` is for (`row:GAME/ROW` of its worker
 /// record's touches), or None.
-fn step_row(home: &Path, step: &str) -> Option<(String, String)> {
+pub(crate) fn step_row(home: &Path, step: &str) -> Option<(String, String)> {
     let ok = !step.is_empty() && step.chars().all(|c| c.is_ascii_alphanumeric());
     if !ok {
         return None;

@@ -120,6 +120,13 @@ pub struct GateArgs {
     /// after they land. A dry run says which haven't landed and goes on.
     #[arg(long = "after", value_name = "ASK")]
     pub after: Vec<String>,
+    /// Check only that the card's LOOK AT IT would play, and gate nothing:
+    /// --clip is found and its log plays on the game's board and set,
+    /// --frames are inside it, and the model as --patch leaves it builds.
+    /// Exit 1 names each that failed. gp_run runs it before it shows a
+    /// model gate card, and refuses the card when it fails.
+    #[arg(long, requires_all = ["patch", "clip", "frames"])]
+    pub card_check: bool,
 }
 
 /// Where the cards a patch stands on (`--after`) are.
@@ -2376,6 +2383,9 @@ pub(crate) fn gate_home(home: Option<&Path>) -> Result<PathBuf> {
 }
 
 pub(crate) fn run(a: &GateArgs, paths: &Paths) -> Result<Outcome> {
+    if a.card_check {
+        return crate::card_check::run(a, paths);
+    }
     // A new game's folder may not be here yet: the patch creates it.
     let game = gp_evidence::paths::real_path(&a.game);
     let home = gate_home(a.home.as_deref())?;

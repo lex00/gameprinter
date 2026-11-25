@@ -521,6 +521,22 @@ fn apply(
     lfs_from_pointers(tree, &lfs, main_game, near)
 }
 
+/// The game's folder as the card's patch (file `patch`) would leave it,
+/// made in `tree` (`TREE/GAME`) as a look makes it: main's files as the
+/// games checkout's HEAD holds them, with the patch applied. `gp model gate
+/// --card-check` builds this before a card is shown.
+pub(crate) fn patched(tree: &Path, game: &str, main_game: &Path, patch: &Path) -> Result<PathBuf> {
+    let text = std::fs::read(patch)
+        .with_context(|| format!("reading the card's patch {}", patch.display()))?;
+    if let Some(why) = outside(&String::from_utf8_lossy(&text), game) {
+        bail!("{why}");
+    }
+    let copy = tree.join(game);
+    copy_committed(main_game, &copy)?;
+    apply(tree, game, main_game, patch.parent(), patch)?;
+    Ok(copy)
+}
+
 /// git apply's complaint in a line: how many files the patch didn't fit and
 /// the first two, where git writes two lines for each.
 fn apply_trouble(stderr: &str) -> String {

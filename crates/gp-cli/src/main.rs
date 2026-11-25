@@ -25,6 +25,7 @@ mod bench_scratch;
 mod builds;
 mod bundle;
 mod capture;
+mod card_check;
 mod catalog;
 mod chrome;
 mod chunks;
