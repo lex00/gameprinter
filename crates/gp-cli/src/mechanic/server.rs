@@ -515,6 +515,10 @@ pub(crate) fn prepare(paths: &Paths, a: &Start, port: u16) -> Result<(Arc<Server
             loop {
                 std::thread::sleep(std::time::Duration::from_secs(30));
                 if let Some(rb) = &s.rebuild {
+                    // The game's module as its hook code now is, built
+                    // here when it changed, so the preview built next
+                    // plays it.
+                    rb.follow(&s.paths);
                     super::live::refresh(&s.paths, &s.repo, &s.game, rb, &s.rom);
                     // The open gate cards' looks, so LOOK AT IT plays
                     // their change without a wait.
@@ -2532,6 +2536,7 @@ mod tests {
         srv.rebuild = Some(super::super::review::Rebuild {
             game: game.clone(),
             module: None,
+            follows: false,
             rom: None,
             assets: None,
         });

@@ -295,6 +295,7 @@ new game built to play, and `/share/`) goes out under the public page's
 own headers, its Content-Security-Policy among them
 (scripts/web/public/_headers, read by `gp_mcp::page_headers`), so a game
 plays here under the same rules as on the public page.
+A server that wasn't given `--module` follows the package's hook code: every half minute it builds the module again when the code changed (`Rebuild::follow`), and the preview built next and a clip scored on the model play that one (`Rebuild::module_now`). Until 2026-11-24 it kept the module of its start, so hook code landed under a running server did nothing on its page.
 
 An arcade game's model plays the same way (issue #3), keyed as a cabinet,
 its bodies drawn by tile kind or, where the model names them, with its

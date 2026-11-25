@@ -644,14 +644,22 @@ pub(crate) fn own_kit(home: &Path) -> Result<PathBuf> {
     Ok(dir)
 }
 
+/// What [`built_for`] found for a package folder in this run of gp, with the
+/// hook code it was for: a folder whose hook code has changed since is
+/// built again (until 2026-11-24 it was kept by the folder alone, so a
+/// long-running gp never saw a game's new hook code).
+static DONE: std::sync::Mutex<BTreeMap<PathBuf, (String, Found)>> =
+    std::sync::Mutex::new(BTreeMap::new());
+
+/// A built module and what was done to have it.
+type Found = (PathBuf, String);
+
 /// The module for the game package in `dir`, built from this gp's kit
 /// whenever the hook code, the package's lock or the kit changed, and kept
 /// as `home/work/modules/<key>.wasm`. A package whose Cargo.lock no longer
 /// fits the kit is built with the kit's lock, and says so. `None` for a
 /// package without hook code. Returns the module and what was done.
 pub(crate) fn built_for(home: &Path, dir: &Path) -> Result<Option<(PathBuf, String)>> {
-    static DONE: std::sync::Mutex<BTreeMap<PathBuf, (PathBuf, String)>> =
-        std::sync::Mutex::new(BTreeMap::new());
     let dir = dir
         .canonicalize()
         .with_context(|| dir.display().to_string())?;
@@ -664,7 +672,12 @@ pub(crate) fn built_for(home: &Path, dir: &Path) -> Result<Option<(PathBuf, Stri
     let Some(code) = crate::package::hook_code(&dir)? else {
         return Ok(None);
     };
-    if let Some(d) = DONE.lock().map_err(|_| anyhow!("poisoned"))?.get(&dir) {
+    if let Some((_, d)) = DONE
+        .lock()
+        .map_err(|_| anyhow!("poisoned"))?
+        .get(&dir)
+        .filter(|(c, _)| *c == code)
+    {
         return Ok(Some(d.clone()));
     }
     let kit_dir = own_kit(home)?;
@@ -712,8 +725,22 @@ pub(crate) fn built_for(home: &Path, dir: &Path) -> Result<Option<(PathBuf, Stri
     };
     DONE.lock()
         .map_err(|_| anyhow!("poisoned"))?
-        .insert(dir, found.clone());
+        .insert(dir, (code, found.clone()));
     Ok(Some(found))
+}
+
+/// The module [`built_for`] made for the package in `dir` as its hook code
+/// now is, without building one: `None` when that code has no module yet
+/// in this run of gp (or the package has no hook code). For a caller that
+/// can't wait minutes on a build, such as a page's status.
+pub(crate) fn built_already(dir: &Path) -> Option<PathBuf> {
+    let dir = dir.canonicalize().ok()?;
+    let code = crate::package::hook_code(&dir).ok()??;
+    DONE.lock()
+        .ok()?
+        .get(&dir)
+        .filter(|(c, _)| *c == code)
+        .map(|(_, d)| d.0.clone())
 }
 
 pub fn hash(file: &Path) -> Result<Outcome> {

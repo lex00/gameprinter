@@ -470,6 +470,7 @@ fn make(
     let rb = Rebuild {
         game: copy.clone(),
         module: module.clone(),
+        follows: false,
         rom: rom_id,
         assets: Some(d.join("assets")),
     };
@@ -518,6 +519,7 @@ pub(crate) fn rebuild(paths: &Paths, game: &str, main: &Rebuild, id: &str) -> Re
     Ok(Rebuild {
         game: d.join("tree").join(game),
         module: m.is_file().then_some(m),
+        follows: false,
         rom: main.rom.clone(),
         assets: Some(d.join("assets")),
     })

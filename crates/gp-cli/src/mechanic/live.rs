@@ -118,7 +118,7 @@ fn content_key(paths: &Paths, repo: &Path, rb: &Rebuild) -> String {
         h.update(&std::fs::read(dir.join(f)).unwrap_or_default());
     }
     add_dir(&mut h, &dir.join("ext"), &["target"]);
-    if let Some(m) = &rb.module {
+    if let Some(m) = &rb.module_now() {
         h.update(b"module");
         h.update(&std::fs::read(m).unwrap_or_default());
     }
@@ -250,7 +250,7 @@ pub(crate) fn build(
     let (repo, model, module, key) = (
         repo.to_path_buf(),
         rb.game.clone(),
-        rb.module.clone(),
+        rb.module_now(),
         content_key(paths, repo, rb),
     );
     std::thread::spawn(move || {
@@ -528,7 +528,8 @@ pub(crate) fn opened(paths: &Paths, rb: &Rebuild, rom: &[u8]) -> Result<Opened> 
     for f in [gp_model::MODEL_FILE, gp_interp::mapping::MAPPING_FILE] {
         h.update(&std::fs::read(rb.game.join(f)).unwrap_or_default());
     }
-    if let Some(m) = &rb.module {
+    let module = rb.module_now();
+    if let Some(m) = &module {
         h.update(&std::fs::read(m).unwrap_or_default());
     }
     if let Some((_, sha)) = &rb.rom {
@@ -549,7 +550,7 @@ pub(crate) fn opened(paths: &Paths, rb: &Rebuild, rom: &[u8]) -> Result<Opened> 
     .map_err(|e| anyhow::anyhow!("{}: {e}", mfile.display()))?;
     let assets = rb.assets_for(paths, rom)?;
     let (source, _) =
-        crate::hosted::Source::open_dir(&rb.game, Some(&assets), paths, rb.module.as_deref())?;
+        crate::hosted::Source::open_dir(&rb.game, Some(&assets), paths, module.as_deref())?;
     let o: Opened = std::sync::Arc::new((source, mapping));
     let mut kept = OPENED.lock().expect("opened");
     kept.retain(|(k, _)| *k != key);

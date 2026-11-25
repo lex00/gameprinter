@@ -34,6 +34,10 @@ pub(crate) struct Rebuild {
     pub game: PathBuf,
     /// The game's built module, for a model with hooks.
     pub module: Option<PathBuf>,
+    /// Whether that module is the package's own hook crate as built when
+    /// this was made, to be followed as the hook code changes
+    /// ([`Rebuild::module_now`]); unset for a module the caller named.
+    pub follows: bool,
     /// The ROM set the page plays and its identity, when it isn't the
     /// package's scored one: the review and the rebuild play it.
     pub rom: Option<(std::sync::Arc<Vec<u8>>, String)>,
@@ -47,6 +51,7 @@ impl Rebuild {
     /// gp or older hook code is never used.
     pub fn new(paths: &Paths, game_dir: &Path, game: &str, module: Option<&Path>) -> Self {
         let _ = game;
+        let follows = module.is_none();
         let module = module.map(Path::to_path_buf).or_else(|| {
             match crate::module::built_for(&paths.home, game_dir) {
                 Ok(m) => m.map(|m| m.0),
@@ -59,8 +64,36 @@ impl Rebuild {
         Self {
             game: game_dir.to_owned(),
             module,
+            follows,
             rom: None,
             assets: None,
+        }
+    }
+
+    /// The module to play now: the one named, else the package's hook
+    /// crate as its code now is, once it is built
+    /// ([`Rebuild::follow`]), and until then the one this started with. A
+    /// page's server runs for days while the game's hook code lands under
+    /// it: it kept the module of its start, so a setting the new code
+    /// reads did nothing on the page (the owner, 2026-11-24: a start on
+    /// level 14 opened level 10).
+    pub fn module_now(&self) -> Option<PathBuf> {
+        if self.follows
+            && let Some(m) = crate::module::built_already(&self.game)
+        {
+            return Some(m);
+        }
+        self.module.clone()
+    }
+
+    /// Builds the package's module again when its hook code has changed,
+    /// which takes minutes the first time: for the server's background
+    /// tick, before it looks whether the preview is older than the model.
+    pub fn follow(&self, paths: &Paths) {
+        if self.follows
+            && let Err(e) = crate::module::built_for(&paths.home, &self.game)
+        {
+            eprintln!("{}: the module didn't build: {e:#}", self.game.display());
         }
     }
 
@@ -147,7 +180,7 @@ pub(crate) fn review(paths: &Paths, r: &Rebuild, session: &Path, n: u64) -> Resu
         paths,
         &r.game,
         &crate::clip_score::Open {
-            module: r.module.as_deref(),
+            module: r.module_now().as_deref(),
             model: None,
             assets: Some(&assets),
             rom: None,
@@ -386,6 +419,26 @@ pub(crate) fn picture(session: &Path, n: u64, name: &str) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A module the caller named is the one played; a package's own, with
+    /// no newer one built in this run, is the one it started with.
+    #[test]
+    fn the_module_played_is_the_named_one_or_the_packages_newest() {
+        let d = tempfile::tempdir().unwrap();
+        let named = d.path().join("named.wasm");
+        let mut rb = Rebuild {
+            game: d.path().to_path_buf(),
+            module: Some(named.clone()),
+            follows: false,
+            rom: None,
+            assets: None,
+        };
+        assert_eq!(rb.module_now(), Some(named.clone()));
+        // A folder with no hook code has no newer module to follow.
+        rb.follows = true;
+        assert_eq!(rb.module_now(), Some(named));
+        assert_eq!(crate::module::built_already(d.path()), None);
+    }
 
     #[test]
     fn only_a_reviews_own_pictures_are_read() {
