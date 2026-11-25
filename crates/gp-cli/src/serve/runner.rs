@@ -530,23 +530,36 @@ fn run_yeses(ctx: &Arc<Ctx>) {
             // waiting ones of its kind into its batch (gate_queue), so
             // several yeses land in one run of the checks. Any other yes
             // runs one at a time.
-            let _one = (!is_gate(a["command"].as_str().unwrap_or("")))
+            // A corpus import that writes runs as `gp model gate --import`:
+            // in a tree of its own, landing on main through the gate, never
+            // in the person's games checkout.
+            let call = match import_as_gate(&a, &games) {
+                Some(Ok(call)) => call,
+                Some(Err(why)) => {
+                    let _ = gp_mcp::asks::set_ran(&home, &id, "failed", &[why]);
+                    return;
+                }
+                None => {
+                    let mut call: Vec<String> = a["command"]
+                        .as_str()
+                        .unwrap_or("")
+                        .split(' ')
+                        .map(str::to_owned)
+                        .collect();
+                    call.extend(
+                        a["argv"]
+                            .as_array()
+                            .into_iter()
+                            .flatten()
+                            .filter_map(|x| x.as_str().map(str::to_owned)),
+                    );
+                    call
+                }
+            };
+            let _one = (!is_gate(&call[..call.len().min(2)].join(" ")))
                 .then(|| ONE.lock().unwrap_or_else(|e| e.into_inner()));
             let mut args: Vec<String> = vec!["--json".into()];
-            args.extend(
-                a["command"]
-                    .as_str()
-                    .unwrap_or("")
-                    .split(' ')
-                    .map(str::to_owned),
-            );
-            args.extend(
-                a["argv"]
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                    .filter_map(|x| x.as_str().map(str::to_owned)),
-            );
+            args.extend(call);
             // The tool's own commands (gp tool gate) act on gameprinter's
             // checkout, found from the current folder; the rest on the games.
             let tool = a["command"]
@@ -609,6 +622,71 @@ fn run_yeses(ctx: &Arc<Ctx>) {
             let _ = fs::remove_file(&err_f);
         });
     }
+}
+
+/// A yes to `gp corpus import GAME --write ...` (a --replace or --remove
+/// asks) as the call the runner makes instead: `model gate GAMES/GAME
+/// --import` with the same clips (`--replaces`, `--removes`), sessions
+/// and changelog line, so the import is made on main's tip in the gate's
+/// own tree and lands through the gate, where run as asked it wrote the
+/// person's games checkout outside any gate (ask 1795591778060-0d6074b2).
+/// None for any other ask, and for an import that doesn't write; Err for
+/// one with what the gate can't take (`--from`, `--date`).
+fn import_as_gate(a: &Value, games: &Path) -> Option<Result<Vec<String>, String>> {
+    if a["command"] != json!("corpus import") {
+        return None;
+    }
+    let argv: Vec<&str> = a["argv"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .collect();
+    if !argv.contains(&"--write") {
+        return None;
+    }
+    let mut out: Vec<String> = Vec::new();
+    let mut folder: Option<PathBuf> = None;
+    let mut game: Option<&str> = None;
+    let mut it = argv.iter();
+    while let Some(&x) = it.next() {
+        let (flag, inline) = match x.split_once('=') {
+            Some((f, v)) if f.starts_with("--") => (f, Some(v)),
+            _ => (x, None),
+        };
+        if flag == "--write" {
+            continue;
+        }
+        if !flag.starts_with("--") {
+            game = Some(x);
+            continue;
+        }
+        let Some(v) = inline.or_else(|| it.next().copied()) else {
+            return Some(Err(format!("gp corpus import's {flag} has no value")));
+        };
+        match flag {
+            "--replace" => out.extend(["--replaces".into(), v.to_owned()]),
+            "--remove" => out.extend(["--removes".into(), v.to_owned()]),
+            "--session" | "--says" => out.extend([flag.to_owned(), v.to_owned()]),
+            "--template" => folder = Some(PathBuf::from(v)),
+            _ => {
+                return Some(Err(format!(
+                    "gp corpus import's {flag} has no place in gp model gate --import, which lands the import on main: ask again without it"
+                )));
+            }
+        }
+    }
+    let Some(dir) = folder.or_else(|| game.map(|g| games.join(g))) else {
+        return Some(Err("gp corpus import names no game".into()));
+    };
+    let mut call = vec![
+        "model".to_owned(),
+        "gate".to_owned(),
+        dir.to_string_lossy().into_owned(),
+        "--import".to_owned(),
+    ];
+    call.extend(out);
+    Some(Ok(call))
 }
 
 /// The values of `flag` in an ask's arguments.
@@ -3322,6 +3400,63 @@ mod tests {
     fn s(id: &str, who: &str, touches: &[&str]) -> Value {
         json!({"id": id, "journey": "quest log", "who": who, "subject": "g", "says": "Do it.", "commands": ["corpus import"],
             "touches": touches, "how": {"cli": "gp corpus import g --write"}})
+    }
+
+    /// A yes to a corpus import that writes runs as the model gate's
+    /// import, with the same clips, sessions and line, never in the games
+    /// checkout; one that only plans runs as asked.
+    #[test]
+    fn a_yes_to_a_corpus_import_that_writes_runs_through_the_model_gate() {
+        let games = Path::new("/games");
+        let ask = |argv: Value| json!({"command": "corpus import", "argv": argv});
+        let call = import_as_gate(
+            &ask(json!([
+                "--write",
+                "--says",
+                "the arcade buttons",
+                "--replace",
+                "g.a.001",
+                "--remove=g.b.*",
+                "--session",
+                "a",
+                "g"
+            ])),
+            games,
+        );
+        assert_eq!(
+            call,
+            Some(Ok([
+                "model",
+                "gate",
+                "/games/g",
+                "--import",
+                "--says",
+                "the arcade buttons",
+                "--replaces",
+                "g.a.001",
+                "--removes",
+                "g.b.*",
+                "--session",
+                "a"
+            ]
+            .map(str::to_owned)
+            .to_vec()))
+        );
+        let t = import_as_gate(&ask(json!(["--template", "/x/g", "--write", "g"])), games);
+        assert_eq!(
+            t,
+            Some(Ok(["model", "gate", "/x/g", "--import"]
+                .map(str::to_owned)
+                .to_vec()))
+        );
+        assert_eq!(
+            import_as_gate(&ask(json!(["--replace", "g.a.001", "g"])), games),
+            None
+        );
+        let from = import_as_gate(&ask(json!(["--write", "--from", "/h", "g"])), games);
+        assert!(matches!(from, Some(Err(w)) if w.contains("--from")));
+        let gate = json!({"command": "model gate", "argv": ["g", "--write"]});
+        assert_eq!(import_as_gate(&gate, games), None);
     }
 
     #[test]

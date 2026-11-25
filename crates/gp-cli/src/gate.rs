@@ -82,6 +82,14 @@ pub struct GateArgs {
     /// it holds less. With --import, the clips the import may change.
     #[arg(long = "replaces", value_name = "ID")]
     pub replaces: Vec<String>,
+    /// With --import, import only this session's clips (repeat it for
+    /// each), as `gp corpus import --session` does.
+    #[arg(long = "session", value_name = "NAME", requires = "import")]
+    pub sessions: Vec<String>,
+    /// With --import, the corpus changelog's line, as `gp corpus import
+    /// --says` (default: the clips added, changed and removed).
+    #[arg(long, value_name = "LINE", requires = "import")]
+    pub says: Option<String>,
     /// Score the tip and stop: no patch, nothing lands.
     #[arg(long, conflicts_with = "patch")]
     pub score_only: bool,
@@ -2460,7 +2468,13 @@ pub(crate) fn run(a: &GateArgs, paths: &Paths) -> Result<Outcome> {
         let file = if a.score_only {
             PathBuf::new()
         } else if a.import {
-            match import_patch(&repo, &rel, &onto, &home, paths, &a.removes, &a.replaces)? {
+            let what = ImportWhat {
+                removes: &a.removes,
+                replaces: &a.replaces,
+                sessions: &a.sessions,
+                says: a.says.as_deref(),
+            };
+            match import_patch(&repo, &rel, &onto, &home, paths, &what)? {
                 Imported::Nothing(o) => return Ok(o),
                 Imported::Patch(f, msg) => {
                     import_msg = Some(msg);
@@ -4536,6 +4550,16 @@ mod tests {
     }
 }
 
+/// What `--import` imports: the clips it removes and may change
+/// (`--removes`, `--replaces`), the sessions it reads (`--session`, empty:
+/// all) and the changelog's line (`--says`).
+struct ImportWhat<'a> {
+    removes: &'a [String],
+    replaces: &'a [String],
+    sessions: &'a [String],
+    says: Option<&'a str>,
+}
+
 /// What `--import` made: nothing to gate, or a patch and its message.
 enum Imported {
     Nothing(Outcome),
@@ -4554,8 +4578,7 @@ fn import_patch(
     onto: &str,
     home: &Path,
     paths: &Paths,
-    removes: &[String],
-    replaces: &[String],
+    what: &ImportWhat,
 ) -> Result<Imported> {
     let game = repo
         .join(rel)
@@ -4579,11 +4602,11 @@ fn import_patch(
                 template: Some(&dir.join(rel)),
                 from: Some(&paths.home),
                 write: true,
-                says: None,
+                says: what.says,
                 date: None,
-                remove: removes,
-                replace: replaces,
-                sessions: &[],
+                remove: what.removes,
+                replace: what.replaces,
+                sessions: what.sessions,
             },
             paths,
         )?;

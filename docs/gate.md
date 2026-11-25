@@ -67,7 +67,9 @@ A patch of `approved.toml` alone scores nothing, but the looks it adds or change
 
 ### Clips go in on their own
 
-`gp model gate GAME --import` takes the clips the mechanic sessions have that the corpus hasn't into the corpus through the gate, and needs no yes from a tool (gp_run): a clip only added changes nothing already held, and the gate fails the import if any clip scores worse. With `--replaces` or `--removes` it changes clips already there and asks, as before.
+`gp model gate GAME --import` takes the clips the mechanic sessions have that the corpus hasn't into the corpus through the gate, and needs no yes from a tool (gp_run): a clip only added changes nothing already held, and the gate fails the import if any clip scores worse. With `--replaces` or `--removes` it changes clips already there and asks, as before. `--session NAME` (repeated) imports only those sessions' clips and `--says LINE` gives the corpus changelog's line, as on `gp corpus import`.
+
+A card's YES to `gp corpus import GAME --write` (a `--replace` or `--remove` asks) runs as `gp model gate GAME --import` with the same clips (`--replaces`, `--removes`), sessions and line: the import is made on the tip in the gate's own tree and lands through the gate. Run as asked, it wrote the person's games checkout (ask 1795591778060-0d6074b2 on 2026-11-25 left 25 Tapper files changed there, outside any gate, and every landing under the game was held behind them). An import asked with `--from` or `--date` fails on its card with why: the gate reads the person's home and dates the changelog today.
 
 While gp serve's runner is on and the loop isn't halted, it does this itself every two minutes for each game with mechanic sessions: a dry `gp corpus import`, and when that would add clips, `gp model gate GAME --import`. So every clip the person records and every clip a worker makes in a session goes into the corpus with no card. A set of clips that failed isn't tried again until the sessions give another. What it did last is in `$GP_HOME/work/loop/kept/GAME.json`, and in the runner's status (`kept`).
 
