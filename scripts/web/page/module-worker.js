@@ -69,7 +69,21 @@ self.onmessage = ({ data: { module, sab } }) => {
         ctl[4] = 0;
       }
     } catch (e) {
-      fail(1, String(e?.message ?? e));
+      // What the module said as it stopped (its gp_panic: the file, line and
+      // message of a panic; nothing when it ran out of memory) and how much
+      // memory it held, so "unreachable" alone is never all a person is told
+      // (the owner, 2026-11-25, on the public page: "The game stopped: its
+      // module failed (unreachable)", with nothing to find the cause by).
+      let words = "";
+      let held = "";
+      try {
+        held = `; it held ${Math.round(x.memory.buffer.byteLength / 1048576)} MB`;
+        const n = x.gp_panic ? x.gp_panic() : 0;
+        if (n > 0) words = `: ${new TextDecoder().decode(new Uint8Array(x.memory.buffer, x.gp_out_ptr(), n).slice())}`;
+      } catch (e2) {
+        // The module can't say: the trap's own name is what there is.
+      }
+      fail(1, `${String(e?.message ?? e)}${words}${held}`);
     }
     num[1] = performance.now() - t0;
     Atomics.store(ctl, 0, 2);
