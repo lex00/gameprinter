@@ -624,6 +624,33 @@ class BoardSound {
     return new Float32Array(this.x.memory.buffer.slice(at, at + this.x.gp_out_len()));
   }
 }
+// A frame of the board's stereo sound (left and right interleaved, at
+// BoardSound.RATE) at another rate, `step` board samples to one of the
+// context's, as one stream carried from frame to frame in `carry` ({at,
+// l, r}: where the next sample falls from this frame's first, and the
+// last frame's last sample). A browser plays a buffer at another rate
+// than its context's by resampling that buffer alone, which marks every
+// join: 48 kHz frames queued back to back on a 44.1 kHz context jumped by
+// up to 0.59 thirty times a second, heard as a buzz (the owner,
+// 2026-11-24). Linear between two samples. [left, right].
+function boardToRate(f, step, carry) {
+  const n = f.length / 2;
+  const count = Math.max(0, Math.ceil((n - 1 - carry.at) / step));
+  const out = [new Float32Array(count), new Float32Array(count)];
+  let at = carry.at;
+  for (let k = 0; k < count; k++, at += step) {
+    const i = Math.floor(at);
+    const t = at - i;
+    const l0 = i < 0 ? carry.l : f[2 * i];
+    const r0 = i < 0 ? carry.r : f[2 * i + 1];
+    out[0][k] = l0 + (f[2 * i + 2] - l0) * t;
+    out[1][k] = r0 + (f[2 * i + 3] - r0) * t;
+  }
+  carry.at = at - n;
+  carry.l = f[2 * n - 2];
+  carry.r = f[2 * n - 1];
+  return out;
+}
 let boardSound = null;
 // The romset's bytes the board's sound was powered on from, for a restart.
 let boardZip = null;
@@ -1436,6 +1463,9 @@ async function main() {
   // are queued as the model's are, two channels at 48 kHz.
   let boardFrames = 0;
   let boardHeard = 0;
+  // The stream's place between two frames of the board's sound
+  // (boardToRate); null when the next heard frame starts it again.
+  let boardCarry = null;
   t.boardSoundFrames = () => ({ frames: boardFrames, heard: boardHeard });
   // `heard` unset steps the board without queueing its sound (slow motion).
   // `from` is the model whose requests the board takes (the one played).
@@ -1450,22 +1480,37 @@ async function main() {
     }
     boardFrames += 1;
     const audio = sound();
-    if (!heard || !audio || !f.length || audio.state !== "running") return;
-    const now = audio.currentTime;
-    audioAt = Math.max(audioAt, now + 0.05);
-    if (audioAt > now + 0.25) return;
-    const n = f.length / 2;
-    const b = audio.createBuffer(2, n, BoardSound.RATE);
-    for (let c = 0; c < 2; c++) {
-      const one = new Float32Array(n);
-      for (let i = 0; i < n; i++) one[i] = f[2 * i + c];
-      b.copyToChannel(one, c);
+    if (!heard || !audio || !f.length || audio.state !== "running") {
+      boardCarry = null;
+      return;
     }
+    const now = audio.currentTime;
+    const rate = audio.sampleRate;
+    // A start after a pause (the first frame, or one the queue ran dry
+    // before): on one of the context's own samples, and the stream begins
+    // again from this frame's first sample.
+    if (audioAt < now + 0.05) {
+      audioAt = Math.ceil((now + 0.05) * rate) / rate;
+      boardCarry = null;
+    }
+    if (audioAt > now + 0.25) {
+      boardCarry = null;
+      return;
+    }
+    // The buffer is at the context's rate, made here as one stream
+    // (boardToRate), so the browser resamples nothing and no join shows.
+    boardCarry ??= { at: 0, l: f[0], r: f[1] };
+    const [left, right] = boardToRate(f, BoardSound.RATE / rate, boardCarry);
+    const n = left.length;
+    if (!n) return;
+    const b = audio.createBuffer(2, n, rate);
+    b.copyToChannel(left, 0);
+    b.copyToChannel(right, 1);
     const src = audio.createBufferSource();
     src.buffer = b;
     src.connect(audio.destination);
     src.start(audioAt);
-    audioAt += n / BoardSound.RATE;
+    audioAt += n / rate;
     boardHeard += 1;
   };
   const play = () => {
