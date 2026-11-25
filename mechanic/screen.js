@@ -253,10 +253,16 @@ function note(text, ms = 4000) {
 
 // An error shown to the person: noted as any line, and sent to the loop,
 // which files it as a tools row of its own trouble (crates/gp-cli/src/
-// trouble.rs; the same words within a minute are sent once).
+// trouble.rs; the same words within a minute are sent once). A page a
+// script drives (navigator.webdriver: a headless browser an agent opens on
+// the person's page to check a change) files nothing: what it shows is the
+// script's, not the person's. On 2026-11-24 such a check swapped
+// **/rebuild/preview.js* for its own copy, which caught preview.json too,
+// and its "The model couldn't start" was filed as the person's trouble.
 const faultSent = new Map();
 function fault(text, ms = 8000, where = "") {
   note(text, ms);
+  if (navigator.webdriver) return;
   const now = Date.now();
   if (now - (faultSent.get(text) ?? 0) < 60000) return;
   faultSent.set(text, now);
