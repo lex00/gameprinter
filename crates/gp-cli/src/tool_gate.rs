@@ -1271,6 +1271,15 @@ pub(crate) fn run(a: &ToolGateArgs, paths: &Paths) -> Result<Outcome> {
         steps: Steps::new(tool.join("steps.jsonl"), &patch_hash),
         tools: TOOLS,
     };
+    // Under the lock no cargo builds in the gate's targets: their old
+    // incremental sessions go (crate::builds::prune_gate_incremental).
+    let freed = crate::builds::prune_gate_incremental(&home);
+    if freed > 0 {
+        progress(format!(
+            "cleared {} of old incremental builds",
+            crate::builds::gb(freed)
+        ));
+    }
     // The yeses the runner starts together reach the lock within a moment of
     // each other: a gate that found it free waits that moment before it
     // takes the waiting ones in.

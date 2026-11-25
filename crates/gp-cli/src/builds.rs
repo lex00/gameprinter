@@ -249,6 +249,97 @@ fn gate_builds(gate_home: &Path) -> Vec<PathBuf> {
     vec![tool.join("target"), tool.join("target-tests")]
 }
 
+/// A crate's incremental folder in the gate's builds untouched this long
+/// belongs to a build no gate makes now (other features, an older rustc).
+const INCREMENTAL_IDLE: Duration = Duration::from_secs(7 * 24 * 60 * 60);
+
+/// The tool gate's prune of its own build folders' incremental caches, run
+/// at its start while it holds tool.lock, so no cargo builds in them. The
+/// gate is busy most of the day, so gp loop clean --gate, which clears them
+/// only while the lock is free, seldom could: they reached 45 GB, 38 GB of
+/// it `incremental` (docs/gate.md, 2026-11-24). Each
+/// crate's folder there keeps only its newest finished session (what the
+/// next build starts from) and that session's lock; older sessions, the
+/// `-working` ones a stopped lane left, and a crate folder whose newest
+/// session is older than [`INCREMENTAL_IDLE`] go. The bytes freed.
+pub(crate) fn prune_gate_incremental(gate_home: &Path) -> u64 {
+    let now = SystemTime::now();
+    let mut freed = 0;
+    for target in gate_builds(gate_home) {
+        // TARGET/PROFILE/incremental, and TARGET/TRIPLE/PROFILE/incremental.
+        for d in fs::read_dir(&target).into_iter().flatten().flatten() {
+            let d = d.path();
+            freed += prune_incremental(&d.join("incremental"), now);
+            for p in fs::read_dir(&d).into_iter().flatten().flatten() {
+                freed += prune_incremental(&p.path().join("incremental"), now);
+            }
+        }
+    }
+    freed
+}
+
+/// [`prune_gate_incremental`] on one `incremental` folder.
+fn prune_incremental(dir: &Path, now: SystemTime) -> u64 {
+    fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.is_dir())
+        .map(|krate| prune_crate(&krate, now))
+        .sum()
+}
+
+/// A session's stem, `s-TIME-RANDOM`, of its folder `s-TIME-RANDOM-SVH`
+/// (or `-working`) or its lock `s-TIME-RANDOM.lock`.
+fn session_stem(name: &str) -> String {
+    let name = name.strip_suffix(".lock").unwrap_or(name);
+    name.splitn(4, '-').take(3).collect::<Vec<_>>().join("-")
+}
+
+/// One crate's incremental folder: its newest finished session and that
+/// session's lock kept, the rest removed; the whole folder when it has no
+/// finished session or its newest is older than [`INCREMENTAL_IDLE`].
+fn prune_crate(krate: &Path, now: SystemTime) -> u64 {
+    let newest = fs::read_dir(krate)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| e.path().is_dir())
+        .filter_map(|e| {
+            let n = e.file_name().to_string_lossy().into_owned();
+            if !n.starts_with("s-") || n.ends_with("-working") {
+                return None;
+            }
+            Some((e.metadata().ok()?.modified().ok()?, n))
+        })
+        .max();
+    let Some((at, keep)) = newest else {
+        return remove(krate);
+    };
+    if now.duration_since(at).is_ok_and(|d| d >= INCREMENTAL_IDLE) {
+        return remove(krate);
+    }
+    let stem = session_stem(&keep);
+    let mut freed = 0;
+    for e in fs::read_dir(krate).into_iter().flatten().flatten() {
+        let n = e.file_name().to_string_lossy().into_owned();
+        let p = e.path();
+        if n == keep || (n.ends_with(".lock") && session_stem(&n) == stem) {
+            continue;
+        }
+        if p.is_dir() {
+            freed += remove(&p);
+        } else {
+            let b = size(&p);
+            if fs::remove_file(&p).is_ok() {
+                freed += b;
+            }
+        }
+    }
+    freed
+}
+
 /// What gp loop clean can clear, each with its bytes, biggest first:
 /// ended workers' builds, idle regenerate folders and the cache files
 /// older than a day of those in use (the home's, and with `gate_cache`
@@ -470,6 +561,59 @@ mod tests {
         let (done, _) = clean(&home, &BTreeSet::new(), Some(&g), Some(&g));
         assert_eq!(done, vec![Clear::of(t.clone(), 5)]);
         assert!(!t.exists());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn the_gate_keeps_each_crates_newest_incremental_session_only() {
+        let root = tmp("incr");
+        let g = root.join("gate");
+        let week = Duration::from_secs(8 * 24 * 60 * 60);
+        let hour = Duration::from_secs(60 * 60);
+        let new = Duration::from_secs(60);
+        let inc = g.join("tool/target-tests/fastdev/incremental");
+        // A crate with two finished sessions and one a stopped lane left.
+        let k = inc.join("gp_runtime-03w7r280oi2yh");
+        file_aged(&k.join("s-old-aaa-svh1/query-cache.bin"), 100, hour);
+        file_aged(&k.join("s-old-aaa.lock"), 0, hour);
+        file_aged(&k.join("s-new-bbb-svh2/query-cache.bin"), 30, new);
+        file_aged(&k.join("s-new-bbb.lock"), 0, new);
+        file_aged(&k.join("s-cut-ccc-working/x.o"), 50, new);
+        file_aged(&k.join("s-cut-ccc.lock"), 0, new);
+        for (s, ago) in [("s-old-aaa-svh1", hour), ("s-new-bbb-svh2", new)] {
+            fs::File::open(k.join(s))
+                .unwrap()
+                .set_modified(SystemTime::now() - ago)
+                .unwrap();
+        }
+        // A crate hash no build has made in a week.
+        let stale = inc.join("gp_runtime-02e00mjautffv");
+        file_aged(&stale.join("s-a-b-c/dep-graph.bin"), 7, week);
+        fs::File::open(stale.join("s-a-b-c"))
+            .unwrap()
+            .set_modified(SystemTime::now() - week)
+            .unwrap();
+        // The other target, under a triple: only a working session.
+        let w = g.join("tool/target/wasm32-unknown-unknown/fastdev/incremental/play-1x");
+        file_aged(&w.join("s-t-r-working/y.o"), 9, new);
+        assert_eq!(prune_gate_incremental(&g), 100 + 50 + 7 + 9);
+        assert!(k.join("s-new-bbb-svh2/query-cache.bin").exists());
+        assert!(k.join("s-new-bbb.lock").exists());
+        assert!(!k.join("s-old-aaa-svh1").exists());
+        assert!(!k.join("s-old-aaa.lock").exists());
+        assert!(!k.join("s-cut-ccc-working").exists());
+        assert!(!k.join("s-cut-ccc.lock").exists());
+        assert!(!stale.exists());
+        assert!(!w.exists());
+        assert_eq!(prune_gate_incremental(&g), 0, "nothing left to prune");
+        assert_eq!(
+            session_stem("s-hoe1t7j0u8-0jvpybx.lock"),
+            "s-hoe1t7j0u8-0jvpybx"
+        );
+        assert_eq!(
+            session_stem("s-hoe1t7j0u8-0jvpybx-85r3edlsn4i0sp7njs9vo7nh8"),
+            "s-hoe1t7j0u8-0jvpybx"
+        );
         let _ = fs::remove_dir_all(&root);
     }
 
