@@ -69,7 +69,16 @@ static WRITING: Mutex<()> = Mutex::new(());
 /// `#`, and a run of those one `#` (a clip id, rooftop.l15.001). Two
 /// messages that differ only there are the same trouble.
 pub(crate) fn key(what: &str) -> String {
-    let mut words: Vec<String> = what
+    key_named(what, &[])
+}
+
+/// The key, with each row name of `names` in it one `#` too: "Couldn't
+/// set up the clip for double-drink-end" and the same for
+/// theme-drink-bartender are one cause (docs/loop.md, "The loop files its
+/// own trouble"). A name of one word (jump, drink) is left in, as it could
+/// be any word of the message.
+fn key_named(what: &str, names: &[Vec<String>]) -> String {
+    let words: Vec<String> = what
         .to_lowercase()
         .split(|c: char| !c.is_ascii_alphanumeric())
         .filter(|w| !w.is_empty())
@@ -81,8 +90,57 @@ pub(crate) fn key(what: &str) -> String {
             }
         })
         .collect();
+    crate::next::cut(&unnamed(words, names).join(" "), 240)
+}
+
+/// The words with each run that is one of the names made `#`, longest name
+/// first, and a run of `#` one `#`.
+fn unnamed(mut words: Vec<String>, names: &[Vec<String>]) -> Vec<String> {
+    let mut names: Vec<&Vec<String>> = names.iter().filter(|n| n.len() > 1).collect();
+    names.sort_by_key(|n| std::cmp::Reverse(n.len()));
+    for n in names {
+        let mut i = 0;
+        while i + n.len() <= words.len() {
+            if words[i..i + n.len()] == n[..] {
+                words.splice(i..i + n.len(), ["#".to_owned()]);
+            }
+            i += 1;
+        }
+    }
     words.dedup_by(|a, b| a == "#" && b == "#");
-    crate::next::cut(&words.join(" "), 240)
+    words
+}
+
+/// The words of the game's row names, for key_named: the quest log's and
+/// its archive's, not the trouble rows' own.
+fn row_names(q: &[Value], archived: &[Value]) -> Vec<Vec<String>> {
+    q.iter()
+        .chain(archived)
+        .filter(|r| !r["trouble"].is_object())
+        .filter_map(|r| r["mechanic"].as_str())
+        .map(|m| {
+            m.to_lowercase()
+                .split(|c: char| !c.is_ascii_alphanumeric())
+                .filter(|w| !w.is_empty())
+                .map(|w| {
+                    if w.bytes().any(|b| b.is_ascii_digit()) {
+                        "#".to_owned()
+                    } else {
+                        w.to_owned()
+                    }
+                })
+                .collect()
+        })
+        .collect()
+}
+
+/// Whether a trouble row is of the cause `k`: its key is, or is once the
+/// row names in it are `#` (a row filed before names were taken out).
+fn of_cause(r: &Value, k: &str, names: &[Vec<String>]) -> bool {
+    let Some(had) = r["trouble"]["key"].as_str() else {
+        return false;
+    };
+    had == k || unnamed(had.split(' ').map(str::to_owned).collect(), names).join(" ") == k
 }
 
 /// The row a cause files into: `trouble-` and its first words, and six
@@ -101,19 +159,22 @@ pub(crate) fn row_name(key: &str) -> String {
 /// Says the row, whether it was added, its count and whether it came back.
 pub(crate) fn file(paths: &Paths, t: &Trouble, now: u64) -> Result<Value> {
     let what = crate::next::cut(t.what, 400);
-    let k = key(&what);
     let _one = WRITING.lock().unwrap_or_else(|e| e.into_inner());
     let f = queue_file(paths, t.game)?;
     let mut q = read_queue(&f);
+    let names = row_names(
+        &q,
+        &crate::mechanic::archive::read_archive(&paths.home, t.game),
+    );
+    let k = key_named(&what, &names);
     // Trouble that comes back to an archived row brings the row back.
-    if !q.iter().any(|r| r["trouble"]["key"] == json!(k))
-        && let Some(r) = crate::mechanic::archive::bring_back(&paths.home, t.game, |r| {
-            r["trouble"]["key"] == json!(k)
-        })?
+    if !q.iter().any(|r| of_cause(r, &k, &names))
+        && let Some(r) =
+            crate::mechanic::archive::bring_back(&paths.home, t.game, |r| of_cause(r, &k, &names))?
     {
         q.push(r);
     }
-    if let Some(r) = q.iter_mut().find(|r| r["trouble"]["key"] == json!(k)) {
+    if let Some(r) = q.iter_mut().find(|r| of_cause(r, &k, &names)) {
         let count = r["trouble"]["count"].as_u64().unwrap_or(1) + 1;
         r["trouble"]["count"] = json!(count);
         r["trouble"]["last_ms"] = json!(now);
@@ -460,6 +521,74 @@ mod tests {
         assert_eq!(q.len(), 1);
         assert_eq!(q[0]["status"], "next");
         assert!(read_queue(&a).is_empty());
+    }
+
+    /// Two faults that differ only in the row they name are one row, count
+    /// 2, and a row filed before names were taken out takes the next one
+    /// (2026-11-25: the same NES log on an arcade board made a row for
+    /// theme-drink-bartender and another for double-drink-end). A name of
+    /// one word stays in the key.
+    #[test]
+    fn two_faults_naming_two_rows_are_one_trouble() {
+        let d = tempfile::tempdir().unwrap();
+        let p = paths(d.path());
+        let f = queue_file(&p, "made-up").unwrap();
+        let row = |m: &str| json!({"mechanic": m, "status": "next"});
+        write_queue(
+            &f,
+            &[
+                row("theme-drink-bartender"),
+                row("double-drink-end"),
+                row("drink"),
+            ],
+        )
+        .unwrap();
+        let fault = |m: &str| {
+            format!(
+                "The page showed the person an error: Couldn't set up the clip for {m}: the log is an NES input log; this board is arcade"
+            )
+        };
+        let t = |what: &str| {
+            file(
+                &p,
+                &Trouble {
+                    game: "made-up",
+                    kind: Kind::Page,
+                    what,
+                    from: "the screen page",
+                },
+                1000,
+            )
+            .unwrap()
+        };
+        let a = t(&fault("theme-drink-bartender"));
+        let b = t(&fault("double-drink-end"));
+        assert_eq!(a["added"], json!(true));
+        assert_eq!(
+            (b["row"].clone(), b["count"].clone()),
+            (a["row"].clone(), json!(2))
+        );
+        let q = read_queue(&f);
+        assert_eq!(open(&q).len(), 1);
+        let k = q[3]["trouble"]["key"].as_str().unwrap();
+        assert!(k.contains("the clip for # the log"), "{k}");
+        assert!(!k.contains("drink"), "{k}");
+        assert_eq!(t(&fault("drink"))["added"], json!(true), "one word stays");
+
+        // A row keyed with the name in it, as filed before, takes the fault.
+        let mut q = read_queue(&f);
+        q.retain(|r| !r["trouble"].is_object());
+        q.push(json!({
+            "mechanic": "trouble-old",
+            "status": "next",
+            "trouble": {"key": key(&fault("theme-drink-bartender")), "count": 1},
+        }));
+        write_queue(&f, &q).unwrap();
+        let c = t(&fault("double-drink-end"));
+        assert_eq!(
+            (c["row"].clone(), c["count"].clone()),
+            (json!("trouble-old"), json!(2))
+        );
     }
 
     /// The page's same error within a minute is filed once.
