@@ -1998,6 +1998,10 @@ fn screen_work_clip(s: &Server, req: &Request) -> Result<Response> {
         Ok(l) => l,
         Err(e) => return Ok(Response::error(404, &format!("{e:#}"))),
     };
+    // A clip whose presses name NES buttons on an arcade game holds the
+    // board's control bits, as scoring plays them: the page's board wants
+    // them in its own spelling (gp-arcade-input 0).
+    let log = crate::findings_clip::board_log(&s.rom, log)?;
     let frames = log.frames.len().saturating_sub(start);
     // The mapping's draw sites, so the screen records the original's
     // random draws from the replay and hands them to the model beside it.
@@ -2212,6 +2216,77 @@ mod tests {
         assert_eq!(v["spans"], json!(true), "{v}");
         let from: Vec<usize> = seen.iter().map(|(_, f)| *f).collect();
         assert!(from.contains(&2) && from.contains(&3), "{v}");
+    }
+
+    /// A corpus clip whose presses name NES buttons comes to an arcade page
+    /// as the board's log, the same bits on the same frames, so its LOOK AT
+    /// IT plays (it was "an NES input log can't play on an arcade board");
+    /// on an NES page it stays an NES log. The arcade half needs the game's
+    /// oracle set on this machine and is skipped without it.
+    #[test]
+    fn a_corpus_clip_in_nes_buttons_plays_on_an_arcade_page() {
+        let d = tempfile::tempdir().unwrap();
+        let mut srv = server(d.path());
+        let game = d.path().join("cab");
+        fs::create_dir_all(game.join("inputs")).unwrap();
+        fs::write(
+            game.join("corpus.toml"),
+            "[corpus]\nformat = \"1.0.0\"\nname = \"cab\"\nversion = \"0.1.0\"\nrecipes = \"b3:0\"\n\n\
+             [target]\ngame = \"cab\"\nrom = \"00\"\n\n\
+             [[clip]]\nid = \"cab.drink.001\"\nname = \"a drink\"\nsource = \"played\"\n\
+             start = \"inputs/a.start.presses\"\npresses = \"inputs/a.presses\"\nframes = 10\n",
+        )
+        .unwrap();
+        fs::write(
+            game.join("inputs/a.start.presses"),
+            "gp-presses 0\nframes 20\na@3-5\n",
+        )
+        .unwrap();
+        fs::write(
+            game.join("inputs/a.presses"),
+            "gp-presses 0\nframes 10\nleft@2-4\n",
+        )
+        .unwrap();
+        srv.rebuild = Some(super::super::review::Rebuild {
+            game,
+            module: None,
+            follows: false,
+            rom: None,
+            assets: None,
+        });
+        let clip = |srv: &Server| {
+            let (s, body) = get(srv, "/api/screen/work-clip?id=cab.drink.001");
+            assert_eq!(s, 200, "{body}");
+            let v: Value = serde_json::from_str(&body).unwrap();
+            assert_eq!(
+                (v["start"].as_u64(), v["frames"].as_u64()),
+                (Some(20), Some(10)),
+                "{v}"
+            );
+            gp_evidence::InputLog::parse(v["log"].as_str().unwrap()).unwrap()
+        };
+        let nes = clip(&srv);
+        assert!(nes.arcade.is_none());
+        let (set_name, zip) = match gp_arcade::romset::test_oracle_set_path() {
+            Ok(p) => p,
+            Err(e) => {
+                eprintln!("skipped the arcade page: {e}");
+                return;
+            }
+        };
+        srv.rom = Arc::new(fs::read(zip).unwrap());
+        let arcade = clip(&srv);
+        assert_eq!(
+            arcade.arcade.as_ref().map(|a| a.system.as_str()),
+            Some(set_name)
+        );
+        assert_eq!(arcade.controllers, 1);
+        let bits = |l: &gp_evidence::InputLog| -> Vec<u32> {
+            l.frames.iter().map(|f| f.buttons_word()).collect()
+        };
+        assert_eq!(bits(&arcade), bits(&nes));
+        assert_eq!(bits(&arcade)[3], 0x01, "a is the coin");
+        assert_eq!(bits(&arcade)[22], 0x40, "left is the tap");
     }
 
     /// A 16KB NROM that loops in place: made up here, no game's bytes.
