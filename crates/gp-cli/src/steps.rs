@@ -138,6 +138,12 @@ pub(crate) const ROW_CLI: &str = "gp mechanic show GAME ROW, gp mechanic start G
 /// What a row of the tool's work runs besides: the gate it lands through.
 pub(crate) const TOOL_ROW_CLI: &str = ", gp tool gate --patch FILE";
 
+/// What a row gp loop health filed runs besides: the set-aside its problem
+/// names for the games checkout's local changes, a card for the person's
+/// yes. A step's `*` covers no ask, so without it the row's worker had
+/// nothing to raise that card with (docs/agents.md).
+pub(crate) const HEALTH_ROW_CLI: &str = ", gp loop set-aside GAME";
+
 /// The game's scoreboard lines as a row's claim reads them: each line's
 /// name, lower case as targets are read, and the corpus clip it measures.
 pub(crate) fn board_lines(game_dir: &Path) -> Vec<(String, String)> {
@@ -428,6 +434,11 @@ pub(crate) fn row_steps(paths: &gp_evidence::Paths, games: Option<&Path>) -> Vec
             } else {
                 cli
             };
+            let cli = if r["trouble"]["kind"] == json!("health") {
+                format!("{cli}{}", HEALTH_ROW_CLI.replace("GAME", g))
+            } else {
+                cli
+            };
             let mut commands = commands_of(&cli);
             commands.push("*".into());
             // The note is in the key: a row reopened with new words is a new
@@ -605,6 +616,54 @@ mod tests {
         s.hold.clear();
         gp_mcp::steps::save(&p.home, &s).unwrap();
         assert_eq!(rows(&p), every);
+    }
+
+    /// A row gp loop health filed has gp loop set-aside of its game among its
+    /// step's commands, the card its problem names; another tool row and a
+    /// trouble row from the page don't.
+    #[test]
+    fn a_health_rows_step_can_set_aside_the_games_checkout() {
+        let t = tempfile::tempdir().unwrap();
+        let p = crate::test_paths(&t.path().join("home"));
+        let games = t.path().join("games");
+        std::fs::create_dir_all(games.join("g")).unwrap();
+        std::fs::write(games.join("g").join("package.toml"), "").unwrap();
+        let q = json!([
+            {"mechanic": "trouble-checkout", "status": "next", "repo": "tools", "trouble": {"kind": "health"}},
+            {"mechanic": "trouble-page", "status": "next", "repo": "tools", "trouble": {"kind": "page"}},
+            {"mechanic": "fix-tool", "status": "next", "repo": "tools"},
+        ]);
+        let f = crate::mechanic::session::queue_file(&p, "g").unwrap();
+        crate::mechanic::session::write_queue(&f, q.as_array().unwrap()).unwrap();
+        let steps = row_steps(&p, Some(&games));
+        let sets_aside = |row: &str| {
+            let s = steps
+                .iter()
+                .find(|s| s["touches"][0] == json!(format!("row:g/{row}")))
+                .unwrap();
+            assert!(
+                s["commands"]
+                    .as_array()
+                    .unwrap()
+                    .contains(&json!("tool gate")),
+                "{s}"
+            );
+            s["commands"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("loop set-aside"))
+        };
+        assert!(sets_aside("trouble-checkout"));
+        assert!(!sets_aside("trouble-page"));
+        assert!(!sets_aside("fix-tool"));
+        let s = &steps[0];
+        assert!(
+            s["how"]["cli"]
+                .as_str()
+                .unwrap()
+                .ends_with(", gp loop set-aside g"),
+            "{s}"
+        );
     }
 
     /// A row a session takes by hand ("agent working" with a worker that

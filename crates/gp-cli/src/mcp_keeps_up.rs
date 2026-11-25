@@ -324,7 +324,12 @@ mod tests {
     /// drop from the step's commands without a word.
     #[test]
     fn a_rows_step_runs_commands_gp_has() {
-        let cli = format!("{}{}", crate::steps::ROW_CLI, crate::steps::TOOL_ROW_CLI);
+        let cli = format!(
+            "{}{}{}",
+            crate::steps::ROW_CLI,
+            crate::steps::TOOL_ROW_CLI,
+            crate::steps::HEALTH_ROW_CLI
+        );
         assert_eq!(unknown_commands(&cli), Vec::<String>::new(), "{cli}");
         let named = cli.matches("gp ").count();
         assert_eq!(crate::steps::commands_of(&cli).len(), named, "{cli}");
