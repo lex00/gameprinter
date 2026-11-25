@@ -2,9 +2,10 @@
 //! LOOK AT IT plays the change the person is asked to land, not main's
 //! model. The ask (`$GP_HOME/work/asks/ID.json`, a `gp model gate` refused
 //! for want of the person's yes) names its patch (`--patch FILE`); the
-//! game's folder in the games checkout is copied, the patch applied to the
-//! copy, the copy's module built from its hook code, its pictures lifted by
-//! its asset map, and the preview built from it as [`super::live`] builds
+//! game's folder in the games checkout is copied as the checkout's HEAD
+//! holds it (its local changes left out), the patch applied to the copy,
+//! the copy's module built from its hook code, its pictures lifted by its
+//! asset map, and the preview built from it as [`super::live`] builds
 //! main's. The screen loads it (`rebuild-ask/ID/index.html`) and starts it
 //! at the clip (`POST /api/rebuild/start` with `ask`) as it does main's.
 //!
@@ -144,6 +145,78 @@ fn copy_game(from: &Path, to: &Path) -> std::io::Result<()> {
             if let Ok(b) = std::fs::read(e.path()) {
                 std::fs::write(to.join(&name), b)?;
             }
+        }
+    }
+    Ok(())
+}
+
+/// The game's folder `main_game` copied into `to` as the games checkout's
+/// HEAD holds it: each file under it the checkout has changed is put back
+/// to HEAD's (through git's filters, so a picture in Git LFS is the
+/// picture), and a file HEAD hasn't got is left out. A card's patch is made
+/// on main, so it applies to main's files, not to whatever the checkout
+/// holds uncommitted (trouble-the-page-showed-the-person-an-error-the-2ed3ec:
+/// a refused corpus import left in the person's checkout made two cards'
+/// patches of those same files fail to apply). A folder outside git, or in
+/// a repository with no commit yet, is copied as it is.
+fn copy_committed(main_game: &Path, to: &Path) -> Result<()> {
+    copy_game(main_game, to).with_context(|| format!("copying {}", main_game.display()))?;
+    let git = |args: &[&str]| {
+        std::process::Command::new("git")
+            .args(args)
+            .current_dir(main_game)
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+    };
+    if git(&["rev-parse", "--verify", "-q", "HEAD"]).is_none() {
+        return Ok(());
+    }
+    let Some(prefix) = git(&["rev-parse", "--show-prefix"]) else {
+        return Ok(());
+    };
+    let prefix = String::from_utf8_lossy(&prefix.stdout).trim().to_owned();
+    let Some(status) = git(&[
+        "status",
+        "--porcelain",
+        "-z",
+        "--untracked-files=all",
+        "--",
+        ".",
+    ]) else {
+        bail!("git status in {} failed", main_game.display());
+    };
+    // `XY PATH\0`, and a rename's or copy's `XY TO\0FROM\0`: every path
+    // named, both of a rename, relative to the repository's top.
+    let mut files = Vec::new();
+    let mut it = status.stdout.split(|&b| b == 0).filter(|e| !e.is_empty());
+    while let Some(e) = it.next() {
+        if e.len() < 4 {
+            continue;
+        }
+        files.push(String::from_utf8_lossy(&e[3..]).into_owned());
+        if (matches!(e[0], b'R' | b'C') || matches!(e[1], b'R' | b'C'))
+            && let Some(from) = it.next()
+        {
+            files.push(String::from_utf8_lossy(from).into_owned());
+        }
+    }
+    for f in files {
+        let Some(rel) = f.strip_prefix(&prefix) else {
+            continue;
+        };
+        let dst = to.join(rel);
+        let spec = format!("HEAD:{f}");
+        if git(&["cat-file", "-e", &spec]).is_some() {
+            let Some(o) = git(&["cat-file", "--filters", &spec]) else {
+                bail!("reading {f} as main has it in {}", main_game.display());
+            };
+            if let Some(p) = dst.parent() {
+                std::fs::create_dir_all(p)?;
+            }
+            std::fs::write(&dst, o.stdout)?;
+        } else if dst.is_file() {
+            std::fs::remove_file(&dst)?;
         }
     }
     Ok(())
@@ -496,9 +569,7 @@ fn make(
         std::fs::remove_dir_all(&tree)?;
     }
     let copy = tree.join(game);
-    if let Err(e) = copy_game(main_game, &copy) {
-        bail!("copying {}: {e}", main_game.display());
-    }
+    copy_committed(main_game, &copy)?;
     apply(&tree, game, main_game, near, &d.join("ask.patch"))?;
     let module = crate::module::built_for(&paths.home, &copy)
         .context("building the changed model's module")?
@@ -747,6 +818,66 @@ mod tests {
             "{e}"
         );
         assert_eq!(e.lines().count(), 1, "{e}");
+    }
+
+    #[test]
+    fn a_cards_patch_applies_to_main_not_the_checkouts_local_changes() {
+        let d = tempfile::tempdir().unwrap();
+        let games = d.path().join("games");
+        let main_game = games.join("hilltop");
+        std::fs::create_dir_all(main_game.join("inputs")).unwrap();
+        let git = |args: &[&str]| {
+            let ok = std::process::Command::new("git")
+                .args([
+                    "-c",
+                    "user.name=t",
+                    "-c",
+                    "user.email=t@t",
+                    "-c",
+                    "commit.gpgsign=false",
+                ])
+                .args(args)
+                .current_dir(&games)
+                .status()
+                .unwrap();
+            assert!(ok.success(), "git {args:?}");
+        };
+        git(&["init", "-q"]);
+        std::fs::write(main_game.join("corpus.toml"), "version = \"2.1.0\"\n").unwrap();
+        std::fs::write(main_game.join("inputs/a.presses"), "up 1\n").unwrap();
+        std::fs::write(main_game.join("model.toml"), "a = 1\n").unwrap();
+        git(&["add", "-A"]);
+        git(&["commit", "-q", "-m", "main"]);
+        // The checkout holds an import nobody landed: the same files changed
+        // another way, one gone, one new.
+        std::fs::write(main_game.join("corpus.toml"), "version = \"9.0.0\"\n").unwrap();
+        std::fs::write(main_game.join("inputs/a.presses"), "U 1\n").unwrap();
+        std::fs::remove_file(main_game.join("model.toml")).unwrap();
+        std::fs::write(main_game.join("inputs/b.presses"), "D 1\n").unwrap();
+        let patch = "diff --git a/hilltop/corpus.toml b/hilltop/corpus.toml\n--- a/hilltop/corpus.toml\n+++ b/hilltop/corpus.toml\n@@ -1 +1 @@\n-version = \"2.1.0\"\n+version = \"3.0.0\"\n";
+        let look = d.path().join("look");
+        let tree = look.join("tree");
+        copy_committed(&main_game, &tree.join("hilltop")).unwrap();
+        std::fs::write(look.join("ask.patch"), patch).unwrap();
+        apply(&tree, "hilltop", &main_game, None, &look.join("ask.patch")).unwrap();
+        let read = |f: &str| std::fs::read_to_string(tree.join("hilltop").join(f)).unwrap();
+        assert_eq!(read("corpus.toml"), "version = \"3.0.0\"\n");
+        assert_eq!(read("inputs/a.presses"), "up 1\n");
+        assert_eq!(read("model.toml"), "a = 1\n");
+        assert!(!tree.join("hilltop/inputs/b.presses").exists());
+        // The checkout itself is left as it was.
+        let c = std::fs::read_to_string(main_game.join("corpus.toml")).unwrap();
+        assert_eq!(c, "version = \"9.0.0\"\n");
+        // A folder outside git is copied as it is.
+        let plain = d.path().join("plain/hilltop");
+        std::fs::create_dir_all(&plain).unwrap();
+        std::fs::write(plain.join("model.toml"), "a = 5\n").unwrap();
+        let out = d.path().join("plain-copy");
+        copy_committed(&plain, &out).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(out.join("model.toml")).unwrap(),
+            "a = 5\n"
+        );
     }
 
     #[test]
