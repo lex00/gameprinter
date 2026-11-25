@@ -17,11 +17,12 @@
 //! `.`, serve both, step the route in Chrome, take the pictures).
 //!
 //! Where the parts come from:
-//! - The page: `--page`, else the newest bundle that passed the release
-//!   check in `$GP_HOME/work/page-release` (`scripts/web/release-check.sh`),
-//!   else one built with `scripts/web/build-page.sh` from the gameprinter
-//!   checkout, told the games checkout holding the game ($GP_GAMES_DIR) for
-//!   its `gp roms sets`. A gp with no checkout and no bundle can't serve the page.
+//! - The page: `--page`, else one built with `scripts/web/build-page.sh`
+//!   from the gameprinter checkout as it is now, told the games checkout
+//!   holding the game ($GP_GAMES_DIR) for its `gp roms sets`; with no
+//!   checkout, the newest bundle that passed the release check in
+//!   `$GP_HOME/work/page-release` (`scripts/web/release-check.sh`). A gp
+//!   with no checkout and no bundle can't serve the page.
 //! - The game and its themes: `--registry`, else the page's own source
 //!   (page.json), read from a checkout of it beside the games checkout when
 //!   there is one with the same name, else over HTTPS (blobs cached by hash
@@ -101,9 +102,9 @@ pub struct PlayArgs {
     #[arg(long)]
     pub moments: Option<PathBuf>,
     /// The built page to serve, a folder holding index.html and page.json
-    /// (default: the newest that passed the release check in
-    /// $GP_HOME/work/page-release, else one built from the gameprinter
-    /// checkout). Example: --page target/page-live
+    /// (default: one built from the gameprinter checkout as it is now,
+    /// else the newest that passed the release check in
+    /// $GP_HOME/work/page-release). Example: --page target/page-live
     #[arg(long)]
     pub page: Option<PathBuf>,
     /// The registry the game and its published themes are read from: a
@@ -447,25 +448,31 @@ fn find_page(
             play: None,
         });
     }
+    // In a gameprinter checkout the page is built from the code and the game
+    // as they are now (and served again while neither changes), so a theme
+    // is seen as the person's own page draws it. A bundle that passed the
+    // release check is as old as its release: played first, as it was until
+    // 2026-11-24, it showed a theme on a page and a model eight days old,
+    // which knew none of the rules and names landed since.
+    if let Some(repo) = checkout() {
+        return build_page(&repo, game_dir, game, paths);
+    }
     if let Some(b) = passed_bundle(&paths.home, game) {
         return Ok(PageBuilt {
             page: b,
             play: None,
         });
     }
-    let Some(repo) = checkout() else {
-        // A released gp carries the public page (src/bundle.rs).
-        if let Some(p) = crate::bundle::page() {
-            return Ok(PageBuilt {
-                page: p,
-                play: None,
-            });
-        }
-        bail!(
-            "no built page for {game}: this gp has no gameprinter checkout to build one from, and $GP_HOME/work/page-release holds no bundle that passed the release check. Give one with --page DIR (a folder holding the page's index.html and page.json)"
-        );
-    };
-    build_page(&repo, game_dir, game, paths)
+    // A released gp carries the public page (src/bundle.rs).
+    if let Some(p) = crate::bundle::page() {
+        return Ok(PageBuilt {
+            page: p,
+            play: None,
+        });
+    }
+    bail!(
+        "no built page for {game}: this gp has no gameprinter checkout to build one from, and $GP_HOME/work/page-release holds no bundle that passed the release check. Give one with --page DIR (a folder holding the page's index.html and page.json)"
+    );
 }
 
 /// The games checkout the page build is told of ($GP_GAMES_DIR), so its
