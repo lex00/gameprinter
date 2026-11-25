@@ -1227,10 +1227,13 @@ pub fn plan_of(config: &Config, c: &CommandDef, path: &str, argv: &[String]) -> 
 
 /// The games checkout `gp PATH` runs in: a loop worker's own worktree of
 /// it, when it has one, so what the command writes stays there; else the
-/// person's. A gate always runs in the person's, the checkout it lands on.
+/// person's. A gate always runs in the person's, the checkout it lands on,
+/// and so does gp loop health, which reports on the person's setup: from a
+/// worker's worktree it said the checkout was clean while the person's held
+/// a refused import (loop-health-misses-checkout-changes).
 pub(crate) fn games_for<'a>(config: &'a Config, path: &str) -> Option<&'a Path> {
     match &config.worker_games {
-        Some(w) if !path.ends_with(" gate") => Some(w),
+        Some(w) if !path.ends_with(" gate") && path != "loop health" => Some(w),
         _ => config.games.as_deref(),
     }
 }
@@ -1868,6 +1871,10 @@ mod tests {
         );
         assert_eq!(games_for(&c, "model gate"), Some(d.join("games").as_path()));
         assert_eq!(games_for(&c, "tool gate"), Some(d.join("games").as_path()));
+        assert_eq!(
+            games_for(&c, "loop health"),
+            Some(d.join("games").as_path())
+        );
     }
 
     /// A stand-in gp: a shell script that runs `body`.
