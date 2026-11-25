@@ -423,20 +423,56 @@ fn apply(
     lfs_to_pointers(tree, &lfs)?;
     // Outside any repository (GIT_CEILING_DIRECTORIES), so git applies the
     // patch to the copy by its paths, GAME/...
-    let o = std::process::Command::new("git")
-        .args(["apply", "--whitespace=nowarn"])
-        .arg(patch)
-        .current_dir(tree)
-        .env("GIT_CEILING_DIRECTORIES", tree.parent().unwrap_or(tree))
-        .output()
-        .context("running git apply")?;
+    let git = |more: &[&str]| {
+        std::process::Command::new("git")
+            .args(["apply", "--whitespace=nowarn"])
+            .args(more)
+            .arg(patch)
+            .current_dir(tree)
+            .env("GIT_CEILING_DIRECTORIES", tree.parent().unwrap_or(tree))
+            .output()
+            .context("running git apply")
+    };
+    let o = git(&[])?;
     if !o.status.success() {
-        bail!(
-            "the card's patch doesn't apply to {game} on main as it is now: {}",
-            String::from_utf8_lossy(&o.stderr).trim()
-        );
+        // The copy is of the checkout as it stands, local changes too. When
+        // the patch comes off it cleanly, the copy already holds the whole
+        // change, and is the model after it.
+        if !git(&["--check", "--reverse"])?.status.success() {
+            bail!(
+                "the card's patch doesn't apply to {game} in your games checkout as it is now: {}",
+                apply_trouble(&String::from_utf8_lossy(&o.stderr))
+            );
+        }
     }
     lfs_from_pointers(tree, &lfs, main_game, near)
+}
+
+/// git apply's complaint in a line: how many files the patch didn't fit and
+/// the first two, where git writes two lines for each.
+fn apply_trouble(stderr: &str) -> String {
+    let files: Vec<&str> = stderr
+        .lines()
+        .filter_map(|l| {
+            l.strip_prefix("error: ")?
+                .strip_suffix(": patch does not apply")
+        })
+        .collect();
+    match files.as_slice() {
+        [] => stderr
+            .lines()
+            .next()
+            .unwrap_or("git apply failed")
+            .trim()
+            .to_owned(),
+        [one] => format!("{one} differs from what the patch expects"),
+        [a, b] => format!("{a} and {b} differ from what the patch expects"),
+        [a, b, rest @ ..] => format!(
+            "{} files differ from what the patch expects ({a}, {b} and {} more)",
+            files.len(),
+            rest.len()
+        ),
+    }
 }
 
 /// The look made: the game copied, the patch applied, the module built,
@@ -673,6 +709,44 @@ mod tests {
         copy_game(&main_game, &tree.join("hilltop")).unwrap();
         let e = apply(&tree, "hilltop", &main_game, None, &look.join("ask.patch"));
         assert!(format!("{:#}", e.unwrap_err()).contains("hilltop/art/mug.png"));
+    }
+
+    /// A checkout that already holds a card's whole change (a turned-down
+    /// import left in place) is the model after it; one that holds something
+    /// else is refused in a line, however many files git names.
+    #[test]
+    fn a_copy_that_already_holds_the_change_is_the_look() {
+        let d = tempfile::tempdir().unwrap();
+        let tree = d.path().join("tree");
+        std::fs::create_dir_all(tree.join("hilltop")).unwrap();
+        let mut patch = String::new();
+        for k in 0..4 {
+            std::fs::write(tree.join(format!("hilltop/f{k}.txt")), "new\n").unwrap();
+            patch += &format!(
+                "diff --git a/hilltop/f{k}.txt b/hilltop/f{k}.txt\n--- a/hilltop/f{k}.txt\n+++ b/hilltop/f{k}.txt\n@@ -1 +1 @@\n-old\n+new\n"
+            );
+        }
+        let p = d.path().join("ask.patch");
+        std::fs::write(&p, &patch).unwrap();
+        let main_game = d.path().join("games/hilltop");
+        apply(&tree, "hilltop", &main_game, None, &p).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(tree.join("hilltop/f0.txt")).unwrap(),
+            "new\n"
+        );
+        for k in 0..4 {
+            std::fs::write(tree.join(format!("hilltop/f{k}.txt")), "other\n").unwrap();
+        }
+        let e = format!(
+            "{:#}",
+            apply(&tree, "hilltop", &main_game, None, &p).unwrap_err()
+        );
+        assert!(e.contains("4 files differ"), "{e}");
+        assert!(
+            e.contains("hilltop/f0.txt, hilltop/f1.txt and 2 more"),
+            "{e}"
+        );
+        assert_eq!(e.lines().count(), 1, "{e}");
     }
 
     #[test]
