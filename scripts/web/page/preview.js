@@ -824,16 +824,40 @@ addEventListener("keyup", (e) => down.delete(e.code));
 // A and B, Select, Start, then the d-pad or the left stick.
 // The first gamepad is controller 1, a second one controller 2 (the high
 // byte), as on the console.
-// A lever pulled holds the main button for this long and then lets go by
-// itself, whether the stick is still pulled or not, so a pull does at once
-// what a button held through a full pour does (a drink tap fills its glass
-// in 20 of the game's 30 frames a second; let go sooner and a part-filled
-// one is sent).
-const LEVER_MS = 700;
-// When each pad's lever was last pulled (0 once it is back below 0.3), by
-// its index: a new pull starts only from there, so the stick's spring
-// back past the middle isn't a second pull.
-const leverAt = [];
+// A lever (any stick after the first) holds the main button while it is
+// pulled, read by its travel as the screen page reads it
+// (mechanic/input-timeline.js, StickPull, at its default travel): pulled
+// once it has gone out LEVER_TRAVEL of its reach from the lowest it has
+// been since the last pull, past a small rest zone, and let go once it has
+// come back that far from the furthest it got. So the button is held as
+// long as the person holds the lever, and let go on the first of its way
+// home (the owner, 2026-11-25: "the joystick pour is really slow in the
+// browser.... it was ok in testing locally": a pull held the button a
+// fixed 700 ms, whatever the hand did).
+const LEVER_TRAVEL = 0.06;
+const LEVER_REST = 0.12;
+// Each pad's lever by its index: whether it is pulled, the mark its travel
+// is measured from, and the axes seen at rest (an axis that never rests,
+// such as a trigger some pads report at -1, isn't a stick).
+const levers = [];
+const leverPulled = (g) => {
+  const l = (levers[g.index] ??= { pulled: false, mark: 0, rested: new Set() });
+  let m = 0;
+  for (let a = 2; a < (g.axes?.length ?? 0); a++) {
+    const v = g.axes[a];
+    if (typeof v !== "number") continue;
+    if (Math.abs(v) < 0.2) l.rested.add(a);
+    if (l.rested.has(a)) m = Math.max(m, Math.min(1, Math.abs(v)));
+  }
+  if (l.pulled) {
+    if (m > l.mark) l.mark = m;
+    if (m <= l.mark - LEVER_TRAVEL || m < LEVER_REST) { l.pulled = false; l.mark = m; }
+  } else {
+    if (m < l.mark) l.mark = m;
+    if (m >= l.mark + LEVER_TRAVEL && m >= LEVER_REST) { l.pulled = true; l.mark = m; }
+  }
+  return l.pulled;
+};
 const padBits = () => {
   let bits = 0;
   let n = 0;
@@ -844,17 +868,11 @@ const padBits = () => {
     const [ax, ay] = [g.axes[0] ?? 0, g.axes[1] ?? 0];
     const stick = [];
     [ay < -0.5, ay > 0.5, ax < -0.5, ax > 0.5].forEach((v, i) => (stick[LAYOUT.stick[i]] = v));
-    // Any stick after the first, pulled down, holds the game's main button
-    // (the bit the pad's A gives): on a cabinet with a lever, such as a
-    // drink tap, pulling down pours and letting go sends.
+    // Any stick after the first, pulled any way, holds the game's main
+    // button (the bit the pad's A gives): on a cabinet with a lever, such
+    // as a drink tap, pulling pours and letting go sends.
     const main = LAYOUT.pad.findIndex((bs) => bs.includes(0));
-    let most = 0;
-    for (let a = 3; a < (g.axes?.length ?? 0); a += 2) most = Math.max(most, g.axes[a] ?? 0);
-    const now = performance.now();
-    const at = leverAt[g.index] ?? 0;
-    if (most > 0.5 && !at) leverAt[g.index] = now;
-    else if (most < 0.3 && at && now - at >= LEVER_MS) leverAt[g.index] = 0;
-    const pulled = !!leverAt[g.index] && now - leverAt[g.index] < LEVER_MS;
+    const pulled = leverPulled(g);
     const set = LAYOUT.pad.map((bs, bit) => bs.some(on) || !!stick[bit] || (pulled && bit === main));
     set.forEach((v, bit) => {
       if (v) bits |= 1 << (bit + shift);
