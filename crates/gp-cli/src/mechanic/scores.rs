@@ -107,6 +107,35 @@ pub(crate) fn meets(c: &Value) -> bool {
     c["straight"]["together"].as_u64().is_some() && c["straight"]["together"] == c["straight"]["of"]
 }
 
+/// The clips of the gate's last scores that don't meet the bars, each as
+/// (its id, its row): all of the game's, or one row's. A game is published
+/// only with every clip exact on state (docs/packages.md), so these are
+/// what stands between the game and a publish.
+pub(crate) fn short_clips(home: &Path, game: &str, row: Option<&str>) -> Vec<(String, String)> {
+    let status: Value = fs::read(
+        home.join("work")
+            .join("refine")
+            .join(game)
+            .join("status.json"),
+    )
+    .ok()
+    .and_then(|b| serde_json::from_slice(&b).ok())
+    .unwrap_or(Value::Null);
+    status["clips"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|c| row.is_none_or(|m| c["mechanic"] == json!(m)))
+        .filter(|c| !meets(c))
+        .filter_map(|c| {
+            Some((
+                c["id"].as_str()?.to_owned(),
+                c["mechanic"].as_str().unwrap_or_default().to_owned(),
+            ))
+        })
+        .collect()
+}
+
 /// A row's line from the gate's scores, and whether every clip meets the
 /// bars.
 fn scores_line(
@@ -211,6 +240,15 @@ mod tests {
             .unwrap(),
         )
         .unwrap();
+        // The clips short of the bars, a done row's too: what stands
+        // between the game and a publish (gp loop health's problem).
+        let short = short_clips(d.path(), "mosshop", None);
+        assert_eq!(
+            short,
+            vec![("mosshop.clear-1.001".to_owned(), "clear".to_owned())]
+        );
+        assert!(short_clips(d.path(), "mosshop", Some("walk")).is_empty());
+        assert_eq!(short_clips(d.path(), "mosshop", Some("clear")).len(), 1);
         let q = scored_queue(d.path(), "mosshop");
         // The status is the log's, whatever the scores say.
         assert_eq!(q[0]["status"], "agent working");

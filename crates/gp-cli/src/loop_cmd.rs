@@ -972,6 +972,39 @@ fn checks(paths: &gp_evidence::Paths, games_dir: Option<&std::path::Path>) -> Va
                 asking.push(format!("{g}/{row}"));
             }
         }
+        // Every clip at the bars: a game is published only when they all
+        // are, so a clip short of them is work the loop has, whatever its
+        // row's status says.
+        let short = crate::mechanic::scores::short_clips(home, &g, None);
+        if short.is_empty() {
+            ok(
+                &mut lines,
+                format!("Every scored clip of {g} meets the bars: it can be published"),
+            );
+        } else {
+            bad(
+                &mut lines,
+                &mut problems,
+                format!(
+                    "{g} can't be published: clips of its corpus don't meet the bars on the gate's last scores, and a game is published only when every clip does. Set each of their rows that is done or parked to next and fix the model."
+                ),
+            );
+            let rows: std::collections::BTreeSet<&str> =
+                short.iter().map(|(_, r)| r.as_str()).collect();
+            lines.push(format!(
+                "           {} clip(s): {}",
+                short.len(),
+                short
+                    .iter()
+                    .map(|(id, _)| id.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+            lines.push(format!(
+                "           their rows: {}",
+                rows.into_iter().collect::<Vec<_>>().join(", ")
+            ));
+        }
         // The games checkout clean: a local change blocks every landing.
         if let Some(d) = games.as_deref() {
             let out = std::process::Command::new("git")

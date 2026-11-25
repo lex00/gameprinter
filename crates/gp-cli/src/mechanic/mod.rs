@@ -1821,6 +1821,20 @@ fn queue(paths: &Paths, game: &str, mechanic: Option<&str>, c: &RowChange) -> Re
             .iter_mut()
             .find(|r| r["mechanic"] == json!(m))
             .expect("just added");
+        // A worker doesn't close a row whose clips the gate's last scores
+        // hold short of the bars: the game isn't published until every clip
+        // is exact on state, and a closed row is one nothing takes up again.
+        if c.status == Some("done") && std::env::var_os("GP_WORKER").is_some() {
+            let short = scores::short_clips(&paths.home, game, Some(m));
+            if !short.is_empty() {
+                let ids: Vec<&str> = short.iter().map(|(id, _)| id.as_str()).collect();
+                bail!(
+                    "{m} can't be marked done: {} of its clips don't meet the bars on the gate's last scores ({}), and {game} isn't published until every clip does. Leave it next with what is known, or park it in line with why",
+                    ids.len(),
+                    ids.join(", ")
+                );
+            }
+        }
         if let Some(st) = c.status {
             // A row the person wrote on the page keeps their words (asked)
             // when the agent's note takes its place, so the page can say
