@@ -18,20 +18,22 @@ import { waitForModel } from "./model-load.js";
 import { RefineView } from "./rebuild-card.js";
 import { startShell } from "./shell.js";
 import { startNext } from "./next.js";
+// The controls are read as the public page and the screen page read them:
+// controls.js hands the keys and gamepads to gp_controls.wasm
+// (crates/gp-controls), which decides the buttons each game frame reads
+// (docs/controls.md). The server serves both, and the shell's key table
+// controls.js reads, beside this page.
+import { openControls } from "./controls.js";
 
-// What the machine is: the screen, the frame rate and the buttons, taken
-// from the player module (gp_play_info) when it loads. The NES's until then.
-// `keys` and `keys2` are each button's keys in the order of the player's
-// bits; `bit` names the game bits the page's own commands read as presses.
+// What the machine is: the screen, the frame rate and the line under it,
+// taken from the player module (gp_play_info) when it loads. The NES's
+// until then. Its keys and gamepad buttons are controls.js's LAYOUTS (the
+// shell's table); `bit` names the game bits the page's own commands read
+// as presses.
 const LAYOUTS = {
   nes: {
     fps: 60.0988,
     // A, B, Select, Start, Up, Down, Left, Right (the input log's bits).
-    keys: [["KeyX", "Space"], ["KeyZ", "ShiftLeft"], ["ShiftRight", "Tab"], ["Enter"], ["ArrowUp", "KeyW"], ["ArrowDown", "KeyS"], ["ArrowLeft", "KeyA"], ["ArrowRight", "KeyD"]],
-    // Controller 2 from the keyboard, as the preview and the Bevy build map
-    // it: M and N for A and B, H Select, Y Start, I J K L the d-pad. A second
-    // gamepad is controller 2 too.
-    keys2: [["KeyM"], ["KeyN"], ["KeyH"], ["KeyY"], ["KeyI"], ["KeyK"], ["KeyJ"], ["KeyL"]],
     bit: { a: 1, b: 2, select: 4, start: 8, up: 16, down: 32, left: 64, right: 128 },
     footer: "Arrows move, X is A, Z is B, Enter is Start. F5 or the left trigger saves, F8 or the right trigger loads. R or the right bumper records. U turns the sound off and on. Player 2: I J K L move, M is A, N is B, H is Select, Y is Start, or a second controller.",
   },
@@ -39,24 +41,18 @@ const LAYOUTS = {
   // start. Coin, start, right, left, down, up, button 1 (an arcade player's first button).
   arcade: {
     fps: 30,
-    keys: [["Digit5"], ["Digit1"], ["ArrowRight", "KeyD"], ["ArrowLeft", "KeyA"], ["ArrowDown", "KeyS"], ["ArrowUp", "KeyW"], ["KeyX", "Space"]],
-    keys2: [],
     bit: { a: 64, b: 0, select: 1, start: 2, up: 32, down: 16, left: 8, right: 4 },
-    footer: "5 drops a coin and 1 starts, as in MAME. Arrows move, X or Space taps. On a controller: Select is the coin, Start starts, A taps. F5 or the left trigger saves, F8 or the right trigger loads. R or the right bumper records. U turns the sound off and on.",
+    footer: "5 drops a coin and 1 starts, as in MAME. Arrows move, X or Space taps. On a controller: Select is the coin, Start starts, any face button or the right stick taps. F5 or the left trigger saves, F8 or the right trigger loads. R or the right bumper records. U turns the sound off and on.",
   },
 };
 let LAYOUT = LAYOUTS.nes;
 let FPS = LAYOUT.fps;
-let KEYS = LAYOUT.keys;
-let KEYS2 = LAYOUT.keys2;
 let W = 256, H = 240;
 
 /** Takes the machine's numbers from the player's `gp_play_info`. */
 function useMachine(info) {
   LAYOUT = LAYOUTS[info.platform] ?? LAYOUTS.nes;
   FPS = info.fps ? info.fps[0] / info.fps[1] : LAYOUT.fps;
-  KEYS = LAYOUT.keys;
-  KEYS2 = LAYOUT.keys2;
   W = info.width ?? 256;
   H = info.height ?? 240;
   for (const c of [canvas, $("game2"), ...off, picCanvas, rbOff]) { c.width = W; c.height = H; c.style.aspectRatio = `${W} / ${H}`; }
@@ -68,21 +64,32 @@ const PAD = { a: 0, b: 1, lb: 4, rb: 5, lt: 6, rt: 7, select: 8, start: 9, up: 1
 
 const $ = (id) => document.getElementById(id);
 
-/** The first connected controller, in whatever slot the browser put it. */
+/** The first connected controller, in whatever slot the browser put it:
+ * for the page's own commands (the bumpers and triggers, the settings
+ * screen's keys) and the footer's name of it, never the game's buttons. */
 function firstPad() {
   for (const g of navigator.getGamepads?.() ?? []) if (g && g.connected) return g;
   return null;
 }
-
-/** The second connected controller: controller 2, as on the console. */
-function secondPad() {
-  let n = 0;
-  for (const g of navigator.getGamepads?.() ?? []) if (g && g.connected && n++ === 1) return g;
-  return null;
+/** The controls (controls.js on gp_controls.wasm), once main opened them:
+ * the keys and gamepads in, each game frame's buttons out. */
+let controls = null;
+/** Whether a key is one of the game's in the machine's layout. */
+function gameKey(code) {
+  const l = controls?.layout;
+  return !!l && (l.keys.some((ks) => ks.includes(code)) || l.keys2.some((ks) => ks.includes(code)));
+}
+/** The controls' timing settings the person keeps in this browser, set in
+ * the screen page's CONTROLS' TIMING box (the same origin's `gp-input`):
+ * the lead, the assist, the poll and the lever's travel. */
+function savedInput() {
+  try {
+    const v = JSON.parse(localStorage.getItem("gp-input") ?? "null");
+    return v && typeof v === "object" ? v : {};
+  } catch (e) { return {}; }
 }
 const canvas = $("game");
 const ctx = canvas.getContext("2d");
-const down = new Set();
 let player, rom;
 // The set the page's ROM is (api/rom), and the other sets' ROMs fetched for
 // clips recorded on them (rom?set=SET), as the screen page has them.
@@ -157,58 +164,14 @@ let watch = null; // {key, seen, queue: [pad], end, last}
 // Buttons still down from closing a panel: Enter or A answered it, and
 // mustn't also reach the game as Start or A (Start pauses it).
 let mask = 0;
-/** Both controllers for the game: controller 1's bits in the low byte,
- * controller 2's in the next, as gp_play_step and the rebuild take them. */
-function padNow() {
-  const pad = rawPad();
-  mask &= pad;
-  return (pad & ~mask) | (rawPad2() << 8);
-}
-
-/** Controller 1: the keyboard and the first gamepad. */
-function rawPad() {
-  let pad = 0;
-  KEYS.forEach((ks, bit) => { if (ks.some((k) => down.has(k))) pad |= 1 << bit; });
-  return pad | gamepadBits(firstPad());
-}
-
-/** Controller 2: its keys and the second gamepad. An arcade board has one
- * player's controls here. */
-function rawPad2() {
-  if (!KEYS2.length) return 0;
-  let pad = 0;
-  KEYS2.forEach((ks, bit) => { if (ks.some((k) => down.has(k))) pad |= 1 << bit; });
-  return pad | gamepadBits(secondPad());
-}
-
-/** A gamepad's buttons as the machine's bits, its left stick as the
- * d-pad. On an arcade board: Select is the coin, Start the start and A or
- * B the button. */
-function gamepadBits(g) {
-  let pad = 0;
-  if (g && LAYOUT === LAYOUTS.arcade) {
-    const b = (i) => g.buttons[i]?.pressed === true;
-    const ax = g.axes[0] ?? 0, ay = g.axes[1] ?? 0;
-    if (b(8)) pad |= 1;
-    if (b(9)) pad |= 2;
-    if (b(15) || ax > 0.5) pad |= 4;
-    if (b(14) || ax < -0.5) pad |= 8;
-    if (b(13) || ay > 0.5) pad |= 16;
-    if (b(12) || ay < -0.5) pad |= 32;
-    if (b(0) || b(1) || b(2) || b(3)) pad |= 64;
-  } else if (g) {
-    const b = (i) => g.buttons[i]?.pressed === true;
-    const ax = g.axes[0] ?? 0, ay = g.axes[1] ?? 0;
-    if (b(0) || b(1)) pad |= 1;
-    if (b(2) || b(3)) pad |= 2;
-    if (b(8)) pad |= 4;
-    if (b(9)) pad |= 8;
-    if (b(12) || ay < -0.5) pad |= 16;
-    if (b(13) || ay > 0.5) pad |= 32;
-    if (b(14) || ax < -0.5) pad |= 64;
-    if (b(15) || ax > 0.5) pad |= 128;
-  }
-  return pad;
+/** The buttons the game frame at time `t` reads (controls.js's take):
+ * controller 1's bits in the low byte, controller 2's in the next, as
+ * gp_play_step and the rebuild take them, with controller 1's buttons
+ * still down from closing a panel held off until they are let go. */
+function padAt(t) {
+  const pad = controls ? controls.take(t, performance.now()) : 0;
+  mask &= pad & 0xff;
+  return (pad & ~mask) >>> 0;
 }
 
 /** A pad as a frames file's line: controller 1's bits in hex, then
@@ -1128,7 +1091,7 @@ function settingsPadKeys() {
 function onSettings(m) {
   if (!liveRb) return;
   liveRb.settingsOpen = !!m.open;
-  if (m.open) { down.clear(); return; }
+  if (m.open) { controls?.clearKeys(); return; }
   mask = 0xff;
   if (typeof m.profile !== "string") return;
   keepProfile(m.profile);
@@ -2368,8 +2331,8 @@ window.addEventListener("keydown", (e) => {
   if (mode === "live" || mode === "recording") {
     const a = input && actionFor(modeKey(mode, liveRb?.kind), input, false);
     if (a) { e.preventDefault(); if (!e.repeat) doAction(a); return; }
-    if (KEYS.flat().includes(e.code) || KEYS2.flat().includes(e.code)) e.preventDefault();
-    down.add(e.code);
+    if (gameKey(e.code)) e.preventDefault();
+    controls?.keyDown(e.code, e.timeStamp);
     return;
   }
   // Every other state: the game is paused and only the table's inputs act.
@@ -2378,14 +2341,15 @@ window.addEventListener("keydown", (e) => {
   const a = actionFor(modeKey(mode, liveRb?.kind), input, typing);
   if (a && !e.repeat) doAction(a);
 }, { capture: true });
-window.addEventListener("keyup", (e) => down.delete(e.code));
-window.addEventListener("blur", () => down.clear());
+window.addEventListener("keyup", (e) => controls?.keyUp(e.code, e.timeStamp));
+window.addEventListener("blur", () => controls?.clearKeys());
 
-/** The game buttons pressed since the last read, by the same mapping the
- * game uses (a d-pad that reports as stick axes included). */
+/** Controller 1's game buttons pressed since the last read, by the same
+ * mapping the game uses (controls.js's: a d-pad that reports as stick axes
+ * and the arcade's right stick included). */
 let padPrev = 0;
 function gamePresses() {
-  const now = rawPad();
+  const now = (controls?.now() ?? 0) & 0xff;
   const fresh = now & ~padPrev;
   padPrev = now;
   const on = (name) => !!(fresh & LAYOUT.bit[name]);
@@ -2545,7 +2509,10 @@ function frame(now) {
       if (liveRb?.settingsOpen) {
         // The rebuild's settings screen is open: both games hold.
       } else if (mode === "live" || mode === "recording") {
-        const pad = padNow();
+        // The buttons at this game frame's own time, not at whatever
+        // moment the browser ran it: a late frame's catch-up steps each
+        // read their own.
+        const pad = padAt(now - acc);
         // The rebuild takes the frames the original read the pad on.
         const polled = player.step(0, pad);
         playFrame(0);
@@ -2624,7 +2591,7 @@ const IDLE_MS = 30000;
 let lastInput = performance.now();
 let idleFetching = false;
 function idleCheck() {
-  if (rawPad() !== 0 || rawPad2() !== 0) {
+  if (controls?.now()) {
     lastInput = performance.now();
     if (mode === "idle") leaveIdle();
     return;
@@ -2802,6 +2769,13 @@ async function main() {
   }
   player.power(0, rom);
   useMachine(player.info(0));
+  // The controls' module: when it isn't built the server says how to
+  // build it, and the page says that where the game would be.
+  controls = await openControls("gp_controls.wasm", player.info(0).platform === "arcade" ? "arcade" : "nes", savedInput()).catch(async (e) => {
+    const r = await fetch("gp_controls.wasm").catch(() => null);
+    throw r && !r.ok ? new Error(`the controls: ${await r.text()}`) : e;
+  });
+  controls.start();
   showSound();
   $("sound").addEventListener("click", (e) => { setSound(!soundOn); e.currentTarget.blur(); });
   refine = new RefineView({ $, api, fps: () => FPS, show: (c) => void refineShow(c), sessionClips: () => (session?.clips ?? []).map((c) => ({ mechanic: session.mechanic, clip: c.n, start: c.start, frames: c.frames })) });

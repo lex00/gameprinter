@@ -13,7 +13,7 @@
 //! |---|---|
 //! | `GET /`, `/app.js`, `/nesplayer.js`, `/style.css` | The page |
 //! | `GET /gp_play.wasm`, `/rom` | The player and the ROM |
-//! | `GET /gp_controls.wasm`, `/controls.js`, `/shell-keys.js` | The controls the screen page reads its keys and gamepads through (docs/controls.md): the module beside the player, or `$GP_CONTROLS_WASM`, and the public page's scripts |
+//! | `GET /gp_controls.wasm`, `/controls.js`, `/shell-keys.js` | The controls the page and the screen page read their keys and gamepads through (docs/controls.md): the module beside the player, or `$GP_CONTROLS_WASM`, and the public page's scripts |
 //! | `GET /api/session` | The open session's state ([`Session::state`]) |
 //! | `GET /api/working` | The mechanic the agent works on and its newest clip, for the idle screen |
 //! | `GET /api/clips/N.log` | A clip as its full log from power-on |
@@ -87,7 +87,7 @@ fn wasm_path(repo: &Path, platform: Platform) -> PathBuf {
         .map_or_else(|| repo.join("target/play-web").join(file), PathBuf::from)
 }
 
-/// The controls module the screen page reads its keys and gamepads
+/// The controls module the page and the screen page read their keys and gamepads
 /// through (crates/gp-controls): `$GP_CONTROLS_WASM`, else gp_controls.wasm
 /// beside the player, where scripts/web/build-play.sh builds it.
 fn controls_wasm_path(player: &Path) -> PathBuf {
@@ -1070,10 +1070,10 @@ fn handle(s: &Server, req: &Request) -> Result<Response> {
         // one screen, which the agent drives (gp_mcp::screen).
         ("GET" | "HEAD", "/screen.html") => page("screen.html", "text/html; charset=utf-8"),
         ("GET" | "HEAD", "/screen.js") => page("screen.js", "text/javascript; charset=utf-8"),
-        // screen.js reads the controls as the public page does: controls.js
-        // (which imports the shell's key table) on gp_controls.wasm
-        // (docs/controls.md). Without these routes the screen's script
-        // doesn't load at all and the page stays on LOADING.
+        // app.js and screen.js read the controls as the public page does:
+        // controls.js (which imports the shell's key table) on
+        // gp_controls.wasm (docs/controls.md). Without these routes their
+        // scripts don't load at all and the pages stay on LOADING.
         ("GET" | "HEAD", "/controls.js" | "/shell-keys.js") => {
             let dir = crate::repo::page_files(&s.repo, "scripts/web/page");
             Ok(Response::bytes(
@@ -3067,32 +3067,52 @@ mod tests {
         );
     }
 
-    /// The screen page's script parses as a module, and the controls'
-    /// test loads controls.js and the shell's key table (its cases run on
-    /// the module where `$GP_CONTROLS_WASM` names one; the page's release
-    /// check does). Skipped where there is no node.
+    /// The mechanic page's and the screen page's scripts parse as modules
+    /// and read the game's buttons through controls.js, with no gamepad
+    /// code of their own, and the controls' test loads controls.js and the
+    /// shell's key table (its cases run on the module where
+    /// `$GP_CONTROLS_WASM` names one; the page's release check does).
+    /// Skipped where there is no node.
     #[test]
-    fn the_screen_page_s_scripts_load() {
+    fn the_pages_scripts_load_on_the_shared_controls() {
         use std::io::Write as _;
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let screen = fs::read(root.join("mechanic/screen.js")).unwrap();
-        let child = std::process::Command::new("node")
-            .args(["--input-type=module", "--check"])
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .spawn();
-        let Ok(mut child) = child else {
-            eprintln!("skipped: no node");
-            return;
-        };
-        child.stdin.take().unwrap().write_all(&screen).unwrap();
-        let o = child.wait_with_output().unwrap();
-        assert!(
-            o.status.success(),
-            "screen.js: {}",
-            String::from_utf8_lossy(&o.stderr)
-        );
+        for page in ["app.js", "screen.js"] {
+            let text = fs::read_to_string(root.join("mechanic").join(page)).unwrap();
+            assert!(
+                text.contains("import { openControls } from \"./controls.js\";"),
+                "{page} reads its controls through controls.js"
+            );
+            for own in [
+                "function gamepadBits",
+                "function secondPad",
+                "function padNow",
+            ] {
+                assert!(!text.contains(own), "{page} still has {own}");
+            }
+            let child = std::process::Command::new("node")
+                .args(["--input-type=module", "--check"])
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .spawn();
+            let Ok(mut child) = child else {
+                eprintln!("skipped: no node");
+                return;
+            };
+            child
+                .stdin
+                .take()
+                .unwrap()
+                .write_all(text.as_bytes())
+                .unwrap();
+            let o = child.wait_with_output().unwrap();
+            assert!(
+                o.status.success(),
+                "{page}: {}",
+                String::from_utf8_lossy(&o.stderr)
+            );
+        }
         let o = std::process::Command::new("node")
             .arg("--test")
             .arg(root.join("scripts/web/page/controls.test.mjs"))
