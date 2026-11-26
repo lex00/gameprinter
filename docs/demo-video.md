@@ -27,6 +27,8 @@ A recording made in a browser has uneven time stamps: bring each to a steady rat
 
 A corpus clip often starts just after the sound of its scene does (a round's tune begins as the round is set up, a few frames before the clip's first). `GP_LEAD=N` before the command takes the clip from N frames before its start, as far back as its play reaches, and FROM and TO then count from there; the link option is `&lead=N`. A TO past the clip's end stops at its last frame.
 
+The lead must land on the start of an earlier clip of the same play. The model is started from the original's state at the first frame taken, and it keeps step from a corpus clip's start; started in the middle of a level, or in the moment between two, it drifts or stands still (measured 2026-11-25: leads of 150 and 400 frames before a round's clip left the model on the level before it). `api/screen/work-clip?id=CLIP` gives each clip's `start` and `frames`: clips whose start plus frames is the next one's start are one play, and the lead is the difference of the two starts. Record from a later FROM to skip most of the earlier clip.
+
 ## Cutting the video
 
 ```
