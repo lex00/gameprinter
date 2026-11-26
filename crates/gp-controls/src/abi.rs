@@ -69,3 +69,30 @@ pub extern "C" fn gp_controls_set(keys: u32, t: f64) -> u32 {
 pub extern "C" fn gp_controls_take(t: f64, now: f64) -> u32 {
     CONTROLS.with(|c| c.borrow_mut().take(t, now))
 }
+
+/// One of the settings as kept, inside its range: 0 the lead, 1 the
+/// assist (ms), 2 the lever's travel (a percent); NaN for another.
+#[unsafe(no_mangle)]
+pub extern "C" fn gp_controls_option(which: u32) -> f64 {
+    CONTROLS.with(|c| {
+        let o = c.borrow().options();
+        match which {
+            0 => o.lead_ms,
+            1 => o.assist_ms,
+            2 => o.stick_travel,
+            _ => f64::NAN,
+        }
+    })
+}
+
+/// The newest press let go: the ms it was held, -1 before the first.
+#[unsafe(no_mangle)]
+pub extern "C" fn gp_controls_last_ms() -> f64 {
+    CONTROLS.with(|c| c.borrow().last_press().map_or(-1.0, |p| p.0))
+}
+
+/// The frames that read the newest press let go: 0 before the first.
+#[unsafe(no_mangle)]
+pub extern "C" fn gp_controls_last_frames() -> u32 {
+    CONTROLS.with(|c| c.borrow().last_press().map_or(0, |p| p.1))
+}

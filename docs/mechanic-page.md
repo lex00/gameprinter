@@ -729,11 +729,13 @@ minute later.
 
 ## The controls' timing
 
-The screen keeps every change of the keys and the gamepad with the time it happened (`mechanic/input-timeline.js`), and each game frame reads the buttons at its own time. Before, the page read the controls once for each game frame it stepped, at whatever moment the browser ran the step. A late browser frame steps up to four game frames at once, and all four read the same buttons, so a short press counted as four frames or a release was seen four frames late. A press and release between two steps was never seen. The gamepad, which a page can only poll, was read no oftener than the screen was drawn.
+The screen keeps every change of the keys and the gamepad with the time it happened, and each game frame reads the buttons at its own time. Before, the page read the controls once for each game frame it stepped, at whatever moment the browser ran the step. A late browser frame steps up to four game frames at once, and all four read the same buttons, so a short press counted as four frames or a release was seen four frames late. A press and release between two steps was never seen. The gamepad, which a page can only poll, was read no oftener than the screen was drawn.
+
+Since 2026-11-25 the screen page reads them through the same code as the public page: `controls.js` on `gp_controls.wasm` ([docs/controls.md](controls.md)), which the page's server serves beside the screen (`scripts/web/build-play.sh` builds the module beside the player). A gamepad on the NES layout is the shell's table, as on the public page: A on the bottom button, B on the left and the right; before, the screen had A on the bottom and the right and B on the left and the top.
 
 A game still reads its controls once a frame, as the machine did: at 30 frames a second a pull of 150 ms is 4 frames or 5 by where it starts. That is the original's own timing and stays.
 
-CONTROLS' TIMING under the screens has three settings, kept in the browser, since controllers differ:
+CONTROLS' TIMING under the screens has these settings, kept in the browser, since controllers differ (GAME SPEED, how fast the game runs as you play it, is the screen's own; the others go to the module, which keeps each inside its range):
 
 | Setting | What it does | Default |
 |---|---|---|
@@ -741,6 +743,6 @@ CONTROLS' TIMING under the screens has three settings, kept in the browser, sinc
 | READ AHEAD | How far past a game frame's own time its reading may look, never past now. More answers sooner | 8 ms |
 | GAMEPAD READ EVERY | How often the gamepad is polled | 4 ms |
 
-The box says how the last press was read: the ms it was held and the frames that read it. `?assist=`, `?lead=` and `?poll=` in the page's address set them for one visit. `node --test mechanic/input-timeline.test.mjs` checks the rules (cargo test runs it).
+The box says how the last press was read: the ms it was held and the frames that read it, which the module counts (`gp_controls_last_ms`, `gp_controls_last_frames`). `?assist=`, `?lead=`, `?poll=`, `?stick=` and `?speed=` in the page's address set them for one visit. `cargo test -p gp-controls` checks the rules.
 
 Not done yet: the editor's free play (`editor/src/FreePlay.tsx`, `Scenarios.tsx`) and the public page's player (`scripts/web/page/preview.js`) still read the controls once a step.

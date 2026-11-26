@@ -81,17 +81,31 @@ export class Controls {
   }
 
   /** New settings: leadMs, assistMs, stickTravel (the module keeps each
-   * inside its range) and pollMs. */
+   * inside its range, and `opts` has them as it keeps them) and pollMs.
+   * One left out, or not a number, stays as it was. */
   setOptions(o = {}) {
     const num = (v, d) => (Number.isFinite(Number(v)) && v !== null && v !== "" ? Number(v) : d);
-    this.opts = {
+    const want = {
       leadMs: num(o.leadMs, this.opts.leadMs),
       assistMs: num(o.assistMs, this.opts.assistMs),
       stickTravel: num(o.stickTravel, this.opts.stickTravel),
+    };
+    this.x.gp_controls_options(want.leadMs, want.assistMs, want.stickTravel);
+    const kept = (i, v) => (this.x.gp_controls_option ? this.x.gp_controls_option(i) : v);
+    this.opts = {
+      leadMs: kept(0, want.leadMs),
+      assistMs: kept(1, want.assistMs),
+      stickTravel: kept(2, want.stickTravel),
       pollMs: Math.min(16, Math.max(1, num(o.pollMs, this.opts.pollMs))),
     };
-    this.x.gp_controls_options(this.opts.leadMs, this.opts.assistMs, this.opts.stickTravel);
     if (this.timer) this.start();
+  }
+
+  /** The newest press let go: `{ms, frames}`, the ms it was held (whole)
+   * and the frames that read it; null before the first. */
+  lastPress() {
+    const ms = this.x.gp_controls_last_ms?.() ?? -1;
+    return ms < 0 ? null : { ms: Math.round(ms), frames: this.x.gp_controls_last_frames() >>> 0 };
   }
 
   /** The keyboard's buttons in the layout's bits: controller 1 in the low

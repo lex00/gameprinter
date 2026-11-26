@@ -233,6 +233,31 @@ pub struct Timeline {
     taken: f64,
     /// The buttons the last frame taken read.
     prev: u32,
+    /// Each button's press still counted, by its bit: held now, or let go
+    /// after the last frame's reading.
+    open: BTreeMap<u32, Press>,
+    /// The newest press let go, for the page's own measure.
+    last: Option<LastPress>,
+}
+
+/// A press being counted: when it went down, when it came up, and the
+/// frames that have read it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Press {
+    down: f64,
+    up: Option<f64>,
+    frames: u32,
+}
+
+/// The newest press let go: its button, how long it was held and the
+/// frames that read it; `counting` while its [`Press`] is still open, so a
+/// frame that reads it after the release still counts.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct LastPress {
+    bit: u32,
+    ms: f64,
+    frames: u32,
+    counting: bool,
 }
 
 impl Default for Timeline {
@@ -249,6 +274,8 @@ impl Timeline {
             changes: vec![(f64::NEG_INFINITY, 0)],
             taken: f64::NEG_INFINITY,
             prev: 0,
+            open: BTreeMap::new(),
+            last: None,
         }
     }
 
@@ -262,6 +289,43 @@ impl Timeline {
         // from two clocks (an event's, a poll's) never reorder what
         // happened.
         self.changes.push((t.max(last_t), bits));
+        for i in 0..32 {
+            let b = 1u32 << i;
+            if bits & b != 0 && last & b == 0 {
+                // A new press of the newest one's button: that one's count
+                // is done.
+                if let Some(l) = self.last.as_mut().filter(|l| l.bit == b) {
+                    l.counting = false;
+                }
+                self.open.insert(
+                    b,
+                    Press {
+                        down: t,
+                        up: None,
+                        frames: 0,
+                    },
+                );
+            }
+            if bits & b == 0
+                && last & b != 0
+                && let Some(o) = self.open.get_mut(&b)
+            {
+                o.up = Some(t);
+                self.last = Some(LastPress {
+                    bit: b,
+                    ms: t - o.down,
+                    frames: o.frames,
+                    counting: true,
+                });
+            }
+        }
+    }
+
+    /// The newest press let go: the ms it was held and the frames that
+    /// read it. None before the first.
+    #[must_use]
+    pub fn last_press(&self) -> Option<(f64, u32)> {
+        self.last.map(|l| (l.ms, l.frames))
     }
 
     /// The buttons at time `t`, with each release put off by the assist.
@@ -310,6 +374,20 @@ impl Timeline {
             }
         }
         bits |= tapped & !self.prev;
+        let last = &mut self.last;
+        self.open.retain(|&b, o| {
+            if bits & b != 0 {
+                o.frames += 1;
+                if let Some(l) = last.as_mut().filter(|l| l.bit == b && l.counting) {
+                    l.frames = o.frames;
+                }
+            }
+            let done = o.up.is_some_and(|up| up <= read);
+            if done && let Some(l) = last.as_mut().filter(|l| l.bit == b) {
+                l.counting = false;
+            }
+            !done
+        });
         self.taken = read;
         self.prev = bits;
         // Changes older than the assist's reach behind this frame are done.
@@ -373,6 +451,13 @@ impl Controls {
     /// The buttons the game frame at time `t` reads, at `now`.
     pub fn take(&mut self, t: f64, now: f64) -> u32 {
         self.timeline.take(t, now)
+    }
+
+    /// The newest press let go: the ms it was held and the frames that
+    /// read it.
+    #[must_use]
+    pub fn last_press(&self) -> Option<(f64, u32)> {
+        self.timeline.last_press()
     }
 }
 
@@ -516,6 +601,35 @@ mod tests {
         t.set(0, 10.0);
         assert_eq!(t.at(25.0), 1, "let go 15 ms before");
         assert_eq!(t.at(31.0), 0);
+    }
+
+    /// The newest press: the ms it was held and the frames that read it,
+    /// counting a frame that reads it after it was let go.
+    #[test]
+    fn the_newest_press_is_its_ms_and_its_frames() {
+        let mut t = Timeline::new(Options {
+            lead_ms: 0.0,
+            ..Options::default()
+        });
+        assert_eq!(t.last_press(), None);
+        // Held from 10 to 80 ms: read by the frames at 33 and 66.
+        t.set(64, 10.0);
+        assert_eq!(t.take(0.0, 5.0), 0);
+        assert_eq!(t.take(33.0, 40.0), 64);
+        assert_eq!(t.take(66.0, 70.0), 64);
+        t.set(0, 80.0);
+        assert_eq!(t.last_press(), Some((70.0, 2)));
+        assert_eq!(t.take(99.0, 100.0), 0);
+        assert_eq!(t.last_press(), Some((70.0, 2)));
+        // A tap between two frames, let go before the next reads it: that
+        // frame still counts it.
+        t.set(1, 105.0);
+        t.set(0, 110.0);
+        assert_eq!(t.last_press(), Some((5.0, 0)));
+        assert_eq!(t.take(132.0, 133.0), 1);
+        assert_eq!(t.last_press(), Some((5.0, 1)));
+        assert_eq!(t.take(165.0, 166.0), 0);
+        assert_eq!(t.last_press(), Some((5.0, 1)));
     }
 
     /// The whole of it: pads and keys in, frames' buttons out.

@@ -283,12 +283,12 @@ s=$?
 node --test "$repo/scripts/web/public/explain.test.mjs"
 s=$?
 [ $s -eq 0 ] || fail+=("the page's What is this? answers (explain.test.mjs, exit $s)")
-# The page's controls (gp_controls.wasm, as built for this page) against
-# the screen page's own rules, mechanic/input-timeline.js: the same hand
-# gives every game frame the same buttons on both (docs/controls.md).
+# The page's controls (gp_controls.wasm, as built for this page) through
+# fixed cases of the rules the owner tuned on the screen page, which reads
+# its controls through the same module (docs/controls.md).
 GP_CONTROLS_WASM="$out/game/gp_controls.wasm" node --test "$repo/scripts/web/page/controls.test.mjs"
 s=$?
-[ $s -eq 0 ] || fail+=("the page's controls against the screen page's (controls.test.mjs, exit $s)")
+[ $s -eq 0 ] || fail+=("the page's controls (controls.test.mjs, exit $s)")
 
 step "gp package scan on the game's package"
 # A scan reads the package's folder, the ROMs in $GP_ROM_DIR and gp. Only

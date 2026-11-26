@@ -13,6 +13,7 @@
 //! |---|---|
 //! | `GET /`, `/app.js`, `/nesplayer.js`, `/style.css` | The page |
 //! | `GET /gp_play.wasm`, `/rom` | The player and the ROM |
+//! | `GET /gp_controls.wasm`, `/controls.js`, `/shell-keys.js` | The controls the screen page reads its keys and gamepads through (docs/controls.md): the module beside the player, or `$GP_CONTROLS_WASM`, and the public page's scripts |
 //! | `GET /api/session` | The open session's state ([`Session::state`]) |
 //! | `GET /api/working` | The mechanic the agent works on and its newest clip, for the idle screen |
 //! | `GET /api/clips/N.log` | A clip as its full log from power-on |
@@ -84,6 +85,15 @@ fn wasm_path(repo: &Path, platform: Platform) -> PathBuf {
     std::env::var_os(var)
         .filter(|v| !v.is_empty())
         .map_or_else(|| repo.join("target/play-web").join(file), PathBuf::from)
+}
+
+/// The controls module the screen page reads its keys and gamepads
+/// through (crates/gp-controls): `$GP_CONTROLS_WASM`, else gp_controls.wasm
+/// beside the player, where scripts/web/build-play.sh builds it.
+fn controls_wasm_path(player: &Path) -> PathBuf {
+    std::env::var_os("GP_CONTROLS_WASM")
+        .filter(|v| !v.is_empty())
+        .map_or_else(|| player.with_file_name("gp_controls.wasm"), PathBuf::from)
 }
 
 /// A game's ROM sets: its roms.toml's sources, the package's scored set
@@ -1060,10 +1070,29 @@ fn handle(s: &Server, req: &Request) -> Result<Response> {
         // one screen, which the agent drives (gp_mcp::screen).
         ("GET" | "HEAD", "/screen.html") => page("screen.html", "text/html; charset=utf-8"),
         ("GET" | "HEAD", "/screen.js") => page("screen.js", "text/javascript; charset=utf-8"),
-        // screen.js imports it: without this route the screen's script
+        // screen.js reads the controls as the public page does: controls.js
+        // (which imports the shell's key table) on gp_controls.wasm
+        // (docs/controls.md). Without these routes the screen's script
         // doesn't load at all and the page stays on LOADING.
-        ("GET" | "HEAD", "/input-timeline.js") => {
-            page("input-timeline.js", "text/javascript; charset=utf-8")
+        ("GET" | "HEAD", "/controls.js" | "/shell-keys.js") => {
+            let dir = crate::repo::page_files(&s.repo, "scripts/web/page");
+            Ok(Response::bytes(
+                "text/javascript; charset=utf-8",
+                fs::read(dir.join(&req.path[1..]))?,
+            ))
+        }
+        ("GET" | "HEAD", "/gp_controls.wasm") => {
+            let p = controls_wasm_path(&s.wasm);
+            match fs::read(&p) {
+                Ok(b) => Ok(Response::bytes("application/wasm", b)),
+                Err(_) => Ok(Response::error(
+                    404,
+                    &format!(
+                        "the controls module isn't built: run scripts/web/build-play.sh (no {})",
+                        p.display()
+                    ),
+                )),
+            }
         }
         ("GET" | "HEAD", "/screen.css") => page("screen.css", "text/css; charset=utf-8"),
         ("GET" | "HEAD", "/api/screen") => screen_state(s),
@@ -2995,26 +3024,91 @@ mod tests {
         }
     }
 
-    /// The controls' timing (mechanic/input-timeline.test.mjs): a late
-    /// browser frame doesn't stretch a press, a quick tap is read once, the
-    /// same pull reads the same whatever the browser's phase. Skipped where
-    /// there is no node.
+    /// The screen page reads its controls as the public page does: the
+    /// public page's controls.js and the shell's key table, and
+    /// gp_controls.wasm from beside the player, or its absence in words.
     #[test]
-    fn the_page_reads_a_press_at_its_own_time() {
-        let test =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../mechanic/input-timeline.test.mjs");
-        match std::process::Command::new("node")
+    fn the_screen_page_gets_the_shared_controls() {
+        let d = tempfile::tempdir().unwrap();
+        let mut srv = server(d.path());
+        let scripts = d.path().join("repo/scripts/web/page");
+        fs::create_dir_all(&scripts).unwrap();
+        for f in ["controls.js", "shell-keys.js"] {
+            fs::write(scripts.join(f), format!("the page's {f}")).unwrap();
+            let (s, kind, body) = call(&srv, "GET", &format!("/{f}"), None);
+            assert_eq!(
+                (s, kind.as_str(), body.as_str()),
+                (
+                    200,
+                    "text/javascript; charset=utf-8",
+                    format!("the page's {f}").as_str()
+                )
+            );
+        }
+        assert_eq!(
+            get(&srv, "/input-timeline.js").0,
+            404,
+            "the old copy is gone"
+        );
+        // The module beside the player, unless $GP_CONTROLS_WASM names one.
+        if std::env::var_os("GP_CONTROLS_WASM").is_some() {
+            return;
+        }
+        srv.wasm = d.path().join("play/gp_arcade_play.wasm");
+        let (s, body) = get(&srv, "/gp_controls.wasm");
+        assert_eq!(s, 404, "{body}");
+        assert!(body.contains("run scripts/web/build-play.sh"), "{body}");
+        fs::create_dir_all(d.path().join("play")).unwrap();
+        fs::write(d.path().join("play/gp_controls.wasm"), "the module").unwrap();
+        let (s, kind, body) = call(&srv, "GET", "/gp_controls.wasm", None);
+        assert_eq!(
+            (s, kind.as_str(), body.as_str()),
+            (200, "application/wasm", "the module")
+        );
+    }
+
+    /// The screen page's script parses as a module, and the controls'
+    /// test loads controls.js and the shell's key table (its cases run on
+    /// the module where `$GP_CONTROLS_WASM` names one; the page's release
+    /// check does). Skipped where there is no node.
+    #[test]
+    fn the_screen_page_s_scripts_load() {
+        use std::io::Write as _;
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let screen = fs::read(root.join("mechanic/screen.js")).unwrap();
+        let child = std::process::Command::new("node")
+            .args(["--input-type=module", "--check"])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn();
+        let Ok(mut child) = child else {
+            eprintln!("skipped: no node");
+            return;
+        };
+        child.stdin.take().unwrap().write_all(&screen).unwrap();
+        let o = child.wait_with_output().unwrap();
+        assert!(
+            o.status.success(),
+            "screen.js: {}",
+            String::from_utf8_lossy(&o.stderr)
+        );
+        let o = std::process::Command::new("node")
             .arg("--test")
-            .arg(&test)
+            .arg(root.join("scripts/web/page/controls.test.mjs"))
             .output()
-        {
-            Ok(o) => assert!(
-                o.status.success(),
-                "{}{}",
-                String::from_utf8_lossy(&o.stdout),
-                String::from_utf8_lossy(&o.stderr)
-            ),
-            Err(_) => eprintln!("skipped: no node"),
+            .unwrap();
+        let out = String::from_utf8_lossy(&o.stdout);
+        assert!(
+            o.status.success(),
+            "{out}{}",
+            String::from_utf8_lossy(&o.stderr)
+        );
+        if std::env::var_os("GP_CONTROLS_WASM").is_some_and(|v| !v.is_empty()) {
+            assert!(
+                out.contains("skipped 0"),
+                "a module named, every case runs: {out}"
+            );
         }
     }
 

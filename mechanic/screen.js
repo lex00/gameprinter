@@ -48,7 +48,12 @@
 
 import { NesPlayer } from "./nesplayer.js";
 import { waitForModel } from "./model-load.js";
-import { InputTimeline, StickPull, settings as inputSettings } from "./input-timeline.js";
+// The controls are read as the public page reads them: controls.js hands
+// the keys and gamepads to gp_controls.wasm (crates/gp-controls), which
+// decides the buttons each game frame reads (docs/controls.md). The server
+// serves both, and the shell's key table controls.js reads, beside this
+// page.
+import { openControls } from "./controls.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -92,20 +97,16 @@ function shortText(cls, text) {
   return s;
 }
 
-// The machine's keys, as app.js's LAYOUTS have them: each button's keys in
-// the order of the player's bits.
+// Each machine's frame rate and the line under the screens; its keys are
+// controls.js's LAYOUTS, the shell's table.
 const LAYOUTS = {
   nes: {
     fps: 60.0988,
-    keys: [["KeyX", "Space"], ["KeyZ", "ShiftLeft"], ["ShiftRight", "Tab"], ["Enter"], ["ArrowUp", "KeyW"], ["ArrowDown", "KeyS"], ["ArrowLeft", "KeyA"], ["ArrowRight", "KeyD"]],
-    keys2: [["KeyM"], ["KeyN"], ["KeyH"], ["KeyY"], ["KeyI"], ["KeyK"], ["KeyJ"], ["KeyL"]],
     footer: "Arrows move, X is A, Z is B, Enter is Start. R records. U turns the sound off and on.",
   },
   arcade: {
     fps: 30,
-    keys: [["Digit5"], ["Digit1"], ["ArrowRight", "KeyD"], ["ArrowLeft", "KeyA"], ["ArrowDown", "KeyS"], ["ArrowUp", "KeyW"], ["KeyX", "Space"]],
-    keys2: [],
-    footer: "5 drops a coin and 1 starts. Arrows move, X or Space taps. On a controller: Select is the coin, Start starts, A or the right stick taps. R records. U turns the sound off and on.",
+    footer: "5 drops a coin and 1 starts. Arrows move, X or Space taps. On a controller: Select is the coin, Start starts, any face button or the right stick taps. R records. U turns the sound off and on.",
   },
 };
 let LAYOUT = LAYOUTS.nes;
@@ -142,8 +143,6 @@ function clipName(name, log) {
   const set = setOf(log);
   return set ? `${name} (ON ${set.toUpperCase()})` : name;
 }
-const down = new Set();
-
 // What is shown. `by` is who chose it last: the agent's ask or the person.
 const show = { view: "side", opacity: 0.5, pictures: "game", by: "person" };
 let mode = "live"; // live | clip
@@ -390,121 +389,64 @@ function talk(body) {
 
 // Controls -------------------------------------------------------------
 
+/** The first connected gamepad, for the settings screen's own keys. */
 function firstPad() {
   for (const g of navigator.getGamepads?.() ?? []) if (g && g.connected) return g;
   return null;
 }
-function secondPad() {
-  let n = 0;
-  for (const g of navigator.getGamepads?.() ?? []) if (g && g.connected && n++ === 1) return g;
-  return null;
+/** The controls (controls.js on gp_controls.wasm), once main opened them:
+ * the keys and gamepads in, each game frame's buttons out. */
+let controls = null;
+/** Whether a key is one of the game's in the machine's layout. */
+function gameKey(code) {
+  const l = controls?.layout;
+  return !!l && (l.keys.some((ks) => ks.includes(code)) || l.keys2.some((ks) => ks.includes(code)));
 }
-/** The second stick's axes that have been seen at rest near the middle, by
- * gamepad: an axis that rests at an end (a trigger some controllers report
- * as an axis) never counts as a pull. */
-const stickRested = new Map();
-/** Whether the gamepad's second stick is pushed any way: on the arcade
- * layout that is the tap, as the cabinet's tap handle was a second stick. */
-function secondStick(g) {
-  let seen = stickRested.get(g.index);
-  if (!seen) stickRested.set(g.index, (seen = new Set()));
-  // How far out the stick is, over the axes that have been seen at rest.
-  let m = 0;
-  for (const i of [2, 3]) {
-    const v = g.axes[i];
-    if (typeof v !== "number") continue;
-    if (Math.abs(v) < 0.2) seen.add(i);
-    if (seen.has(i)) m = Math.max(m, Math.abs(v));
-  }
-  // Read by its travel (input-timeline.js's StickPull): pulled as it goes
-  // out, let go at the first of its travel home.
-  let pull = stickPulls.get(g.index);
-  if (!pull || pull.travel !== timeline.opts.stickTravel / 100) stickPulls.set(g.index, (pull = new StickPull(timeline.opts.stickTravel)));
-  return pull.read(Math.min(1, m));
-}
-const stickPulls = new Map();
-/** A gamepad as the machine's bits (app.js's gamepadBits). */
-function gamepadBits(g) {
-  let pad = 0;
-  if (!g) return 0;
-  const b = (i) => g.buttons[i]?.pressed === true;
-  const ax = g.axes[0] ?? 0, ay = g.axes[1] ?? 0;
-  if (LAYOUT === LAYOUTS.arcade) {
-    if (b(8)) pad |= 1;
-    if (b(9)) pad |= 2;
-    if (b(15) || ax > 0.5) pad |= 4;
-    if (b(14) || ax < -0.5) pad |= 8;
-    if (b(13) || ay > 0.5) pad |= 16;
-    if (b(12) || ay < -0.5) pad |= 32;
-    if (b(0) || b(1) || b(2) || b(3) || secondStick(g)) pad |= 64;
-  } else {
-    if (b(0) || b(1)) pad |= 1;
-    if (b(2) || b(3)) pad |= 2;
-    if (b(8)) pad |= 4;
-    if (b(9)) pad |= 8;
-    if (b(12) || ay < -0.5) pad |= 16;
-    if (b(13) || ay > 0.5) pad |= 32;
-    if (b(14) || ax < -0.5) pad |= 64;
-    if (b(15) || ax > 0.5) pad |= 128;
-  }
-  return pad;
-}
-/** Both controllers: controller 1 in the low byte, 2 in the next. */
-function padNow() {
-  let p1 = 0, p2 = 0;
-  LAYOUT.keys.forEach((ks, bit) => { if (ks.some((k) => down.has(k))) p1 |= 1 << bit; });
-  LAYOUT.keys2.forEach((ks, bit) => { if (ks.some((k) => down.has(k))) p2 |= 1 << bit; });
-  p1 |= gamepadBits(firstPad());
-  if (LAYOUT.keys2.length) p2 |= gamepadBits(secondPad());
-  return p1 | (p2 << 8);
-}
-// The controls' timing (input-timeline.js): every change of the keys and
+// The controls' timing (docs/controls.md): every change of the keys and
 // the gamepad is kept with its time, and each game frame reads the buttons
-// at its own time. The settings are the person's, kept in this browser.
+// at its own time. The settings are the person's, kept in this browser;
+// the module keeps the lead, the assist and the lever's travel inside
+// their ranges, controls.js the poll. The game's speed is this page's.
 const INPUT_KEY = "gp-input";
+const SPEED = { lo: 25, hi: 100, otherwise: 100 };
+const speedOf = (v) => (Number.isFinite(Number(v)) && v !== null && v !== "" ? Math.min(SPEED.hi, Math.max(SPEED.lo, Number(v))) : SPEED.otherwise);
 function savedInput() {
   let saved = null;
   try { saved = JSON.parse(localStorage.getItem(INPUT_KEY) ?? "null"); } catch (e) { /* none kept */ }
   const q = new URLSearchParams(location.search);
   const over = {};
   for (const [param, key] of [["lead", "leadMs"], ["assist", "assistMs"], ["poll", "pollMs"], ["stick", "stickTravel"], ["speed", "speed"]]) if (q.has(param)) over[key] = q.get(param);
-  return inputSettings({ ...(saved ?? {}), ...over });
+  return { ...(saved && typeof saved === "object" ? saved : {}), ...over };
 }
-const timeline = new InputTimeline(savedInput());
-/** The controls changed, or may have: the timeline hears what they are at
- * time `t`. */
-function noteInput(t) { timeline.set(padNow(), t); }
-let padPoll = 0;
-/** A gamepad can only be polled: this does, every pollMs. */
-function pollPads() {
-  clearInterval(padPoll);
-  padPoll = setInterval(() => noteInput(performance.now()), timeline.opts.pollMs);
-}
-/** The CONTROLS' TIMING box under the screens: the three settings, and how
- * the last press was read. */
+/** The game's speed when you play it, as a percent of its own. */
+let speed = speedOf(savedInput().speed);
+/** The settings as kept: the controls' and the speed. */
+const inputNow = () => ({ ...(controls?.opts ?? {}), speed });
+/** The CONTROLS' TIMING box under the screens: the settings, and how the
+ * last press was read. */
 function wireInput() {
+  controls.start();
   const box = $("input-set");
   if (!box) return;
   const fields = { leadMs: $("input-lead"), assistMs: $("input-assist"), pollMs: $("input-poll"), stickTravel: $("input-stick"), speed: $("input-speed") };
   for (const [k, el] of Object.entries(fields)) {
     if (!el) continue;
-    el.value = String(timeline.opts[k]);
+    el.value = String(inputNow()[k]);
     el.addEventListener("change", () => {
-      timeline.opts = inputSettings({ ...timeline.opts, [k]: el.value });
-      el.value = String(timeline.opts[k]);
-      try { localStorage.setItem(INPUT_KEY, JSON.stringify(timeline.opts)); } catch (e) { /* not kept */ }
-      pollPads();
+      if (k === "speed") speed = speedOf(el.value);
+      else controls.setOptions({ [k]: el.value });
+      el.value = String(inputNow()[k]);
+      try { localStorage.setItem(INPUT_KEY, JSON.stringify(inputNow())); } catch (e) { /* not kept */ }
     });
     // A setting's box takes the keys typed in it, not the game.
     el.addEventListener("keydown", (ev) => ev.stopPropagation());
   }
-  pollPads();
 }
 let inputShown = "";
 /** Says how the last press was read, when it changed. */
 function showLastPress() {
   const el = $("input-last");
-  const p = timeline.lastPress();
+  const p = controls?.lastPress();
   if (!el || !p) return;
   const says = `Last press: held ${p.ms} ms, read for ${p.frames} ${p.frames === 1 ? "frame" : "frames"} (a frame is ${Math.round(1000 / FPS)} ms).`;
   if (says !== inputShown) { inputShown = says; el.textContent = says; }
@@ -664,7 +606,7 @@ function openSettings() {
 function onSettings(m) {
   settingsScreen.open = !!m.open;
   document.body.dataset.settings = settingsScreen.open ? "open" : "";
-  if (m.open) { down.clear(); noteInput(performance.now()); return; }
+  if (m.open) { controls?.clearKeys(); return; }
   if (typeof m.profile !== "string") return;
   try { localStorage.setItem(settingsKey(), m.profile); } catch (e) { /* not kept */ }
   if (m.restart && show.view === "solo") {
@@ -3297,7 +3239,8 @@ let acc = 0, last = performance.now();
 function frame(now) {
   // A game frame's length: the game's own, or longer when the person plays
   // it slowed (CONTROLS' TIMING's GAME SPEED). A clip plays at its own.
-  const step = (1000 / FPS) * (mode === "live" ? 100 / timeline.opts.speed : 1);
+  const step = (1000 / FPS) * (mode === "live" ? 100 / speed : 1);
+  const take = (t) => (controls ? controls.take(t, performance.now()) : 0);
   acc = Math.min(acc + (now - last), step * 4);
   last = now;
   try {
@@ -3305,13 +3248,13 @@ function frame(now) {
       acc -= step;
       if (mode === "live" && show.view === "solo") {
         // The model alone takes every frame; the original holds.
-        const pad = timeline.take(now - acc, performance.now());
+        const pad = take(now - acc);
         if (model.on && model.free && !settingsScreen.open) model.queue.push(pad);
       } else if (mode === "live") {
         // The buttons at this game frame's own time, not at whatever
         // moment the browser ran it: a late frame's catch-up steps each
         // read their own.
-        const pad = timeline.take(now - acc, performance.now());
+        const pad = take(now - acc);
         if (pad) lastPlay = now;
         // The model takes the frames the original read the pad on; while
         // it starts they wait in the queue. Their draws go with them.
@@ -3325,8 +3268,8 @@ function frame(now) {
       }
     }
     // A controller's button while the screen follows the work.
-    if (mode === "clip" && clip?.work && (gamepadBits(firstPad()) || (LAYOUT.keys2.length && gamepadBits(secondPad())))) personPressed();
-    if (mode === "live" && show.view === "solo" && padNow()) lastPlay = now;
+    if (mode === "clip" && clip?.work && controls?.padBits()) personPressed();
+    if (mode === "live" && show.view === "solo" && controls?.now()) lastPlay = now;
     // The settings screen from a controller: the right stick's press opens
     // it, and while it is open the d-pad, A and B are its keys.
     if (settingsCan() || settingsScreen.open) {
@@ -3394,10 +3337,10 @@ window.addEventListener("keydown", (e) => {
   // Following the work, a game button other than the clip's own keys
   // (Esc, Space, Enter, Left, Right) goes back to playing.
   const clipKeys = ["Escape", "Space", "Enter", "ArrowLeft", "ArrowRight"];
-  if (mode === "clip" && clip?.work && !clipKeys.includes(e.code) && (LAYOUT.keys.flat().includes(e.code) || LAYOUT.keys2.flat().includes(e.code))) {
+  if (mode === "clip" && clip?.work && !clipKeys.includes(e.code) && gameKey(e.code)) {
     e.preventDefault();
     personPressed();
-    down.add(e.code);
+    controls?.keyDown(e.code, e.timeStamp);
     return;
   }
   if (mode === "clip") {
@@ -3408,13 +3351,11 @@ window.addEventListener("keydown", (e) => {
     else if (e.code === "ArrowLeft" || e.code === "ArrowRight") { e.preventDefault(); playClip(false); seekClip((clip?.f ?? 0) + (e.code === "ArrowLeft" ? -1 : 1)); }
     return;
   }
-  if (LAYOUT.keys.flat().includes(e.code) || LAYOUT.keys2.flat().includes(e.code)) e.preventDefault();
-  down.add(e.code);
+  if (gameKey(e.code)) e.preventDefault();
+  controls?.keyDown(e.code, e.timeStamp);
 }, { capture: true });
-window.addEventListener("keyup", (e) => { down.delete(e.code); noteInput(e.timeStamp); });
-window.addEventListener("blur", () => { down.clear(); noteInput(performance.now()); });
-// After the handler above has set the keys that are down, in the same turn.
-window.addEventListener("keydown", (e) => noteInput(e.timeStamp));
+window.addEventListener("keyup", (e) => controls?.keyUp(e.code, e.timeStamp));
+window.addEventListener("blur", () => controls?.clearKeys());
 
 function wire() {
   for (const b of document.querySelectorAll("#views button")) {
@@ -3490,6 +3431,7 @@ async function main() {
   $("model-frame").style.width = `${W}px`;
   $("model-frame").style.height = `${H}px`;
   $("keys").textContent = LAYOUT.footer;
+  controls = await openControls("gp_controls.wasm", info.platform === "arcade" ? "arcade" : "nes", savedInput());
   wireInput();
   $("settings-open")?.addEventListener("click", (ev) => { ev.currentTarget.blur(); openSettings(); });
   session = await api("api/session").catch(() => null);
