@@ -3529,6 +3529,20 @@ async function main() {
     else applied = a.seq;
   }
   if (mode === "live") await loadModel();
+  // A link's own clip (?work=ID&from=A&to=B): the corpus clip ID set up on
+  // the screens with frames A to B of it played in a loop, as a card's
+  // LOOK AT IT sets one up, for a script that records the screens
+  // (scripts/web/demo-record.mjs). The page says when it is up:
+  // document.body.dataset.work is the clip's id.
+  if (asked.get("work")) {
+    const lo = Number(asked.get("from") ?? 0) || 0;
+    const hi = Number(asked.get("to") ?? lo) || lo;
+    try {
+      await openWorkClip(asked.get("work"), lo, hi);
+      show.by = "person";
+      document.body.dataset.work = asked.get("work");
+    } catch (e) { fault(`Couldn't open the clip ${asked.get("work")}: ${e.message ?? e}`, 15000); }
+  }
   report();
   setInterval(() => void poll(), 1000);
   setInterval(() => void watchBuild(), 4000);
