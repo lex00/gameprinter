@@ -464,7 +464,8 @@ pub(crate) fn says_yes(text: &str) -> bool {
 /// `confirmed` (when, and the words they said), and gp serve's runner
 /// locks it with no worker (serve/runner.rs, `run_confirms`). `typed`: the
 /// yes was their answer in the row's talk, whose turn has just set the row
-/// agent working. A yes on a look `game`'s approved.toml has saved already
+/// agent working, or next with nobody on it (mechanic::session::nobody_on).
+/// A yes on a look `game`'s approved.toml has saved already
 /// (`looks`, [`saved`]) locks nothing: the row goes done saying so.
 pub(crate) fn confirm(
     qf: &Path,
@@ -483,7 +484,7 @@ pub(crate) fn confirm(
         return Ok(r.clone());
     }
     let mut asked = r.clone();
-    if typed && asked["status"] == json!("agent working") {
+    if typed && matches!(asked["status"].as_str(), Some("agent working" | "next")) {
         asked["status"] = json!("asking you");
     }
     if !confirmable(&asked) {
@@ -506,6 +507,22 @@ pub(crate) fn confirm(
         let out = r.clone();
         write_queue(qf, &q)?;
         return Ok(out);
+    }
+    // The yes's turn put its words on the row for a worker
+    // (mechanic::session::answered_row): the runner locks it with none.
+    if typed && let Some(w) = o.remove("answered") {
+        let w = w.as_str().unwrap_or("");
+        let note = o.get("note").and_then(Value::as_str).unwrap_or("");
+        let bare = note
+            .strip_prefix(&crate::mechanic::session::answered_words(w))
+            .unwrap_or(note)
+            .trim_start()
+            .to_owned();
+        o.insert("note".into(), json!(bare));
+        o.insert(
+            "plain".into(),
+            json!("You said it looks right. Saving it now."),
+        );
     }
     if !o.contains_key("asked") {
         o.insert("asked".into(), o.get("note").cloned().unwrap_or(json!("")));

@@ -94,6 +94,80 @@ pub(crate) fn write_queue(f: &Path, q: &[Value]) -> Result<()> {
     Ok(())
 }
 
+/// Whether nobody works quest-log row `r` of `game` while the loop's
+/// runner does the work for `home`: it is on, the row has no worker of its
+/// own (`worker`, a session's by hand or a loop worker's) and no live
+/// worker of the runner's holds `row:GAME/ROW`. The person's turn on such a
+/// row would set it "agent working" with no agent at it: on 2026-11-25
+/// space-bar-lights sat so for five minutes after the owner's answer, the
+/// page showing AGENT WORKING and nobody on it, and the owner took their
+/// words for lost (answer-on-a-look-row-was-lost). With the runner off, a
+/// session at the page answers the row's talk itself, and the row is its.
+pub(crate) fn nobody_on(home: &Path, game: &str, r: &Value) -> bool {
+    if !gp_mcp::steps::settings(home).runner.on {
+        return false;
+    }
+    if r["worker"].as_str().is_some_and(|w| !w.trim().is_empty()) {
+        return false;
+    }
+    let me = format!("row:{game}/{}", r["mechanic"].as_str().unwrap_or(""));
+    !gp_mcp::steps::held(home).iter().any(|s| {
+        s["touches"]
+            .as_array()
+            .is_some_and(|t| t.iter().any(|t| t == &json!(me)))
+    })
+}
+
+/// The words a row's note starts with when the person answered `w` in its
+/// talk, as the step for it says them (crate::steps::row_steps).
+pub(crate) fn answered_words(w: &str) -> String {
+    format!("{ANSWERED}\"{w}\". Act on it now.")
+}
+
+/// How [`answered_words`] start.
+pub(crate) const ANSWERED: &str = "The person answered in the row's talk: ";
+
+/// Row `r` after the person answered `words` in its talk with nobody at
+/// work on it ([`nobody_on`]): next, for the loop's next worker, with their
+/// words at the front of its note (an earlier answer's taken off) and its
+/// plain line saying they are kept. The person's own note stays theirs
+/// (`asked`), as gp mechanic queue keeps it. A park ends.
+pub(crate) fn answered_row(r: &mut Value, words: &str) {
+    let w = crate::next::cut(words, 300);
+    let Some(o) = r.as_object_mut() else { return };
+    if o.get("by") == Some(&json!("person")) && !o.contains_key("asked") {
+        let said = o.get("note").cloned().unwrap_or(json!(""));
+        o.insert("asked".into(), said);
+    }
+    let note = o
+        .get("note")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_owned();
+    let rest = match o.get("answered").and_then(Value::as_str) {
+        Some(prev) => note
+            .strip_prefix(&answered_words(prev))
+            .unwrap_or(&note)
+            .trim_start()
+            .to_owned(),
+        None => note,
+    };
+    o.insert(
+        "note".into(),
+        json!(format!("{} {rest}", answered_words(&w)).trim_end()),
+    );
+    o.insert("answered".into(), json!(w));
+    o.insert(
+        "plain".into(),
+        json!(format!(
+            "You said \"{}\": it is kept on this row, and the loop's next worker takes it up.",
+            crate::next::cut(&w, 120)
+        )),
+    );
+    o.insert("status".into(), json!("next"));
+    o.remove("parked");
+}
+
 /// The mechanic the person has open in the page.
 pub(crate) fn current(paths: &Paths, game: &str) -> Result<String> {
     let f = game_dir(paths, game)?.join("current");
@@ -407,23 +481,43 @@ impl Session {
         Ok(n)
     }
 
+    /// The home this session is in: `$GP_HOME/mechanics/GAME/ROW` is its
+    /// folder.
+    fn home(&self) -> Option<&Path> {
+        self.dir.parent()?.parent()?.parent()
+    }
+
     /// [`Self::turn`] for a caller that holds the lock.
     fn append_turn(&self, v: Value) -> Result<usize> {
         let by_player = v["by"] == json!("player");
+        let words = v["text"].as_str().unwrap_or("").to_owned();
         let n = self.write_turn(v)?;
         // The queue follows whose turn it is: the person's turn makes the
-        // mechanic "agent working", the agent's "asking you" only when the
-        // row has a look for them (a clip, or a card): an answer with
-        // nothing to look at leaves the status for the worker, or the
-        // runner at its end, to set (ask-only-about-looks; a row left
-        // asking with nothing to see was set right by hand). Done stays
-        // done.
+        // mechanic "agent working" when someone works it ([`nobody_on`]),
+        // else "next" with their words on the row; the agent's "asking
+        // you" only when the row has a look for them (a clip, or a card):
+        // an answer with nothing to look at leaves the status for the
+        // worker, or the runner at its end, to set (ask-only-about-looks; a
+        // row left asking with nothing to see was set right by hand). Done
+        // stays done.
         let qf = self.dir.with_file_name("queue.json");
         let mut q = read_queue(&qf);
         let me = self.mechanic();
+        let game = self
+            .dir
+            .parent()
+            .and_then(Path::file_name)
+            .and_then(|n| n.to_str())
+            .unwrap_or("")
+            .to_owned();
         if let Some(r) = q.iter_mut().find(|r| r["mechanic"] == json!(me))
             && r["status"] != json!("done")
         {
+            if by_player && self.home().is_some_and(|h| nobody_on(h, &game, r)) {
+                answered_row(r, &words);
+                write_queue(&qf, &q)?;
+                return Ok(n);
+            }
             let st = if by_player {
                 Some("agent working")
             } else {
@@ -824,6 +918,91 @@ mod tests {
         j.turn(json!({"by": "player", "text": "again"})).unwrap();
         assert_eq!(read_queue(&qf)[1]["status"], "done");
         assert_eq!(s.state().unwrap()["queue"].as_array().unwrap().len(), 2);
+    }
+
+    /// The person's answer on a row asking for a look (a clip and a look
+    /// folder, iterating, no card), with the loop's runner on and nobody
+    /// at work on it: their words are in its talk, and the row goes next
+    /// with them on its note and plain line, not agent working with no
+    /// worker (answer-on-a-look-row-was-lost). A row a session works by
+    /// hand, or one a live worker of the runner's holds, is theirs.
+    #[test]
+    fn an_answer_on_a_row_nobody_works_goes_next_with_the_words() {
+        let d = tempfile::tempdir().unwrap();
+        let p = paths(d.path());
+        fs::write(p.home.join("loop.toml"), "[runner]\non = true\n").unwrap();
+        let qf = queue_file(&p, "test-hop").unwrap();
+        let look = json!({"mechanic": "lights", "status": "asking you",
+            "note": "Each bar pulses blue and white. Not landed: it waits for the look.",
+            "plain": "Is this the look you want?",
+            "clip": {"id": "test-hop.l10.001", "frames": [0, 900], "look": "/themes/last-call"},
+            "iterating": "the owner is looking at the lights"});
+        write_queue(
+            &qf,
+            &[
+                look.clone(),
+                json!({"mechanic": "byhand", "status": "agent working", "worker": "main-session", "note": "n"}),
+                json!({"mechanic": "held", "status": "asking you", "note": "h"}),
+            ],
+        )
+        .unwrap();
+        let s = Session::create(&p, "test-hop", "lights", None, "ab").unwrap();
+        let said = "i said the original bars alternate blue and white";
+        s.turn_once(json!({"by": "player", "text": said, "clips": []}))
+            .unwrap();
+        assert_eq!(s.turns().unwrap()[0]["text"], said);
+        let row = |m: &str| {
+            read_queue(&qf)
+                .into_iter()
+                .find(|r| r["mechanic"] == json!(m))
+                .unwrap()
+        };
+        let r = row("lights");
+        assert_eq!(r["status"], "next", "{r}");
+        assert_eq!(
+            r["note"],
+            format!(
+                "{} {}",
+                answered_words(said),
+                look["note"].as_str().unwrap()
+            )
+        );
+        assert!(r["plain"].as_str().unwrap().contains(said), "{r}");
+        assert_eq!(r["clip"], look["clip"]);
+        assert_eq!(r["iterating"], look["iterating"]);
+        // A second answer takes the first one's place on the note.
+        s.turn(json!({"by": "agent", "text": "Is this it?"}))
+            .unwrap();
+        s.turn(json!({"by": "player", "text": "almost"})).unwrap();
+        let r = row("lights");
+        assert_eq!(
+            r["note"],
+            format!(
+                "{} {}",
+                answered_words("almost"),
+                look["note"].as_str().unwrap()
+            )
+        );
+        // A session's row by hand stays theirs.
+        let h = Session::create(&p, "test-hop", "byhand", None, "ab").unwrap();
+        h.turn(json!({"by": "player", "text": "go on"})).unwrap();
+        assert_eq!(row("byhand")["status"], "agent working");
+        assert_eq!(row("byhand")["note"], "n");
+        // A live worker of the runner's holds the row: it is at work.
+        let w = gp_mcp::steps::workers_dir(&p.home);
+        fs::create_dir_all(&w).unwrap();
+        fs::write(
+            w.join("loop-s1.json"),
+            json!({"state": "working", "pid": std::process::id(), "started_ms": 1,
+                "step": {"id": "s1", "touches": ["row:test-hop/held"]}})
+            .to_string(),
+        )
+        .unwrap();
+        let k = Session::create(&p, "test-hop", "held", None, "ab").unwrap();
+        k.turn(json!({"by": "player", "text": "yes but dimmer"}))
+            .unwrap();
+        assert_eq!(row("held")["status"], "agent working");
+        assert_eq!(row("held")["note"], "h");
     }
 
     #[test]

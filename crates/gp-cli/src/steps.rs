@@ -389,7 +389,9 @@ pub(crate) fn row_steps(paths: &gp_evidence::Paths, games: Option<&Path>) -> Vec
             let turns = talk.lines().filter(|l| !l.trim().is_empty()).count();
             let cli = ROW_CLI.replace("GAME", g).replace("ROW", row);
             let note = r["note"].as_str().unwrap_or("");
-            let note = if answered {
+            // A row the answer set next has the words on its note already
+            // (mechanic::session::answered_row).
+            let note = if answered && !note.starts_with(crate::mechanic::session::ANSWERED) {
                 format!(
                     "The person answered in the row's talk: \"{}\". Act on it now. {note}",
                     crate::next::cut(
