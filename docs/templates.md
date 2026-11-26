@@ -112,7 +112,7 @@ path = "."
 | `recipe.lifted_sha256` | The digest of the files the map lifts from an accepted ROM: the SHA-256 of `sha256sum`'s output for the lifted files, sorted by name, so `cd assets && find . -type f \| sed 's\|^\./\|\|' \| LC_ALL=C sort \| xargs sha256sum \| sha256sum` gives the same digest (`shasum -a 256` on macOS) |
 | `slots` | Every slot of the model, with its role |
 | `ext.hooks`, `ext.crate` | Every hook name the model uses, and the crate in the folder that implements them |
-| `scored_against` | Optional: the scoring corpus the game's scores are against, by `corpus`, `version` and `hash`, with `path`, its folder relative to the template (default `.`). `gp corpus score --write` sets it |
+| `scored_against` | Optional: the scoring corpus the game's scores are against, by `corpus`, `version` and `hash`, with `path`, its folder relative to the template (default `.`). `gp corpus score --write` sets it, to `.` when the folder written holds the corpus scored (a staged copy of the game does). `gp registry publish` refuses a package whose `path` leaves it |
 | `loads` | Optional, a list: ROMs a person may load to play the model that aren't its source ([below](#roms-to-play)) |
 | `derive` | Optional: `from`, the base template's folder, for a template made from another's. `gp template check --original` reads it |
 

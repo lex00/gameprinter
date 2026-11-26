@@ -1217,6 +1217,7 @@ pub fn publish_cmd(
             "ROM comparison: not run; a package is compared with its ROMs only before it goes into a git: target, and {target} isn't one"
         )
     };
+    template_paths_guard(dir)?;
     let own = own_pictures_guard(dir, &paths.roms, &paths.home)?;
     let exact = crate::publish_rule::arcade_exact_guard(dir, kind)?;
     let mut o = writing(target, &format!("Publish {name}@{version}"), how, |t| {
@@ -1236,6 +1237,47 @@ pub fn publish_cmd(
         o.json["arcade_exact"] = json!(line);
     }
     Ok(o)
+}
+
+/// The corpus folder a package's template.toml names (`[scored_against]`'s
+/// `path`) is in the package: relative, and not above it. One that leaves
+/// it names the folders of the machine that staged it and points nowhere on
+/// anyone else's (a published game had
+/// `path = '../../../../../Documents/checkouts/OWNER/games/GAME'`), and
+/// stops the publish before anything is written. (`[recipe]`'s `asset_map`
+/// is not held to it: the templates/ folders name the repo's assets/.)
+pub(crate) fn template_paths_guard(dir: &Path) -> Result<()> {
+    let Ok(text) = fs::read_to_string(dir.join("template.toml")) else {
+        return Ok(());
+    };
+    let v: toml::Value = toml::from_str(&text)
+        .with_context(|| format!("reading {}/template.toml", dir.display()))?;
+    let Some(p) = v
+        .get("scored_against")
+        .and_then(|s| s.get("path"))
+        .and_then(toml::Value::as_str)
+    else {
+        return Ok(());
+    };
+    let mut depth = 0i32;
+    let leaves = Path::new(p).components().any(|c| match c {
+        std::path::Component::Normal(_) => {
+            depth += 1;
+            false
+        }
+        std::path::Component::CurDir => false,
+        std::path::Component::ParentDir => {
+            depth -= 1;
+            depth < 0
+        }
+        _ => true,
+    });
+    if leaves {
+        return Err(anyhow!(
+            "its template.toml's [scored_against] path = {p:?} leaves the package: a published template is scored against the corpus it holds, path = \".\" (`gp corpus score GAME --run publish --write STAGE` writes that when the stage holds the game's corpus). Nothing was published"
+        ));
+    }
+    Ok(())
 }
 
 /// A game package that says it plays from its own pictures (its
@@ -2472,6 +2514,41 @@ mod command_tests {
             "{}",
             o.text
         );
+    }
+
+    /// A package whose template.toml names a folder outside it (as a staged
+    /// package once did) for its corpus is refused; `.`, a
+    /// folder inside it and no template.toml at all are taken, and an asset
+    /// map named in the repo's assets/ (as templates/ do) is not refused.
+    #[test]
+    fn a_template_path_that_leaves_the_package_is_refused() {
+        let g = tempfile::tempdir().unwrap();
+        let dir = g.path();
+        assert!(template_paths_guard(dir).is_ok());
+        let with = |sa: &str, map: &str| {
+            fs::write(
+                dir.join("template.toml"),
+                format!("[template]\nid = \"cab\"\n\n[recipe]\nasset_map = {map:?}\n\n[scored_against]\ncorpus = \"cab\"\nversion = \"1.0.0\"\nhash = \"x\"\npath = {sa:?}\n"),
+            )
+            .unwrap();
+            template_paths_guard(dir)
+        };
+        assert!(with(".", "assets/cab.toml").is_ok());
+        assert!(with("corpus/./x/..", "../../assets/cab.toml").is_ok());
+        let e = with(
+            "../../../../../Documents/checkouts/own/games/rooftop",
+            "assets/cab.toml",
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            e.contains("[scored_against] path = \"../../../../../Documents")
+                && e.contains("leaves the package")
+                && e.ends_with("Nothing was published"),
+            "{e}"
+        );
+        assert!(with("/Users/someone/games/cab", "assets/cab.toml").is_err());
+        assert!(with("x/../..", "assets/cab.toml").is_err());
     }
 
     /// The registry's publish step refuses a package that claims its own

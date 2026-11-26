@@ -1173,6 +1173,25 @@ fn relative(from: &Path, to: &Path) -> String {
     }
 }
 
+/// The `path` a template `t`'s `[scored_against]` gets for corpus `c`,
+/// scored in folder `game`: `.` when `t` holds that corpus itself (a staged
+/// copy of the game for a publish does), so a package never names the
+/// folders of the machine that staged it; else `game` relative to `t`.
+fn scored_against_path(t: &Path, game: &Path, c: &Head) -> String {
+    let same = match (load(t), load(game)) {
+        (Ok(here), Ok(there)) => {
+            here.hash == there.hash
+                && here.manifest.as_ref().is_some_and(|m| {
+                    m.corpus.name == c.name
+                        && m.corpus.version == c.version
+                        && m.corpus.hash == c.hash
+                })
+        }
+        _ => false,
+    };
+    if same { ".".into() } else { relative(t, game) }
+}
+
 /// Sets `[scored_against]` in a template manifest: an existing section's
 /// keys are rewritten where they stand, so its comments and the sections
 /// around it stay as they are; a new section goes at the end.
@@ -1873,7 +1892,7 @@ fn score(
             )?;
             let manifest = t.join(MANIFEST);
             if manifest.is_file() {
-                let rel = relative(t, game);
+                let rel = scored_against_path(t, game, &m.corpus);
                 set_scored_against(&manifest, &m.corpus, &rel)?;
             }
             text.push(format!("Wrote the record to {}.", file.display()));
@@ -2001,6 +2020,46 @@ mod tests {
             .filter(|n| n.starts_with(".lift-"))
             .collect();
         assert!(left.is_empty(), "{left:?}");
+    }
+
+    /// A stage that holds the game's corpus as it is gets `path = "."` (a
+    /// published package had the staging machine's way back to the game's
+    /// folder, `../../../../../Documents/checkouts/OWNER/games/GAME`); one
+    /// without it, or with other clips, is pointed back at the game's folder.
+    #[test]
+    fn a_staged_copy_holding_the_corpus_is_scored_against_itself() {
+        let d = tempfile::tempdir().expect("a folder");
+        let (game, stage) = (d.path().join("games/cab"), d.path().join("stage/cab"));
+        let corpus = |dir: &Path, frames: u32| {
+            fs::create_dir_all(dir.join("inputs")).unwrap();
+            fs::write(
+                dir.join("inputs/a.start.presses"),
+                "gp-presses 0\nframes 4\nstart@1-2\n",
+            )
+            .unwrap();
+            fs::write(
+                dir.join("inputs/a.presses"),
+                "gp-presses 0\nframes 10\nright@0-5\n",
+            )
+            .unwrap();
+            fs::write(
+                dir.join(FILE),
+                format!(
+                    "[corpus]\nformat = \"1.0.0\"\nname = \"cab\"\nversion = \"1.0.0\"\nrecipes = \"x\"\n\n[target]\ngame = \"cab\"\nrom = \"{}\"\n\n[[clip]]\nid = \"cab.1\"\nname = \"one\"\nsource = \"played\"\nstart = \"inputs/a.start.presses\"\npresses = \"inputs/a.presses\"\nframes = {frames}\n",
+                    "ab".repeat(32)
+                ),
+            )
+            .unwrap();
+        };
+        corpus(&game, 10);
+        fs::create_dir_all(&stage).unwrap();
+        let c = load(&game).unwrap().manifest.unwrap().corpus;
+        assert_eq!(scored_against_path(&stage, &game, &c), "../../games/cab");
+        corpus(&stage, 10);
+        assert_eq!(scored_against_path(&stage, &game, &c), ".");
+        assert_eq!(scored_against_path(&game, &game, &c), ".");
+        corpus(&stage, 11);
+        assert_eq!(scored_against_path(&stage, &game, &c), "../../games/cab");
     }
 
     /// The map goes last, so a folder whose map is the new one has every
