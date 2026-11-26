@@ -1018,7 +1018,7 @@ fn settle_row_by_card(
     let Some(r) = q.iter_mut().find(|r| r["mechanic"] == json!(row)) else {
         return Ok(true);
     };
-    // LOOKS GOOD, KEEP GOING (a NO with keep_going): the row is iterating
+    // DON'T LAND IT YET (a NO with keep_going): the row is iterating
     // from now, so its worker's gates are refused (gp_mcp::iterating) even
     // while one still works on it.
     let keep_going = kind == "no" && a["keep_going"] == json!(true);
@@ -1034,7 +1034,7 @@ fn settle_row_by_card(
     }
     // A row asking the person about its card once the card is gone has
     // nothing left to ask, so it follows the card however late it was set
-    // (settle_card_asks). The person's LOOKS GOOD, KEEP GOING parks it
+    // (settle_card_asks). The person's DON'T LAND IT YET parks it
     // however it was changed since: it is their newest word on it.
     if r["changed_ms"].as_u64().is_some_and(|c| c > ended) && !asks_of_card(r) && !keep_going {
         return Ok(true);
@@ -1160,15 +1160,15 @@ fn settle_row_by_card(
     Ok(true)
 }
 
-/// Why a row is iterating once the person pressed LOOKS GOOD, KEEP GOING on
+/// Why a row is iterating once the person pressed DON'T LAND IT YET on
 /// its card (its `iterating` and `parked`).
-const KEPT_GOING: &str = "you said LOOKS GOOD, KEEP GOING on its card";
+const KEPT_GOING: &str = "you said DON'T LAND IT YET on its card";
 
-/// The row's note after LOOKS GOOD, KEEP GOING on its card (`what`), with
+/// The row's note after DON'T LAND IT YET on its card (`what`), with
 /// the person's words.
 fn kept_going_note(what: &str, words: Option<&str>) -> String {
     let mut n = format!(
-        "You said LOOKS GOOD, KEEP GOING to its card ({what}): nothing landed. The work stays where it is, and no worker gates it until you press LAND IT on this row; then it is gated as one patch, on one card."
+        "You said DON'T LAND IT YET to its card ({what}): nothing landed. The work stays where it is, and no worker gates it until you press LAND IT on this row; then it is gated as one patch, on one card."
     );
     if let Some(w) = words {
         n.push_str(&format!(" You wrote: \"{w}\"."));
@@ -3917,7 +3917,7 @@ mod tests {
     }
 
     /// The owner's case (2026-11-23): a YES meant "this is what I want for
-    /// this round" and began a 30-minute landing. LOOKS GOOD, KEEP GOING on a
+    /// this round" and began a 30-minute landing. DON'T LAND IT YET on a
     /// gate's card lands nothing: the row is parked in line marked
     /// iterating, so its worker's gates are refused (gp_mcp::iterating),
     /// even when its worker was still on it as the person answered.

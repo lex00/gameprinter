@@ -6,7 +6,7 @@
 //! | Endpoint | What |
 //! |---|---|
 //! | `GET /api/asks` | The asks still open, and the yeses not yet used, newest first |
-//! | `POST /api/asks/{id}` | `{answer: "yes" \| "no", words?, duplicate_of?, keep_going?}`: the person's answer to an open ask, with what they wrote beside it: kept on the ask, written to its row's talk as their turn, and put in the row's note when the runner settles the row by the card (a NO with words sends the row to next with them). A NO with `duplicate_of` (another open card of the game, the card's DUPLICATE OF) parks the row in line waiting on that card's row, instead of sending it back to make the same card again. A NO with `keep_going` (a gate card's LOOKS GOOD, KEEP GOING) lands nothing and parks the row in line marked iterating: no worker gates it until the person presses LAND IT on the row |
+//! | `POST /api/asks/{id}` | `{answer: "yes" \| "no", words?, duplicate_of?, keep_going?}`: the person's answer to an open ask, with what they wrote beside it: kept on the ask, written to its row's talk as their turn, and put in the row's note when the runner settles the row by the card (a NO with words sends the row to next with them). A NO with `duplicate_of` (another open card of the game, the card's DUPLICATE OF) parks the row in line waiting on that card's row, instead of sending it back to make the same card again. A NO with `keep_going` (a gate card's DON'T LAND IT YET) lands nothing and parks the row in line marked iterating: no worker gates it until the person presses LAND IT on the row |
 
 use serde_json::{Value, json};
 
@@ -56,7 +56,7 @@ fn answer(ctx: &Ctx, req: &Request, params: &Params) -> Result<Response, Fail> {
         _ => return Err(Fail::bad_request("answer is yes or no")),
     };
     let words = v["words"].as_str().unwrap_or("").trim();
-    // LOOKS GOOD, KEEP GOING on a gate's card: a NO that lands nothing and
+    // DON'T LAND IT YET on a gate's card: a NO that lands nothing and
     // marks the row iterating when the runner settles it
     // (runner::settle_row_by_card).
     let keep_going = v["keep_going"].as_bool() == Some(true);
@@ -86,7 +86,7 @@ fn answer(ctx: &Ctx, req: &Request, params: &Params) -> Result<Response, Fail> {
         && let Some((game, row)) = super::runner::ask_row(&ctx.paths.home, &done)
     {
         let said = match a {
-            _ if keep_going => "LOOKS GOOD, KEEP GOING",
+            _ if keep_going => "DON'T LAND IT YET",
             asks::Answer::Yes => "YES",
             asks::Answer::No => "NO",
         };

@@ -1,6 +1,6 @@
 //! A quest-log row the person is still iterating on (`iterating` on the
 //! row, from `gp mechanic queue GAME ROW --iterating WHY` or the card's
-//! LOOKS GOOD, KEEP GOING): no worker gates it, dry run or card, until the
+//! DON'T LAND IT YET): no worker gates it, dry run or card, until the
 //! person presses LAND IT on the row. On 2026-11-23 the owner answered
 //! "looks good" on a theme's rows worked by hand in a working copy, workers
 //! cut patches from that copy piece by piece and put up gate cards, and a
@@ -151,7 +151,7 @@ mod tests {
     #[test]
     fn a_row_marked_iterating_yields_no_gate_card() {
         let t = home_with(json!([{"mechanic": "tip-money", "status": "next",
-            "iterating": "you said LOOKS GOOD, KEEP GOING on its card"}]));
+            "iterating": "you said DON'T LAND IT YET on its card"}]));
         let h = t.path();
         let p = h.join("x.patch");
         std::fs::write(&p, "").unwrap();

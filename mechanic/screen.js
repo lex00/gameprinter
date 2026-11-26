@@ -1960,7 +1960,7 @@ function isGate(a) {
 }
 
 /** The buttons of open card `a`, as [word, answer, title]: a gate's say
- * what they do (LAND IT, LOOKS GOOD, KEEP GOING, which lands nothing and
+ * what they do (LAND IT, DON'T LAND IT YET, which lands nothing and
  * keeps its row iterating, and NO); any other card's are YES and NO. */
 function cardButtons(a) {
   const no = ["NO", "no", "Your agent won't do this; with words, its row goes back to its worker with them"];
@@ -1968,7 +1968,7 @@ function cardButtons(a) {
   const where = a.command === "tool gate" ? "GAME PRINTER" : "THE GAME";
   return [
     [`LAND IT IN ${where}`, "yes", "Run the checks and land it on main: about 30 minutes, and other landings wait behind it"],
-    ["LOOKS GOOD, KEEP GOING", "keep", "Lands nothing: you like it for now and are still trying it. Its row waits, and no worker gates it, until you press LAND IT on the row"],
+    ["DON'T LAND IT YET", "keep", "Lands nothing: you like it for now and are still trying it. Its row waits, and no worker gates it, until you press LAND IT on the row"],
     ["NO", "no", "Lands nothing; with words, its row goes back to its worker to change it as you say"],
   ];
 }
@@ -2130,7 +2130,7 @@ async function refreshAsks() {
         if (ev.code === "Enter") { ev.preventDefault(); void sendWords(); }
       });
       // A gate's card says what its buttons do: LAND IT runs the checks and
-      // lands (half an hour, other landings wait); LOOKS GOOD, KEEP GOING
+      // lands (half an hour, other landings wait); DON'T LAND IT YET
       // lands nothing and keeps the row iterating until LAND IT on the row
       // (owner, 2026-11-23: "pressing YES is not obvious to me that it's
       // doing anything other than confirming its what i want").
