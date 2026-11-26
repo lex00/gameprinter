@@ -212,7 +212,10 @@ pub enum MechanicCmd {
         /// Where it came from: the command, clip and frame, or the step.
         #[arg(long)]
         from: String,
-        /// games (the game's folder, the default) or tools (gameprinter).
+        /// games (the game's folder) or tools (gameprinter). Left out, it is
+        /// tools when the step it is proposed in (GP_STEP) or a step --from
+        /// names is a tools step, or the words name crates/ or the tool
+        /// gate; else games.
         #[arg(long, value_parser = ["games", "tools"])]
         repo: Option<String>,
         /// The row's triage test: a test on RAM that comes to hold when a
@@ -1006,6 +1009,7 @@ pub(crate) fn run(cmd: &MechanicCmd, paths: &Paths) -> Result<Outcome> {
         } => {
             let dir = crate::roms_cmd::games_dir(games.as_deref())
                 .and_then(|g| crate::labels::game_folder(&g, game));
+            let step = std::env::var(gp_mcp::steps::STEP_ENV).ok();
             let v = propose::propose(
                 paths,
                 dir.as_deref(),
@@ -1015,6 +1019,7 @@ pub(crate) fn run(cmd: &MechanicCmd, paths: &Paths) -> Result<Outcome> {
                     from,
                     what,
                     repo: repo.as_deref(),
+                    step: step.as_deref().filter(|s| !s.is_empty()),
                     test: goal.as_deref().map(|goal| propose::Test {
                         goal,
                         near: near.as_deref(),

@@ -29,8 +29,13 @@ pub(crate) struct Proposal<'a> {
     pub from: &'a str,
     /// What is wrong or missing, in one line.
     pub what: &'a str,
-    /// tools for a row of gameprinter's own work.
+    /// tools for a row of gameprinter's own work, games for a game's. None
+    /// leaves it to [`repo_of`].
     pub repo: Option<&'a str>,
+    /// The loop's step the proposal is made in (`GP_STEP`, a worker the
+    /// runner started): a row proposed from a tools step is a tools row
+    /// unless `repo` says otherwise ([`repo_of`]).
+    pub step: Option<&'a str>,
     /// The row's triage test, with the person's request.
     pub test: Option<Test<'a>>,
     /// The clips the gap is seen in (`gp picture --propose`). A row the
@@ -261,6 +266,62 @@ fn log_reopen(paths: &Paths, game: &str, row: &str, note: &str, before: &str) ->
     Ok(())
 }
 
+/// The step ids a text names: `s` and 12 hex digits, as a word.
+fn steps_named(s: &str) -> Vec<&str> {
+    s.split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|w| {
+            w.len() == 13
+                && w.starts_with('s')
+                && w[1..]
+                    .bytes()
+                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        })
+        .collect()
+}
+
+/// The repo the runner gave a step (`repo` of its step in its worker's
+/// record, gp_mcp::steps::workers_dir), or None for a step it has no
+/// record of.
+fn step_repo(paths: &Paths, id: &str) -> Option<String> {
+    let f = gp_mcp::steps::workers_dir(&paths.home).join(format!("{id}.json"));
+    let v: Value = serde_json::from_slice(&fs::read(f).ok()?).ok()?;
+    v["step"]["repo"].as_str().map(str::to_owned)
+}
+
+/// The repo a new row is filed with, and why when it wasn't given: tools
+/// when the step it is proposed in (`step`) or a step its from names is a
+/// step of gameprinter's own work, or when its words name gp's own code (a
+/// path under crates/) or the tool gate; else games. On 2026-11-26 a row a
+/// tools row's worker proposed about gp's loop health was filed as games,
+/// so its worker got a games worktree and a step that can't run gp tool
+/// gate: its patch passed its dry run and no card could be raised
+/// (docs/loop.md).
+pub(crate) fn repo_of(paths: &Paths, p: &Proposal) -> (&'static str, Option<String>) {
+    match p.repo {
+        Some("tools") => return ("tools", None),
+        Some(_) => return ("games", None),
+        None => {}
+    }
+    let mut ids: Vec<&str> = p.step.into_iter().collect();
+    ids.extend(steps_named(p.from));
+    if let Some(id) = ids
+        .into_iter()
+        .find(|id| step_repo(paths, id).as_deref() == Some("tools"))
+    {
+        return (
+            "tools",
+            Some(format!(
+                "proposed from step {id}, a step of gameprinter's own work"
+            )),
+        );
+    }
+    let words = format!("{} {}", p.what, p.from).to_lowercase();
+    if words.contains("crates/") || words.contains("tool gate") {
+        return ("tools", Some("its words name gp's own code".into()));
+    }
+    ("games", None)
+}
+
 /// A triage.toml item's test and request (mechanic/triage.rs has the
 /// format).
 #[derive(Default, Clone, Copy)]
@@ -376,6 +437,8 @@ pub(crate) fn propose(paths: &Paths, game_dir: Option<&Path>, p: &Proposal) -> R
     let mut new_clips: Vec<&String> = Vec::new();
     let mut reopened = false;
     let mut before = None;
+    // The new row's repo, and why when it wasn't given (repo_of).
+    let (mut new_repo, mut repo_why): (Option<&str>, Option<String>) = (None, None);
     if let Some(i) = same {
         let r = &mut q[i];
         let from = p.from.trim();
@@ -413,9 +476,11 @@ pub(crate) fn propose(paths: &Paths, game_dir: Option<&Path>, p: &Proposal) -> R
                 "by": "loop",
                 "from": p.from.trim(),
             });
-            if p.repo == Some("tools") {
+            let (repo, why) = repo_of(paths, p);
+            if repo == "tools" {
                 r["repo"] = json!("tools");
             }
+            (new_repo, repo_why) = (Some(repo), why);
             if let Some(s) = p.plain.map(str::trim).filter(|s| !s.is_empty()) {
                 r["plain"] = json!(s);
             }
@@ -499,6 +564,8 @@ pub(crate) fn propose(paths: &Paths, game_dir: Option<&Path>, p: &Proposal) -> R
         "target_frames": p.target_frames.filter(|_| gave_target && p.target.is_some()).map(|(n, _)| n),
         "test": wrote_test,
         "test_was_there": had_test,
+        "repo": new_repo,
+        "repo_why": repo_why,
     }))
 }
 
@@ -558,6 +625,11 @@ pub(crate) fn words(v: &Value) -> String {
         s = format!(
             "{was}'s target is on another scoreboard line, so the gap is a row of its own. {s}"
         );
+    }
+    if let Some(why) = v["repo_why"].as_str() {
+        s.push_str(&format!(
+            " Its work is in gameprinter (repo tools): {why}; --repo games files it as the game's."
+        ));
     }
     if let Some(f) = v["test"].as_str() {
         s.push_str(&format!(" Its test is in {f}."));
@@ -1086,6 +1158,90 @@ mod tests {
         };
         assert!(propose(&p, None, &blank).is_err());
         assert_eq!(read_queue(&f).len(), 1);
+    }
+
+    /// A row proposed in a tools step (GP_STEP), or from one its from
+    /// names, or whose words name gp's code, is a tools row unless --repo
+    /// says games; a row proposed in a game's step is the game's.
+    #[test]
+    fn a_row_proposed_from_a_tools_step_is_a_tools_row() {
+        let d = tempfile::tempdir().unwrap();
+        let p = paths(&d.path().join("home"));
+        let workers = gp_mcp::steps::workers_dir(&p.home);
+        fs::create_dir_all(&workers).unwrap();
+        for (id, repo) in [("s49db893760f8", "tools"), ("s53bf298c837a", "games")] {
+            let rec = json!({"step": {"id": id, "repo": repo}});
+            fs::write(workers.join(format!("{id}.json")), rec.to_string()).unwrap();
+        }
+        let f = queue_file(&p, "rooftop").unwrap();
+        let base = Proposal {
+            game: "rooftop",
+            row: "in-a-tools-step",
+            from: "a worker",
+            what: "a trouble row never hears its problem changed",
+            step: Some("s49db893760f8"),
+            ..Proposal::default()
+        };
+        let v = propose(&p, None, &base).unwrap();
+        assert_eq!(v["repo"], "tools");
+        assert!(
+            words(&v).contains(
+                "Its work is in gameprinter (repo tools): proposed from step s49db893760f8"
+            ),
+            "{}",
+            words(&v)
+        );
+        let cases = [
+            Proposal {
+                row: "from-names-a-tools-step",
+                from: "rooftop/trouble-x, step s49db893760f8: the fix was still running",
+                step: None,
+                ..base
+            },
+            Proposal {
+                row: "names-gp-code",
+                what: "crates/gp-cli/src/trouble.rs files the same problem twice",
+                step: Some("s53bf298c837a"),
+                ..base
+            },
+            Proposal {
+                row: "in-a-games-step",
+                from: "step s53bf298c837a on rooftop/hop",
+                what: "the hop lands a frame late",
+                step: Some("s53bf298c837a"),
+                ..base
+            },
+            Proposal {
+                row: "said-games",
+                repo: Some("games"),
+                ..base
+            },
+            Proposal {
+                row: "unknown-step",
+                what: "the hop lands a frame late",
+                step: Some("s000000000000"),
+                ..base
+            },
+        ];
+        for c in &cases {
+            propose(&p, None, c).unwrap();
+        }
+        let q = read_queue(&f);
+        let repo = |row: &str| {
+            let r = q.iter().find(|r| r["mechanic"] == row).unwrap();
+            r["repo"].as_str().unwrap_or("games").to_owned()
+        };
+        for (row, want) in [
+            ("in-a-tools-step", "tools"),
+            ("from-names-a-tools-step", "tools"),
+            ("names-gp-code", "tools"),
+            ("in-a-games-step", "games"),
+            ("said-games", "games"),
+            ("unknown-step", "games"),
+        ] {
+            assert_eq!(repo(row), want, "{row}");
+        }
+        assert_eq!(steps_named("step s49db893760f8: x, s12"), ["s49db893760f8"]);
     }
 
     /// A test the triage can't read writes nothing: no row, no item.
