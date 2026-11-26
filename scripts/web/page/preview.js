@@ -84,7 +84,8 @@
 // Timings and results go to window.__gp for scripts/web/measure.mjs.
 
 import { withLevel } from "./level.js";
-import { AUTOSAVE_SLOT, BINDINGS, NES, NES2, SCREEN, QUICK_SLOTS, SHELL_SETTINGS, exportName, slotName, whenName } from "./shell-keys.js";
+import { AUTOSAVE_SLOT, BINDINGS, SCREEN, QUICK_SLOTS, SHELL_SETTINGS, exportName, slotName, whenName } from "./shell-keys.js";
+import { LAYOUTS, openControls } from "./controls.js";
 import { openStorage } from "./storage.js";
 import { ModuleHost } from "./module-host.js";
 
@@ -758,31 +759,18 @@ async function image(src) {
 const mine = (a) => BINDINGS.filter((b) => b.action === a);
 const webKeys = (a) => mine(a).filter((b) => !b.shift).flatMap((b) => b.keys);
 const webButtons = (a) => mine(a).flatMap((b) => b.standard);
-// The NES buttons from the keyboard: A, B, Select, Start, Up, Down, Left,
-// Right from bit 0, as the Bevy build maps them. Controller 2: M and N for
-// A and B, H Select, Y Start, I J K L the d-pad.
-// `stick` is the bits of up, down, left and right, which a gamepad's left
-// stick sets too; `taken` the keys the game has that the shell's table
-// gives an action without Shift (the game's press wins).
-const NES_LAYOUT = { keys: NES.map(webKeys), keys2: NES2.map(webKeys), pad: NES.map(webButtons), stick: [4, 5, 6, 7], taken: new Set() };
-// An arcade cabinet (the model's input device `arcade`, gp_model::Device):
-// coin, start, right, left, down, up and the button from bit 0, the
-// runtime protocol's order. 5 drops a coin and 1 starts, as MAME keys
-// them, and the NES layout's Select and Start keys do too; the stick is the
-// arrows or WASD and the button the NES A keys (X, Space). On a gamepad,
-// Select is the coin, Start starts and A is the button, as on the mechanic
-// page. The mute keys and slot loads on 1 and 5 give way to the game.
-const ARCADE_KEYS = [[...webKeys("select"), "Digit5"], [...webKeys("start"), "Digit1"], webKeys("right"), webKeys("left"), webKeys("down"), webKeys("up"), webKeys("a")];
-const ARCADE_LAYOUT = {
-  keys: ARCADE_KEYS,
-  keys2: [],
-  pad: ["select", "start", "right", "left", "down", "up", "a"].map(webButtons),
-  stick: [5, 4, 3, 2],
-  taken: new Set(["Digit5", "Digit1"]),
-  // What each bit is, for the key hint under the game.
-  names: ["coin", "start", "right", "left", "down", "up", "button"],
-};
-let LAYOUT = NES_LAYOUT;
+// The game's keys and buttons are controls.js's (LAYOUTS): the NES's, or
+// an arcade cabinet's when the model reads one (the model's input device
+// `arcade`, gp_model::Device). A layout's `taken` are the keys the game has
+// that the shell's table gives an action without Shift (the game's press
+// wins): on a cabinet 5, the coin, and 1, the start, so the mute keys and
+// slot loads on them give way to the game.
+let LAYOUT = LAYOUTS.nes;
+// The game's buttons, from the keys and the gamepads: read by controls.js
+// and gp_controls.wasm (docs/controls.md), as on the screen page. This
+// page hands them its key events and takes each game frame's buttons at
+// the frame's own time. Opened as the game loads; nothing is held before.
+let controls = null;
 // The key hint under the game, from the layout in use, so it can't name a
 // key the game takes: a key as a person reads it ("1", "Shift+1"), the
 // keys the shell's table gives a run of actions as one ("1-4", "2-4"),
@@ -815,71 +803,21 @@ let resetPressed = false;
 const pressed = [];
 addEventListener("keydown", (e) => {
   down.add(e.code);
+  controls?.keyDown(e.code, e.timeStamp);
   if (shellAction(e.code, false) === "reset") resetPressed = true;
   if (!e.repeat) pressed.push({ code: e.code, shift: e.shiftKey });
   e.preventDefault();
 });
-addEventListener("keyup", (e) => down.delete(e.code));
-// A gamepad with the standard layout adds to the keyboard's buttons:
-// A and B, Select, Start, then the d-pad or the left stick.
-// The first gamepad is controller 1, a second one controller 2 (the high
-// byte), as on the console.
-// A lever (any stick after the first) holds the main button while it is
-// pulled, read by its travel as the screen page reads it
-// (mechanic/input-timeline.js, StickPull, at its default travel): pulled
-// once it has gone out LEVER_TRAVEL of its reach from the lowest it has
-// been since the last pull, past a small rest zone, and let go once it has
-// come back that far from the furthest it got. So the button is held as
-// long as the person holds the lever, and let go on the first of its way
-// home (the owner, 2026-11-25: "the joystick pour is really slow in the
-// browser.... it was ok in testing locally": a pull held the button a
-// fixed 700 ms, whatever the hand did).
-const LEVER_TRAVEL = 0.06;
-const LEVER_REST = 0.12;
-// Each pad's lever by its index: whether it is pulled, the mark its travel
-// is measured from, and the axes seen at rest (an axis that never rests,
-// such as a trigger some pads report at -1, isn't a stick).
-const levers = [];
-const leverPulled = (g) => {
-  const l = (levers[g.index] ??= { pulled: false, mark: 0, rested: new Set() });
-  let m = 0;
-  for (let a = 2; a < (g.axes?.length ?? 0); a++) {
-    const v = g.axes[a];
-    if (typeof v !== "number") continue;
-    if (Math.abs(v) < 0.2) l.rested.add(a);
-    if (l.rested.has(a)) m = Math.max(m, Math.min(1, Math.abs(v)));
-  }
-  if (l.pulled) {
-    if (m > l.mark) l.mark = m;
-    if (m <= l.mark - LEVER_TRAVEL || m < LEVER_REST) { l.pulled = false; l.mark = m; }
-  } else {
-    if (m < l.mark) l.mark = m;
-    if (m >= l.mark + LEVER_TRAVEL && m >= LEVER_REST) { l.pulled = true; l.mark = m; }
-  }
-  return l.pulled;
-};
-const padBits = () => {
-  let bits = 0;
-  let n = 0;
-  for (const g of navigator.getGamepads?.() ?? []) {
-    if (!g || !g.connected) continue;
-    const shift = n++ === 0 ? 0 : 8;
-    const on = (i) => !!g.buttons[i]?.pressed;
-    const [ax, ay] = [g.axes[0] ?? 0, g.axes[1] ?? 0];
-    const stick = [];
-    [ay < -0.5, ay > 0.5, ax < -0.5, ax > 0.5].forEach((v, i) => (stick[LAYOUT.stick[i]] = v));
-    // Any stick after the first, pulled any way, holds the game's main
-    // button (the bit the pad's A gives): on a cabinet with a lever, such
-    // as a drink tap, pulling pours and letting go sends.
-    const main = LAYOUT.pad.findIndex((bs) => bs.includes(0));
-    const pulled = leverPulled(g);
-    const set = LAYOUT.pad.map((bs, bit) => bs.some(on) || !!stick[bit] || (pulled && bit === main));
-    set.forEach((v, bit) => {
-      if (v) bits |= 1 << (bit + shift);
-    });
-  }
-  return bits;
-};
+addEventListener("keyup", (e) => {
+  down.delete(e.code);
+  controls?.keyUp(e.code, e.timeStamp);
+});
+// The page lost the keyboard: no key is held, since a key let go while
+// another window has it never says so here.
+addEventListener("blur", () => {
+  down.clear();
+  controls?.clearKeys();
+});
 // The settings screen's keys (gp_web::settings_key's numbers): up, down,
 // left, right, choose, back, and the settings key itself (Esc and F1 open
 // it when it is closed; Esc, being "back", closes it when it is open),
@@ -973,8 +911,9 @@ const settingsStore = (model, kind = "settings") => {
   };
 };
 
-const held = (keys) => keys.reduce((acc, ks, bit) => (ks.some((k) => down.has(k)) ? acc | (1 << bit) : acc), 0);
-const buttons = () => held(LAYOUT.keys) | (held(LAYOUT.keys2) << 8) | padBits();
+// The buttons as they are now, read by no frame, and a gamepad's alone.
+const buttons = () => controls?.now() ?? 0;
+const padBits = () => controls?.padBits() ?? 0;
 
 // A theme's particles (docs/formats/theme.md): a pure function of the
 // frame, the same formulas as crates/gp-theme/src/particles.rs.
@@ -1320,7 +1259,13 @@ async function main() {
     startLevel = wanted;
   }
   // An arcade cabinet's controls when the model reads them.
-  if (cfg.device === "arcade") LAYOUT = ARCADE_LAYOUT;
+  if (cfg.device === "arcade") LAYOUT = LAYOUTS.arcade;
+  // A page that steps this model itself (control mode) reads the controls
+  // and hands each frame its buttons; here the game's loop takes them.
+  if (!q.has("control")) {
+    controls = await openControls("gp_controls.wasm", cfg.device === "arcade" ? "arcade" : "nes");
+    controls.start();
+  }
   const host = await openHost(gameModule);
   mark("opened");
   host.frameLimit = (10000 * cfg.frame_rate[1]) / cfg.frame_rate[0];
@@ -2301,7 +2246,8 @@ async function main() {
     for (const k of ["keydown", "pointerdown"]) addEventListener(k, done, true);
   };
   const loop = (now) => {
-    acc = Math.min(acc + (now - last), 250);
+    // A late browser frame catches up at most four game frames.
+    acc = Math.min(acc + (now - last), tick * 4 * (sh ? sh.slow() : 1));
     last = now;
     if (restarting || sh?.waiting() || settingsFrame() || prompt) {
       // The game holds while the screen is open: no step, no time owed.
@@ -2326,7 +2272,8 @@ async function main() {
         if (held === "back") t.hashes.push(p.hash());
         continue;
       } else {
-        const b = buttons();
+        // The frame's own time: the present less what is still owed.
+        const b = controls.take(now - acc, performance.now());
         // Half a second after the sound was last asked for, so a context
         // still starting isn't taken for one held.
         if (!prompted && hasSound && padBits() && sound()?.state !== "running" && performance.now() - audioAsked > 500) {

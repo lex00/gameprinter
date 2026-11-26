@@ -70,6 +70,7 @@ pub(crate) fn built(dir: &Path) -> bool {
 const PREVIEW_CRATES: &[&str] = &[
     "gp-web",
     "gp-web-board",
+    "gp-controls",
     "gp-look",
     "gp-arcade",
     "gp-assets",
@@ -91,6 +92,7 @@ pub(crate) const PAGE_SCRIPTS: &[&str] = &[
     "preview.js",
     "level.js",
     "shell-keys.js",
+    "controls.js",
     "storage.js",
     "storage-wit.js",
     "module-host.js",

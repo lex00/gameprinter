@@ -125,9 +125,34 @@ else
   echo "board wasm $(lap "$t0") s"
   keep web-board-wasm --extra "$board_extra" --depinfo "${wasm%.wasm}.d" --out "$out/gp_board.wasm"
 fi
+# gp_controls.wasm (crates/gp-controls): the keys and gamepads read as the
+# game's buttons, for every page that plays a game (docs/controls.md). The
+# same sized build and the same reuse; no memory limit to declare, since
+# the page hands it numbers and no bytes.
+t0=$(now)
+controls_args=()
+for a in "${cargo_args[@]}"; do
+  [ "$a" = gp-web ] && a=gp-controls
+  controls_args+=("$a")
+done
+controls_extra="${controls_args[*]//$target/TARGET} wasm-opt ${WEB_TOOLS:-none} $features $rustc_v"
+if from="$(kept web-controls-wasm --extra "$controls_extra")"; then
+  cp "$from/out/gp_controls.wasm" "$out/gp_controls.wasm"
+  echo "controls wasm kept ($from)"
+else
+  (cd "$repo" && cargo "${controls_args[@]}") || exit 2
+  wasm="$target/web-preview/wasm32-unknown-unknown/release/gp_controls.wasm"
+  if [ -n "${WEB_TOOLS:-}" ]; then
+    "$WEB_TOOLS/wasm-opt" -Oz $features --strip-debug --strip-producers "$wasm" -o "$out/gp_controls.wasm" || exit 2
+  else
+    cp "$wasm" "$out/gp_controls.wasm"
+  fi
+  echo "controls wasm $(lap "$t0") s"
+  keep web-controls-wasm --extra "$controls_extra" --depinfo "${wasm%.wasm}.d" --out "$out/gp_controls.wasm"
+fi
 # The page and the scripts preview.js imports (crates/gp-cli/src/mechanic.rs,
 # PAGE_SCRIPTS, lists the same).
-for f in index.html preview.css preview.js level.js shell-keys.js storage.js storage-wit.js module-host.js module-worker.js; do
+for f in index.html preview.css preview.js level.js shell-keys.js controls.js storage.js storage-wit.js module-host.js module-worker.js; do
   cp "$repo/scripts/web/page/$f" "$out/" || exit 2
 done
 echo "gp_web.wasm $(wc -c < "$out/gp_web.wasm" | tr -d ' ') bytes, gp_board.wasm $(wc -c < "$out/gp_board.wasm" | tr -d ' ') bytes"

@@ -1,0 +1,24 @@
+[package]
+name = "gp-controls"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+# A controller's raw readings turned into the game's buttons, in one place:
+# every page that plays a game hands this its gamepads' buttons and sticks
+# and its keys with their times, and gets back the buttons each game frame
+# reads. No page decides any of it (docs/controls.md). No dependencies.
+# Built as gp_controls.wasm by scripts/web/build-preview.sh with
+# `cargo rustc --lib --crate-type cdylib --target wasm32-unknown-unknown`.
+[dependencies]
+
+# The workspace forbids unsafe code. This crate denies it instead, so the
+# one module that exports functions to JavaScript (`abi`, wasm32 only) can
+# allow it, as gp-web-board does.
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
