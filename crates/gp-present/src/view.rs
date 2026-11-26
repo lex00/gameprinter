@@ -485,6 +485,17 @@ impl Viewer {
         *self = Viewer::new(self.options);
     }
 
+    /// Follows the bodies the next tick dropped as it started (core
+    /// `level.drop_removed`, [`crate::Animator::dropped`]), before its
+    /// [`Viewer::step`]: each body's place, fade and picture keep to it.
+    pub fn drop_bodies(&mut self, gone: &[usize]) {
+        if let Some(n) = &mut self.now {
+            gp_sim::systems::drop_at(&mut n.bodies, gone);
+        }
+        gp_sim::systems::drop_at(&mut self.fade_in, gone);
+        gp_sim::systems::drop_at(&mut self.draws, gone);
+    }
+
     /// Steps after a tick, with the tick's scene (`Animator::scene` after
     /// `Animator::step`).
     pub fn step(&mut self, p: &Present, w: &World, scene: &Scene) {

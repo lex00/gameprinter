@@ -1734,6 +1734,18 @@ impl Painter {
         Painter::default()
     }
 
+    /// Follows the bodies the next game frame dropped as it started (core
+    /// `level.drop_removed`, [`crate::Animator::dropped`]), before its
+    /// [`Painter::step`]: each body's picture age, facing and place on the
+    /// props keep to it.
+    pub fn drop_bodies(&mut self, gone: &[usize]) {
+        gp_sim::systems::drop_at(&mut self.ages, gone);
+        gp_sim::systems::drop_at(&mut self.facing, gone);
+        for on in &mut self.on_prop {
+            gp_sim::systems::drop_at(on, gone);
+        }
+    }
+
     /// Steps after a game frame, with that frame's scene.
     pub fn step(&mut self, art: &Art, s: &Scene) {
         self.clock += 1;

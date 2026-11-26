@@ -136,6 +136,7 @@ A feature is an optional part of a format with a name. A model lists the ones it
 | `level.empty` |  | A level of empty cells with no grid and no layout, for a new game's skeleton before its level is lifted | `levels.*.empty` |
 | `level.camera.keep_in_view` |  | A level's own bounds for the followed entity in the view across, instead of the camera's | `levels.*.camera.keep_in_view` |
 | `level.camera.keep_in_view_rows` |  | A level's own keep_in_view bounds while the followed entity's row is in a range, as a camera's keep_in_view_rows | `levels.*.camera.keep_in_view_rows` |
+| `level.drop_removed` |  | Removed entities made during play leave the world once a level holds this many, the others closing the gap in order, so a long stay's state stops growing | `levels.*.drop_removed` |
 | `level.halfway` |  | A level's checkpoint, where restart-level starts it again once the view got there | `levels.*.halfway` |
 | `present.cells` |  | The pictures of cells the game changes, and a held cell's bump | `present.cells` |
 | `present.effects` |  | Short-lived pictures the model's events start | `present.effects` |

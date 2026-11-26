@@ -209,6 +209,7 @@ pub fn turn_pad(spec: &Spec, w: &World, pads: [u8; 2]) -> u8 {
 
 /// [`begin_frame`] with each controller's bits ([`turn_pad`]).
 pub fn begin_frame_pads(spec: &Spec, w: &mut World, pads: [u8; 2]) -> Frame {
+    drop_removed(spec, w);
     let (start_counters, start_states) = if spec.cost.is_some() {
         (
             w.counters.clone(),
@@ -631,6 +632,138 @@ fn release_slots(spec: &Spec, w: &mut World) {
             }
             s.body = 0;
         }
+    }
+}
+
+/// Core `level.drop_removed`: the bodies the next frame's start drops from
+/// `w`, by index, in order. They are every removed body past the level's
+/// spawns once there are at least the level's `drop_removed` of them, and
+/// none before that or in a level without it. A body past the spawns was
+/// made during play, and a removed one never comes back; the spawns' own
+/// stay, since a spawn is found by its index. Something kept beside the
+/// world by body (an animation) reads this after each frame to follow the
+/// next frame's drop.
+pub fn removed_to_drop(spec: &Spec, w: &World) -> Vec<usize> {
+    spec.levels.get(w.level).map_or(Vec::new(), |l| {
+        removed_to_drop_in(l.spawns.len(), l.drop_removed, &w.bodies)
+    })
+}
+
+/// [`removed_to_drop`] for `bodies` in a level of `spawns` spawns whose
+/// `drop_removed` is `at_least`: what a reader holding a frame's bodies
+/// apart from its world (a picture's one-frame lag) drops from them.
+pub fn removed_to_drop_in(spawns: usize, at_least: Option<u32>, bodies: &[Body]) -> Vec<usize> {
+    let Some(at_least) = at_least else {
+        return Vec::new();
+    };
+    let from = spawns.min(bodies.len());
+    let gone: Vec<usize> = (from..bodies.len()).filter(|&i| !bodies[i].alive).collect();
+    if gone.len() < at_least as usize {
+        return Vec::new();
+    }
+    gone
+}
+
+/// Drops the items at the indices `gone` (in order) from a list kept by
+/// body, as [`drop_removed`] drops the bodies.
+pub fn drop_at<T>(list: &mut Vec<T>, gone: &[usize]) {
+    if gone.is_empty() {
+        return;
+    }
+    let mut i = 0;
+    list.retain(|_| {
+        i += 1;
+        gone.binary_search(&(i - 1)).is_err()
+    });
+}
+
+/// A body's index after the bodies `gone` (in order) are dropped; None
+/// for one of them.
+pub fn index_after_drop(i: usize, gone: &[usize]) -> Option<usize> {
+    match gone.binary_search(&i) {
+        Ok(_) => None,
+        Err(before) => Some(i - before),
+    }
+}
+
+/// Core `level.drop_removed`, as a frame starts and before any hook runs:
+/// the bodies [`removed_to_drop`] names leave the world, the others close
+/// the gap in their order, and every index the world holds follows (the
+/// numbered slots and shot slots, riders, carriers and bumps). A slot
+/// still held by a dropped body is freed as [`release_slots`] would free
+/// it, keeping what the body left; a bump of a dropped body goes.
+pub fn drop_removed(spec: &Spec, w: &mut World) {
+    let gone = removed_to_drop(spec, w);
+    if gone.is_empty() {
+        return;
+    }
+    // Each old index's new index plus one; 0 for a dropped body.
+    let mut to = vec![0u32; w.bodies.len()];
+    let mut next = gone.iter().peekable();
+    let mut n = 0u32;
+    for (i, t) in to.iter_mut().enumerate() {
+        if next.peek() == Some(&&i) {
+            next.next();
+        } else {
+            n += 1;
+            *t = n;
+        }
+    }
+    let moved = |id: u32| -> u32 {
+        id.checked_sub(1)
+            .and_then(|i| to.get(i as usize))
+            .copied()
+            .unwrap_or(0)
+    };
+    let mut seen = Vec::new();
+    for s in &mut w.slots {
+        if s.body == 0 || moved(s.body) != 0 {
+            continue;
+        }
+        if let Some(b) = w.bodies.get(s.body as usize - 1)
+            && !seen.contains(&s.body)
+        {
+            seen.push(s.body);
+            let keeps = spec.kind(b).orbit.as_ref().is_some_and(|o| o.angle_in_slot);
+            let vy = if keeps {
+                Fx::from_int(b.ext[0] >> 8).add(Fx(b.vy.frac()))
+            } else {
+                b.vy
+            };
+            s.rest = [Fx(b.x.frac()), vy, Fx(b.y.frac())];
+        }
+        s.body = 0;
+    }
+    for s in &mut w.shots {
+        if s.body == 0 || moved(s.body) != 0 {
+            continue;
+        }
+        if let Some(b) = w.bodies.get(s.body as usize - 1) {
+            s.rest = [Fx(b.x.frac()), Fx(b.y.frac()), Fx(b.vy.frac())];
+        }
+        s.body = 0;
+    }
+    for s in &mut w.slots {
+        s.body = moved(s.body);
+    }
+    for s in &mut w.shots {
+        s.body = moved(s.body);
+    }
+    w.bumps.retain_mut(|(a, b)| {
+        let (x, y) = (moved(*a + 1), moved(*b + 1));
+        *a = x.wrapping_sub(1);
+        *b = y.wrapping_sub(1);
+        x != 0 && y != 0
+    });
+    let mut i = 0;
+    w.bodies.retain(|_| {
+        i += 1;
+        to[i - 1] != 0
+    });
+    for b in &mut w.bodies {
+        b.riding = moved(b.riding);
+        b.carrying = moved(b.carrying);
+        b.carrier = moved(b.carrier);
     }
 }
 
@@ -6309,6 +6442,7 @@ mod tests {
                 spawn_in_order: false,
                 appear_still: false,
                 slot_rest: false,
+                drop_removed: None,
                 hard: false,
                 draw: None,
                 scroll_stop: None,
@@ -7524,6 +7658,117 @@ mod tests {
         let (steps, starts) = run(&s);
         assert_eq!(steps, 0, "the freeze still stops the step");
         assert!(starts >= 9, "the frame start runs on every frozen frame");
+    }
+
+    /// A made-up hook that makes and removes bodies all through play, as a
+    /// bar game's do: the level's bug makes a child every frame (word 3
+    /// marks one, word 0 its frame), removes each child three frames on but
+    /// every fifth, which stays and rides the last that stayed.
+    struct Churn;
+
+    impl crate::ext::Ext for Churn {
+        fn step(&self, cx: &mut crate::ext::ExtCx<'_>) {
+            if cx.me.ext[3] == 1 {
+                return;
+            }
+            let frame = cx.frame as i64;
+            let kind = cx.me.kind;
+            let kept = |b: &Body| b.alive && b.ext[3] == 1 && b.ext[0] % 5 == 0;
+            let last_kept = cx.world.bodies.iter().rposition(kept);
+            for (i, b) in cx.world.bodies.iter().enumerate() {
+                if b.alive && b.ext[3] == 1 && b.ext[0] % 5 != 0 && b.ext[0] + 3 <= frame {
+                    cx.remove(i);
+                }
+            }
+            let id = cx.world.bodies.len();
+            let mut b = new_body(cx.spec, cx.world, kind, n(frame % 50), n(0), false);
+            b.ext = [frame, 0, 0, 1];
+            if frame % 5 == 0 {
+                b.riding = last_kept.map_or(0, |k| k as u32 + 1);
+            }
+            cx.spawn(kind, b.x, b.y, false);
+            cx.set_body(id, b);
+        }
+    }
+
+    /// Core `level.drop_removed`: a level that drops its removed bodies
+    /// plays the same as one that keeps them (the live bodies in order, each
+    /// rider on the same body), and holds no more than the setting of them
+    /// before a frame's start drops them; one that keeps them holds every
+    /// one. The spawns' own bodies stay, a removed one too.
+    #[test]
+    fn a_level_that_drops_its_removed_bodies_plays_the_same() {
+        let mut s = quiet(spec());
+        s.kinds[1].ext = Some("churn".into());
+        let mut exts = crate::ext::Exts::new();
+        exts.insert("churn".into(), Box::new(Churn));
+        let mut dropping = s.clone();
+        dropping.levels[0].drop_removed = Some(4);
+        let spawns = s.levels[0].spawns.len();
+        // The live bodies, each rider by the frame of the body it rides.
+        let live = |w: &World| -> Vec<(Body, i64)> {
+            w.bodies
+                .iter()
+                .filter(|b| b.alive)
+                .map(|b| {
+                    let rides = (b.riding as usize)
+                        .checked_sub(1)
+                        .map_or(-1, |r| w.bodies[r].ext[0]);
+                    (Body { riding: 0, ..*b }, rides)
+                })
+                .collect()
+        };
+        let (mut a, mut b) = (World::power_on(&s), World::power_on(&dropping));
+        let mut dropped = 0;
+        for frame in 1..=200 {
+            let before = b.bodies.len();
+            let gone = removed_to_drop(&dropping, &b);
+            step_with_ext(&s, &mut a, 0, &exts);
+            step_with_ext(&dropping, &mut b, 0, &exts);
+            assert_eq!(live(&a), live(&b), "frame {frame}");
+            if !gone.is_empty() {
+                assert!(
+                    gone.len() >= 4 && gone.iter().all(|&g| g >= spawns),
+                    "{gone:?}"
+                );
+                assert_eq!(b.bodies.len(), before - gone.len() + 1, "frame {frame}");
+                dropped += 1;
+            }
+            let removed = b.bodies[spawns..].iter().filter(|x| !x.alive).count();
+            assert!(removed < 4 + 2, "frame {frame}: {removed} held");
+        }
+        assert!(dropped > 20, "{dropped} drops");
+        assert_eq!(
+            a.bodies.len(),
+            spawns + 200,
+            "the level that keeps them holds each"
+        );
+        // 40 kept, the last two not yet removed, and at most 4 removed.
+        assert!(b.bodies.len() <= spawns + 40 + 2 + 4, "{}", b.bodies.len());
+        // The world it plays from loads as it was.
+        let again = World::from_canonical(&dropping, &b.canonical()).unwrap();
+        assert_eq!(again, b);
+    }
+
+    #[test]
+    fn a_list_kept_by_body_drops_the_same_indices() {
+        let mut v: Vec<u32> = (0..8).collect();
+        drop_at(&mut v, &[1, 4, 5]);
+        assert_eq!(v, [0, 2, 3, 6, 7]);
+        let moved: Vec<Option<usize>> = (0..8).map(|i| index_after_drop(i, &[1, 4, 5])).collect();
+        assert_eq!(
+            moved,
+            [
+                Some(0),
+                None,
+                Some(1),
+                Some(2),
+                None,
+                None,
+                Some(3),
+                Some(4)
+            ]
+        );
     }
 
     /// A hook's `loaded`, on a made-up hook that sets a counter from its

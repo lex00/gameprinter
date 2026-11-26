@@ -168,7 +168,10 @@ pub struct World {
     pub held: u8,
     pub prev: u8,
     /// Every entity of the level, in spawn order, dead ones included, so an
-    /// entity's index is its ID for the whole level.
+    /// entity's index is its ID for the whole level. In a level with core
+    /// `level.drop_removed` the removed ones made during play leave as a
+    /// frame starts once there are enough of them, and an index is an ID
+    /// from one frame start to the next ([`crate::systems::drop_removed`]).
     pub bodies: Vec<Body>,
     /// Each camera's top left corner.
     pub cameras: Vec<[Fx; 2]>,

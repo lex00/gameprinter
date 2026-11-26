@@ -4382,6 +4382,15 @@
           ],
           "description": "The level is drawn ahead of the view in sets of columns, and a\nspawn marked `drawn` appears as its column is drawn. Since core\n0.4.10."
         },
+        "drop_removed": {
+          "description": "Feature `level.drop_removed`: once this many removed entities made\nduring play (past the level's own spawns) are held, they leave the\nworld as the next frame starts, and the entities after them close\nthe gap in the same order. Play is the same; the state stops\ngrowing in a game whose hooks make and remove entities all through\na level (one bar game keeps 4914 removed beside 77 live after 40000\nframes). Every index the world holds follows (slots, riders,\ncarriers, bumps). An entity's index is its id only from one frame\nstart to the next, so a hook must not keep one in its words, and a\nmodel with `orbit_part`, whose parts keep their pivot's, is refused.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "empty": {
           "description": "Feature `level.empty`: a level of `size` empty cells, with no grid\nand no layout. A new game's skeleton (`gp game new`) starts with one,\nso its model runs and its clips can be scored before the level is\nlifted from the game.",
           "type": "boolean"

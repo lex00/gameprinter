@@ -905,6 +905,12 @@ pub const FEATURES: &[Feature] = &[
         &["levels.*.camera.keep_in_view_rows"],
     ),
     core(
+        "level.drop_removed",
+        "",
+        "Removed entities made during play leave the world once a level holds this many, the others closing the gap in order, so a long stay's state stops growing",
+        &["levels.*.drop_removed"],
+    ),
+    core(
         "level.halfway",
         "",
         "A level's checkpoint, where restart-level starts it again once the view got there",

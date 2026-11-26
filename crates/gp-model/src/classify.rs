@@ -169,6 +169,9 @@ pub fn classify_path(model: &Model, path: &Concrete, sim: &BTreeSet<String>) -> 
             }
             "goal" => mk(Content, m("platformer.goal"), None),
             "exit" => mk(Content, m("core.exits"), None),
+            // How long removed entities are held: the state's size, not
+            // what plays.
+            "drop_removed" => mk(Mechanic, None, None),
             _ => mk(Content, None, None),
         },
         "cameras" => match at(2) {

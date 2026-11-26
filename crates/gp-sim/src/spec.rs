@@ -1498,6 +1498,10 @@ pub struct Level {
     /// free one, with the speed up and down and the fraction across its
     /// last body left (core 0.4.11): [`crate::world::World::slot_rest`].
     pub slot_rest: bool,
+    /// Core `level.drop_removed`: once this many removed bodies past the
+    /// level's spawns are held, they leave as the next frame starts
+    /// ([`crate::systems::drop_removed`]).
+    pub drop_removed: Option<u32>,
     /// The level's `hard_spawns` (platformer 0.4.26): a side-scroller's
     /// SecondaryHardMode, which a launcher's `hard_mask` reads too.
     pub hard: bool,

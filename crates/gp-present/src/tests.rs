@@ -1148,6 +1148,7 @@ fn cell_spec() -> Spec {
         spawn_in_order: false,
         appear_still: false,
         slot_rest: false,
+        drop_removed: None,
         hard: false,
         draw: None,
         exits: Vec::new(),

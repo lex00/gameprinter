@@ -668,6 +668,13 @@ impl Preview {
             self.anim
                 .fired(p, self.interp.spec(), self.interp.world(), events);
             let scene = self.anim.scene(p, self.interp.spec(), self.interp.world());
+            // Removed bodies a level drops (core `level.drop_removed`):
+            // what is kept by body follows them.
+            let gone = self.anim.dropped();
+            if !gone.is_empty() {
+                self.viewer.drop_bodies(gone);
+                self.painter.drop_bodies(gone);
+            }
             self.viewer.step(p, self.interp.world(), &scene);
             if let Some(a) = &self.art {
                 self.painter.step(a, &scene);

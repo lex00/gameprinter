@@ -531,6 +531,25 @@ pub fn compile(model: &Model, assets: &Lifted) -> Result<Spec, String> {
         }
         None => None,
     };
+    // An orbit's part keeps its pivot's index in a word, which dropping
+    // removed bodies would move.
+    let orbit_part = kinds.iter().any(|k| {
+        k.orbit_part.is_some()
+            || k.machine
+                .as_ref()
+                .is_some_and(|m| m.states.iter().any(|s| s.kind.orbit_part.is_some()))
+    });
+    if orbit_part
+        && let Some(l) = model
+            .levels
+            .iter()
+            .find(|(_, l)| l.core.drop_removed.is_some())
+    {
+        return Err(format!(
+            "levels.{}.drop_removed: an orbit_part keeps its pivot's index, which dropping removed entities moves",
+            l.0
+        ));
+    }
     Ok(Spec {
         name: model.model.name.clone(),
         actions,
@@ -2052,6 +2071,10 @@ fn level(
         spawn_in_order: c.spawn_in_order,
         appear_still: c.appear_still,
         slot_rest: c.slot_rest,
+        drop_removed: match c.drop_removed {
+            Some(0) => return Err(format!("{at}.drop_removed: at least 1")),
+            n => n,
+        },
         hard: l.platformer.hard_spawns,
         hit_widths: c
             .hit_widths

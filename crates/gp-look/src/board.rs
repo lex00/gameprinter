@@ -44,6 +44,9 @@ pub struct BoardArt {
     /// The spec's counter names, by index, as a theme's `counter_off`
     /// names them.
     counter_names: Vec<String>,
+    /// By the spec's level index: its spawns and its `drop_removed` (core
+    /// `level.drop_removed`), for the sprite lag ([`SpriteLag`]).
+    drops: Vec<(usize, Option<u32>)>,
     /// Whether the model's positions are the board's own units (its state
     /// mapping's `board_units`): top left, y down, each unit
     /// [`video::UNIT`] screen pixels, so a body's sprite entry holds the
@@ -985,6 +988,11 @@ impl BoardArt {
             kinds,
             kind_names: spec.kinds.iter().map(|k| k.name.clone()).collect(),
             counter_names: spec.counters.names().map(str::to_owned).collect(),
+            drops: spec
+                .levels
+                .iter()
+                .map(|l| (l.spawns.len(), l.drop_removed))
+                .collect(),
             board_units: false,
         }))
     }
@@ -1438,9 +1446,22 @@ pub struct SpriteLag {
     now: Option<(u64, Vec<gp_sim::world::Body>, Vec<bool>)>,
     /// The frame before it, the same.
     before: Option<(u64, Vec<gp_sim::world::Body>, Vec<bool>)>,
+    /// Core `level.drop_removed`: the bodies the last frame seen dropped as
+    /// it started, by their index in the frame before. They are taken out of
+    /// that frame's bodies too (being removed, the board drew nothing of
+    /// them), so the lagged bodies keep the indices of the frame's own; a
+    /// painter kept by the lagged bodies drops the same ([`Self::dropped`]).
+    dropped: Vec<usize>,
 }
 
 impl SpriteLag {
+    /// The bodies the last frame seen dropped as it started ([`SpriteLag`]),
+    /// by their index in the frame before; empty on most frames.
+    #[must_use]
+    pub fn dropped(&self) -> &[usize] {
+        &self.dropped
+    }
+
     /// The world and shown bodies to draw `w`'s frame with on `art`: `w`
     /// with the frame before's bodies and their `shown`; with no frame
     /// before, `w` as [`BoardArt::own_frame`] gives it; None to draw `w`
@@ -1458,6 +1479,15 @@ impl SpriteLag {
             } else {
                 None
             };
+            self.dropped.clear();
+            if let (Some((_, bodies, shown)), Some(&(spawns, at_least))) =
+                (self.before.as_mut(), art.drops.get(w.level))
+            {
+                let gone = gp_sim::systems::removed_to_drop_in(spawns, at_least, bodies);
+                gp_sim::systems::drop_at(bodies, &gone);
+                gp_sim::systems::drop_at(shown, &gone);
+                self.dropped = gone;
+            }
             self.now = Some((w.frame, w.bodies.clone(), shown.to_vec()));
         }
         let Some((_, bodies, shown)) = self.before.as_ref() else {
@@ -1532,6 +1562,15 @@ impl Companion {
         shown: &[bool],
     ) -> Result<Option<Themed>, String> {
         let (w, shown) = self.lagged(state, shown)?;
+        // The painter keeps to its bodies across a drop of removed ones
+        // (core `level.drop_removed`), on the frame it steps on to.
+        if theme.last.is_some_and(|l| l + 1 == w.frame) {
+            let lag = self
+                .lag
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            theme.painter.drop_bodies(lag.dropped());
+        }
         let scene = gp_present::Animator::new().scene(&self.present, &self.spec, &w);
         Ok(self.art.themed(theme, &w, &shown, &scene.rank))
     }

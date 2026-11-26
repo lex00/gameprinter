@@ -2430,6 +2430,18 @@ pub struct LevelCore {
     /// sends them back if they aren't where it wants them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub loop_back: Option<LoopBack>,
+    /// Feature `level.drop_removed`: once this many removed entities made
+    /// during play (past the level's own spawns) are held, they leave the
+    /// world as the next frame starts, and the entities after them close
+    /// the gap in the same order. Play is the same; the state stops
+    /// growing in a game whose hooks make and remove entities all through
+    /// a level (one bar game keeps 4914 removed beside 77 live after 40000
+    /// frames). Every index the world holds follows (slots, riders,
+    /// carriers, bumps). An entity's index is its id only from one frame
+    /// start to the next, so a hook must not keep one in its words, and a
+    /// model with `orbit_part`, whose parts keep their pivot's, is refused.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub drop_removed: Option<u32>,
     /// Values counters take when the level starts, by counter name, such as
     /// the time limit.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -2717,6 +2729,7 @@ pub const LEVEL_CORE_FIELDS: &[&str] = &[
     "draw",
     "scroll_stop",
     "loop_back",
+    "drop_removed",
     "counters",
     "next",
     "exit",

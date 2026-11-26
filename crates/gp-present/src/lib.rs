@@ -869,6 +869,13 @@ pub struct Animator {
     live: Vec<Live>,
     /// The first camera's x in whole pixels on the last step.
     cam: Option<i64>,
+    /// Core `level.drop_removed`: the frame last stepped and the bodies the
+    /// frame after it drops as it starts ([`gp_sim::systems::removed_to_drop`]).
+    drop_next: Option<(u64, Vec<usize>)>,
+    /// The bodies the frame last stepped dropped as it started, by their
+    /// index before: what else keeps something by body follows them
+    /// ([`Animator::dropped`]).
+    dropped: Vec<usize>,
 }
 
 /// Whether a state that freezes the world holds it, as `gp_sim` decides
@@ -908,8 +915,38 @@ impl Animator {
         self.clock
     }
 
+    /// The bodies the frame last stepped dropped as it started (core
+    /// `level.drop_removed`), by their index before, in order; empty on
+    /// most frames. A keeper of something by body beside the animator (the
+    /// viewer, a painter) drops the same before its own step.
+    pub fn dropped(&self) -> &[usize] {
+        &self.dropped
+    }
+
+    /// Follows the drop of removed bodies as this frame started, when it
+    /// is the frame after the last stepped: each body's animation and an
+    /// effect's entity keep to their body.
+    fn follow_drop(&mut self, w: &World) {
+        self.dropped.clear();
+        let Some((frame, gone)) = self.drop_next.take() else {
+            return;
+        };
+        if frame.wrapping_add(1) != w.frame || gone.last().is_some_and(|&g| g >= self.bodies.len())
+        {
+            return;
+        }
+        gp_sim::systems::drop_at(&mut self.bodies, &gone);
+        for l in &mut self.live {
+            l.entity = l
+                .entity
+                .and_then(|e| gp_sim::systems::index_after_drop(e, &gone));
+        }
+        self.dropped = gone;
+    }
+
     /// Advances one simulation frame.
     pub fn step(&mut self, p: &Present, spec: &Spec, w: &World) {
+        self.follow_drop(w);
         let frozen = frozen(spec, w);
         // Bodies are only ever added within a level, so a longer list
         // keeps each body's animation and starts the new ones.
@@ -1012,6 +1049,8 @@ impl Animator {
             let last = self.placed(p, spec, w, i);
             self.bodies[i].last = last;
         }
+        let gone = gp_sim::systems::removed_to_drop(spec, w);
+        self.drop_next = (!gone.is_empty()).then_some((w.frame, gone));
     }
 
     /// Follows the held cells (a bump's time counts as the world counts
