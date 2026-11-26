@@ -4,7 +4,8 @@
 # set by one rule only.
 #
 # script-src: the page's own files, and WebAssembly (the interpreter and
-# the lift module). Nothing inline: styles are in page.css and preview.css.
+# the lift module). Nothing inline: styles are in arcade.css, page.css,
+# what-is-this.css and preview.css.
 # connect-src: its own files, and any https source a game comes from:
 # page.json's source, and a second registry of themes (a link's r=, which
 # the page takes only as https; docs/host-your-own.md). `https:` rather

@@ -87,7 +87,7 @@
 // Timings and results go to window.__gp for scripts/web/measure.mjs.
 
 import { withLevel } from "./level.js";
-import { AUTOSAVE_SLOT, BINDINGS, SCREEN, QUICK_SLOTS, SHELL_SETTINGS, exportName, slotName, whenName } from "./shell-keys.js";
+import { AUTOSAVE_SLOT, BINDINGS, NES, SCREEN, QUICK_SLOTS, SHELL_SETTINGS, exportName, slotName, whenName } from "./shell-keys.js";
 import { LAYOUTS, openControls } from "./controls.js";
 import { openStorage } from "./storage.js";
 import { ModuleHost } from "./module-host.js";
@@ -824,6 +824,17 @@ addEventListener("keydown", (e) => {
 addEventListener("keyup", (e) => {
   down.delete(e.code);
   controls?.keyUp(e.code, e.timeStamp);
+});
+// The page that holds this frame presses a game key for a click or a tap
+// on a button of its own ({gp: "press", code, down}, of its own origin
+// only): a key of the layout in use and no other, handed to the controls
+// as a key press is, at the time it arrives.
+addEventListener("message", (e) => {
+  const m = e.data;
+  if (e.origin !== location.origin || !m || m.gp !== "press" || typeof m.code !== "string") return;
+  if (![...LAYOUT.keys, ...LAYOUT.keys2].some((ks) => ks.includes(m.code))) return;
+  if (m.down) controls?.keyDown(m.code);
+  else controls?.keyUp(m.code);
 });
 // The page lost the keyboard: no key is held, since a key let go while
 // another window has it never says so here.
@@ -2567,9 +2578,15 @@ function shell(p, cfg, canvas, profileNow, host) {
   // Slots need a module that writes save records (2026-11-04); rewind
   // needs the module's ring (2026-11-05).
   const canSave = can && p.saveRecord(profileNow()) !== null;
+  // The line under the picture (preview.css draws it). A page that holds
+  // this frame and shows the keys itself opens it with `keys=page` (the
+  // public page: its legend and its ALL KEYS button): the line then holds
+  // only what was just said, in larger letters, and the page is told the
+  // layout the game plays in ({gp: "keys", layout}).
+  const pageKeys = parent !== window && new URLSearchParams(location.search).get("keys") === "page";
+  document.documentElement.classList.toggle("held", pageKeys);
   const bar = document.createElement("div");
   bar.className = "key-hint";
-  Object.assign(bar.style, { font: "12px monospace", color: "#ccc", textAlign: "center", padding: "6px" });
   canvas.after(bar);
   const canView = p.view("");
   const slots = [1, 2, 3, 4];
@@ -2591,6 +2608,37 @@ function shell(p, cfg, canvas, profileNow, host) {
     (p.hasSettings() ? ", Esc settings" : "");
   // The hint, for the checks.
   t.keyHint = help;
+  // The same keys as a list, for a page that shows them itself (the public
+  // page's ALL KEYS): groups of rows, each a name, its keys (the game's own
+  // as their codes, the shell's as the hint writes them) and a word on how
+  // (`how`: hold, or controller). A group may end in a note.
+  const row = (name, keys, how = "") => ({ name, keys, how });
+  const buttonName = (n) => (n === "button" ? "Action" : n.charAt(0).toUpperCase() + n.slice(1));
+  t.keys = () => {
+    const names = LAYOUT.names ?? NES;
+    const play = LAYOUT.keys.map((ks, bit) => row(buttonName(names[bit] ?? `button ${bit + 1}`), ks.join(", "))).filter((r) => r.keys);
+    if (p.hasSettings()) play.push(row("Settings", "Escape"));
+    const saves = [];
+    if (can && !settings.console_only) {
+      if (canSave && saveKeys) saves.push(row("Save to a slot", saveKeys));
+      if (canSave && loadKeys) saves.push(row("Load a slot", loadKeys));
+      saves.push(row("Rewind", "Backspace", "hold"));
+      if (settings.quick_buttons && canSave) saves.push(row("Quick save", "RB", "controller"), row("Quick load", "LB", "controller"));
+    }
+    const picture = [row("Scale", "F8")];
+    if (canView) {
+      picture.push(row("Widescreen", "F9"), row("Dim flashes", "F10"));
+      if (muteKeys) picture.push(row("Mute a channel", muteKeys));
+    }
+    if (fullKey) picture.push(row("Full screen", fullKey));
+    return [
+      { name: "Play", rows: play },
+      { name: "Saves", rows: saves, note: !can ? "This game's build has no saves or rewind." : settings.console_only ? "Console only is on: no saves or rewind." : "" },
+      { name: "Picture and sound", rows: picture },
+      { name: "Time", rows: [row("Pause", "F2"), row("One frame", "F3"), row("Slow motion", "F4")] },
+    ];
+  };
+  if (pageKeys) parent.postMessage({ gp: "keys", layout: LAYOUT.arcade ? "arcade" : "nes" }, location.origin);
   // Picture and sound options, kept per game.
   const wides = ["off", "16:10", "16:9"];
   const channels = ["pulse1", "pulse2", "triangle", "noise", "dmc"];
@@ -2637,8 +2685,9 @@ function shell(p, cfg, canvas, profileNow, host) {
   let leftFullAt = -Infinity;
   const show = () => {
     // In full screen the line is laid over the picture's foot, so it holds
-    // what was just said and nothing else.
-    bar.textContent = note && performance.now() < noteUntil ? note : isFull() ? "" : help();
+    // what was just said and nothing else; the same on a page that shows
+    // the keys itself.
+    bar.textContent = note && performance.now() < noteUntil ? note : isFull() || pageKeys ? "" : help();
   };
   const frameOf = (bytes) => Number(new DataView(bytes.buffer, bytes.byteOffset).getBigUint64(8, true));
   const time = (f) => {

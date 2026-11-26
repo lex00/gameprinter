@@ -330,9 +330,9 @@ if "sets" in r:
 os.makedirs(f"{out}.facts", exist_ok=True)
 open(f"{out}.facts/page.json", "w").write(json.dumps(facts, indent=1) + "\n")
 EOF
-sed "s|<title>Game Printer</title>|<title>$title</title>|; s|<h1 id=\"title\">Game Printer</h1>|<h1 id=\"title\">$title</h1>|" \
+sed "s|<title>Game Printer</title>|<title>$title</title>|; s|<h1 id=\"title\" class=\"sign\">Game Printer</h1>|<h1 id=\"title\" class=\"sign\">$title</h1>|" \
   "$repo/scripts/web/public/index.html" > "$out/index.html"
-cp "$repo/scripts/web/public/page.js" "$repo/scripts/web/public/share.js" "$repo/scripts/web/public/explain.js" "$repo/scripts/web/public/what-is-this.js" "$repo/scripts/web/public/what-is-this.css" "$repo/scripts/web/public/boot.js" "$repo/scripts/web/public/page.css" "$repo/scripts/web/public/_headers" "$out/"
+cp "$repo/scripts/web/public/page.js" "$repo/scripts/web/public/share.js" "$repo/scripts/web/public/explain.js" "$repo/scripts/web/public/what-is-this.js" "$repo/scripts/web/public/what-is-this.css" "$repo/scripts/web/public/boot.js" "$repo/scripts/web/public/keys.js" "$repo/scripts/web/public/arcade.css" "$repo/scripts/web/public/page.css" "$repo/scripts/web/public/_headers" "$out/"
 printf '/p /index.html 200\n' > "$out/_redirects"
 cp "$repo/scripts/web/public/install.js" "$out/game/"
 (cd "$repo" && cargo rustc -q --locked -p gp-web-registry --lib --release --target wasm32-unknown-unknown \

@@ -1,99 +1,151 @@
-:root {
-  --bg: #1b1712;
-  --panel: #2a241c;
-  --text: #f3ead8;
-  --muted: #c9bda4;
-  --accent: #e0a040;
-  --border: #4a3f30;
-}
-html, body { height: 100%; }
-body {
-  margin: 0;
-  background: var(--bg);
-  color: var(--text);
-  font: 16px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
-  display: flex;
-  flex-direction: column;
-}
-header {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px 16px;
-  padding: 8px 16px;
-  background: var(--panel);
-  border-bottom: 1px solid var(--border);
-}
-h1 { font-size: 20px; margin: 0; letter-spacing: 0.02em; }
-#mode { color: var(--muted); }
-#skipped { flex-basis: 100%; color: #f0d080; font-size: 14px; }
-#registry-line { margin: 0; padding: 6px 16px; color: #f0d080; font-size: 14px; overflow-wrap: anywhere; }
-.spacer { flex: 1; }
-button, label.button {
-  font: inherit;
-  color: var(--bg);
-  background: var(--accent);
-  border: 0;
-  border-radius: 6px;
-  padding: 6px 14px;
-  cursor: pointer;
-}
-button.quiet { background: transparent; color: var(--text); border: 1px solid var(--border); }
-/* The header's link to the list of games, drawn as its buttons are. */
-a.quiet { color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 6px 14px; text-decoration: none; font: inherit; }
-a.quiet[hidden] { display: none; }
-a.quiet:focus-visible { outline: 3px solid var(--text); outline-offset: 2px; }
-button:focus-visible, label.button:focus-within { outline: 3px solid var(--text); outline-offset: 2px; }
-#rom { position: absolute; width: 1px; height: 1px; opacity: 0; }
-main { flex: 1; min-height: 0; display: flex; }
-iframe { flex: 1; border: 0; background: #000; }
-footer {
-  padding: 6px 16px;
-  font-size: 14px;
-  color: var(--muted);
-  background: var(--panel);
-  border-top: 1px solid var(--border);
-}
-#message[data-kind="error"] { color: #ff9a8a; }
-#message[data-kind="ok"] { color: #a8e0a0; }
-#message[data-kind="warn"] { color: #f0d080; }
+/* The public page's own layout, on top of arcade.css (the colours, the
+   type scale, .tube, .sign, .card and .cap). A narrow or short window
+   stacks the page: the way back and the title, the game, the game's keys,
+   the page's buttons. A wide one (the rule at the end) puts the game in
+   the middle at the window's full height with a wing on each side. The
+   page's Content-Security-Policy takes styles from files only, so nothing
+   here is set from a script: a state is an attribute or a class. */
+
 [hidden] { display: none !important; }
-footer details { margin-top: 4px; }
-footer summary { cursor: pointer; color: var(--text); width: fit-content; }
-footer summary:focus-visible { outline: 3px solid var(--text); outline-offset: 2px; }
-#about { max-width: 70ch; margin: 6px 0 2px; }
-#about p { margin: 0 0 6px; }
-#howto {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 2px 24px;
-  padding: 6px 16px;
-  font-size: 15px;
-  background: var(--bg);
-  border-bottom: 1px solid var(--border);
+
+.floor { display: flex; flex-direction: column; gap: 14px; padding: 12px; }
+.wing { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.top { display: flex; align-items: stretch; gap: 10px; }
+.top .home { flex: none; padding: 6px 14px; gap: 8px; font-size: 17px; letter-spacing: 0.03em; white-space: nowrap; }
+.top .sign { flex: 1; min-width: 0; padding: 12px 8px; border-radius: 14px; font-size: 24px; letter-spacing: 0.04em; }
+
+/* What plays, with a lamp before it: red with no game, green with one. */
+#mode { position: relative; margin: 0; padding-left: 28px; font-size: var(--fs-small); overflow-wrap: anywhere; }
+#mode::before {
+  content: "";
+  position: absolute;
+  left: 2px;
+  top: 3px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--red);
+  box-shadow: 0 0 12px var(--red);
 }
-#howto p { margin: 0; }
-#howto b { color: var(--accent); font-weight: 600; }
+body[data-state="playing"] #mode::before { background: var(--green); box-shadow: 0 0 12px var(--green); }
+#skipped { margin: 0; color: var(--yellow); font-size: var(--fs-small); overflow-wrap: anywhere; }
+
+/* The game: the frame the player draws in, or the ROM picker. */
+.stage {
+  display: flex;
+  min-width: 0;
+  border: 3px solid var(--cyan);
+  background: #04050a;
+  box-shadow: 0 0 26px #3df2ff88;
+}
+body[data-state="norom"] .stage { border-style: dashed; border-color: var(--yellow); box-shadow: 0 0 26px #ffe14a55; }
+#game { flex: 1; min-width: 0; width: 100%; height: min(100vw, 78vh); border: 0; background: #04050a; }
 #start {
   flex: 1;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 14px;
-  padding: 24px 16px;
+  gap: 16px;
+  min-width: 0;
+  padding: 28px 14px;
   text-align: center;
-  border: 3px dashed transparent;
 }
-#start.over { border-color: var(--accent); background: var(--panel); }
-label.button.big {
-  font-size: 28px;
-  font-weight: 600;
-  padding: 22px 44px;
-  border-radius: 12px;
-  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.45);
+#start.over { background: color-mix(in srgb, var(--yellow) 18%, #04050a); }
+#load-label { font-size: 24px; min-height: 76px; padding: 8px 24px; }
+#rom { position: absolute; width: 1px; height: 1px; opacity: 0; }
+#drop-hint { margin: 0; font-size: var(--fs); }
+#rom-help, #rom-notice { max-width: 56ch; margin: 0; color: var(--muted); font-size: var(--fs-small); overflow-wrap: anywhere; }
+
+/* The game's keys: a row for each, its key caps at its right. A row that
+   presses the game is a button; the row of arrows is only a legend. */
+#legend { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+#legend-rows { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 290px), 1fr)); gap: 12px; }
+body[data-state="norom"] #legend-rows div.tube { box-shadow: none; text-shadow: none; border-color: color-mix(in srgb, var(--c) 60%, #0a0520); }
+#legend-rows .tube { flex-wrap: wrap; justify-content: space-between; gap: 6px 8px; width: 100%; padding: 6px 8px 6px 14px; border-radius: 16px; }
+#legend-rows div.tube { cursor: default; }
+#legend-rows div.tube:hover { background: #0a052099; }
+#legend-rows div.tube:active { transform: none; }
+.keys { display: flex; align-items: center; gap: 5px; }
+.keys .or { font: 400 var(--fs-small)/1 var(--text); color: var(--muted); letter-spacing: 0; text-transform: none; text-shadow: none; }
+
+/* The page's buttons: two to a row while the page is stacked. */
+.wing.right { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 10px; }
+.wing.right .label, .wing.right .grow { display: none; }
+.wing.right .tube { padding: 6px 8px; font-size: 18px; }
+#howto { grid-column: 1 / -1; display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; border: 2px solid color-mix(in srgb, var(--violet) 70%, #0a0520); border-radius: 16px; background: var(--card); font-size: var(--fs-small); overflow-wrap: anywhere; }
+#howto p { margin: 0; }
+#howto b { color: var(--violet); }
+
+/* The foot: what the page last said on a line of its own, then whose the
+   game's names are with About at its right. About opens under them. */
+footer { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 24px; padding: 4px 16px 12px; color: var(--muted); font-size: var(--fs-small); }
+#message { flex: 0 0 100%; min-width: 0; color: var(--ink); overflow-wrap: anywhere; }
+#message[data-kind="error"] { color: var(--red); }
+#message[data-kind="ok"] { color: var(--green); }
+#message[data-kind="warn"] { color: var(--yellow); }
+#mark-line { flex: 1 1 0; min-width: min(100%, 30ch); margin: 0; }
+#registry-line { flex: 0 0 100%; margin: 0 0 4px; color: var(--yellow); overflow-wrap: anywhere; }
+footer details { flex: none; }
+footer details[open] { flex: 0 0 100%; }
+footer summary { width: fit-content; padding: 6px 4px; color: var(--cyan); font-weight: 600; text-decoration: underline; cursor: pointer; }
+#about { max-width: 80ch; max-height: 32vh; margin: 4px 0 2px; overflow-y: auto; overflow-wrap: anywhere; }
+#about p { margin: 0 0 8px; }
+
+/* ALL KEYS: every key the game and its shell take, in groups. */
+#keys { width: min(760px, calc(100vw - 24px)); max-height: calc(100vh - 24px); padding: 20px 24px; overflow: auto; }
+#keys::backdrop { background: #000c; }
+#keys h2 { margin: 0 0 10px; font: 700 34px/1 var(--display); letter-spacing: 0.08em; text-transform: uppercase; text-shadow: 0 0 14px var(--green); }
+#keys h2:focus { outline: none; }
+#keys h3 { margin: 0 0 6px; font: 700 18px/1 var(--display); letter-spacing: 0.12em; text-transform: uppercase; color: var(--green); }
+#keys-list { columns: 300px 2; column-gap: 28px; }
+#keys-list section { break-inside: avoid; padding-bottom: 14px; }
+#keys-list dl { margin: 0; }
+#keys-list dl div { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 10px; padding: 5px 0; border-bottom: 1px solid #ffffff1f; }
+#keys-list dt { font-size: var(--fs); }
+#keys-list dd { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 6px; margin: 0; }
+#keys-list .how, #keys-list .or { color: var(--muted); font-size: var(--fs-small); }
+#keys-list .note, #keys-note { margin: 8px 0 0; color: var(--muted); font-size: var(--fs-small); }
+#keys-close { margin: 16px 0 0 auto; }
+
+@media (min-width: 1000px) and (min-height: 560px) {
+  html, body { height: 100%; }
+  body { display: grid; grid-template-rows: minmax(0, 1fr) auto; }
+  .floor {
+    display: grid;
+    grid-template-columns: clamp(270px, 22vw, 320px) minmax(0, 1fr) clamp(270px, 22vw, 320px);
+    grid-template-rows: auto minmax(0, 1fr);
+    gap: 0 6px;
+    min-height: 0;
+    padding: 4px;
+  }
+  /* A wing scrolls when the window is too short for it; its padding keeps
+     the tubes' glow and the focus ring inside the part that scrolls. */
+  .wing.left { grid-area: 1 / 1 / 2 / 2; padding: 12px 12px 6px; }
+  #legend { grid-area: 2 / 1 / 3 / 2; min-height: 0; padding: 8px 12px 12px; overflow-y: auto; }
+  .stage { grid-area: 1 / 2 / 3 / 3; min-height: 0; margin: 12px 0; }
+  .wing.right { grid-area: 1 / 3 / 3 / 4; display: flex; min-height: 0; padding: 12px; overflow-y: auto; }
+  .top { flex-direction: column; gap: 14px; }
+  .top .home { padding: 6px 20px; gap: 12px; font-size: var(--fs-btn); letter-spacing: 0.06em; }
+  .top .sign { flex: none; padding: 14px 12px; border-radius: 18px; font-size: 46px; letter-spacing: 0.08em; }
+  .top .sign.long { font-size: 36px; }
+  .top .sign.longer { font-size: 28px; letter-spacing: 0.05em; }
+  .top .sign.longest { font-size: 22px; letter-spacing: 0.03em; }
+  #game { height: auto; }
+  #load-label { font-size: 32px; min-height: 92px; padding: 10px 40px; }
+  #legend-rows { grid-template-columns: minmax(0, 1fr); }
+  .wing.right .label { display: block; margin: 6px 0 2px; }
+  .wing.right .grow { display: block; flex: 1 1 0; }
+  .wing.right .tube { flex: none; padding: 6px 20px; font-size: var(--fs-btn); }
+  /* The how-to-play lines give way first: they scroll in their own box
+     before the wing does. */
+  #howto { flex: 0 1 auto; min-height: 110px; overflow-y: auto; }
+  footer { padding: 0 16px 10px; }
 }
-label.button.big:hover { filter: brightness(1.08); }
-#drop-hint { margin: 0; color: var(--muted); }
-#rom-help { max-width: 52ch; color: var(--muted); font-size: 14px; }
-#rom-notice { max-width: 52ch; margin: 6px 0 0; color: var(--muted); font-size: 14px; }
+/* A wide window that is not tall: shorter tubes, so a wing needs no scroll. */
+@media (min-width: 1000px) and (min-height: 560px) and (max-height: 820px) {
+  :root { --btn-h: 46px; }
+  .wing, #legend, #legend-rows { gap: 9px; }
+  .cap { height: 34px; min-width: 34px; }
+  .top .sign { padding: 10px 12px; }
+}

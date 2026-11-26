@@ -3349,16 +3349,32 @@ async function arcadePlay(S, { zip }) {
   const size = await gp(() => [document.getElementById("game").width, document.getElementById("game").height]);
   const [sw, sh] = arcadeGame.check.arcade.screen;
   check(size[0] === sw && size[1] === sh, `the canvas is the board's size (${size.join(" by ")})`);
-  // The key hint under the game comes from the cabinet's layout: 5 and 1
-  // are the coin and the start, so the slots load on 2-4 and the mute keys
-  // are 6-9, and the NES hint's keys aren't named.
+  // The player's key hint comes from the cabinet's layout: 5 and 1 are the
+  // coin and the start, so the slots load on 2-4 and the mute keys are
+  // 6-9, and the NES hint's keys aren't named. On this page the keys are
+  // the page's to show (the frame is opened with keys=page): its legend
+  // beside the game and its ALL KEYS list, not the line under the picture.
   const hint = await gp(() => window.__gp.keyHint?.() ?? null);
   check(
     !!hint && hint.startsWith("5 coin, 1 start, ") && /\b2-4 load\b/.test(hint) && !/\b1-4 load\b|\b5-9\b/.test(hint) && (!/mute a channel/.test(hint) || /\b6-9 mute a channel\b/.test(hint)),
-    `the key hint under the game is the cabinet's ("${hint}")`,
+    `the player's key hint is the cabinet's ("${hint}")`,
   );
-  const shown = await S.until(() => [...document.querySelectorAll("div")].some((d) => d.textContent === window.__gp.keyHint()));
-  check(shown, "and it is the line shown under the game");
+  const under = await gp(() => document.querySelector(".key-hint")?.textContent ?? null);
+  check(under !== null && !under.includes("5 coin"), `the line under the game doesn't hold the keys ("${under}")`);
+  await p.waitForFunction(() => document.querySelectorAll("#legend-rows button:not(:disabled)").length > 0, null, { timeout: 5000 }).catch(() => {});
+  const legend = await p.locator("#legend-rows > *").evaluateAll((els) => els.map((e) => `${e.getAttribute("aria-label")}${e.disabled ? " (off)" : ""}`));
+  check(
+    legend.join(" | ") === "Coin, key 5 | Start, key 1 | Move, Left arrow, Up arrow, Down arrow, Right arrow | Action, key X or Space",
+    `the page's legend is the cabinet's, and its buttons press the game (${legend.join(" | ")})`,
+  );
+  await p.locator("#keys-open").click();
+  const allKeys = (await p.locator("#keys-list").innerText()).replace(/\s+/g, " ");
+  check(
+    (await p.locator("#keys").evaluate((d) => d.open)) && /Coin .*\b5\b.*Start .*\b1\b/.test(allKeys) && /Load a slot 2-4\b/.test(allKeys) && !/\b5-9\b/.test(allKeys),
+    `ALL KEYS lists the cabinet's keys with the shell's ("${allKeys}")`,
+  );
+  await p.locator("#keys-close").click();
+  check(!(await p.locator("#keys").evaluate((d) => d.open)), "and Close shuts it");
   // A coin and the start: the frames go on and the picture changes.
   const before = await gp(() => window.__gp.hashes.length);
   await S.key("Digit5", 200);

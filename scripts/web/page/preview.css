@@ -1,5 +1,14 @@
 body { margin: 0; background: #111; }
 canvas { display: block; margin: 0 auto; width: 768px; height: 720px; image-rendering: pixelated; }
+/* The line under the picture (preview.js): the keys, or what was just said. */
+.key-hint { font: 12px monospace; color: #ccc; text-align: center; padding: 6px; }
+/* In a page that shows the keys itself (preview.js sets `held` for
+   `keys=page`): the picture in the middle of the frame, and the line, which
+   then holds only what was just said, in letters large enough to read. */
+html.held, html.held body { height: 100%; background: #04050a; }
+html.held body { display: flex; flex-direction: column; justify-content: safe center; }
+html.held .key-hint { flex: none; min-height: 22px; font: 600 16px/22px system-ui, -apple-system, "Segoe UI", sans-serif; color: #fff; }
+html.held canvas { flex: none; }
 /* Full screen (preview.js sets `full` on the page): the picture in the
    middle of a black screen, and the line under it laid over its foot,
    shown only while it says something. */

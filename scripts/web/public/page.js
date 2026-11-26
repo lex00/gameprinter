@@ -25,6 +25,7 @@
 
 import { gamePageOf, linkSettings, profileNames, readLink, shareLink, themesSource } from "./share.js";
 import { whatIsThis } from "./what-is-this.js";
+import { capOf, capsOf, legendOf, playGroup } from "./keys.js";
 
 const $ = (id) => document.getElementById(id);
 const frame = $("game");
@@ -32,6 +33,26 @@ const say = (text, kind = "") => {
   $("message").textContent = text;
   $("message").dataset.kind = kind;
 };
+// The game's title, on the sign and the tab. The sign's letters step down
+// for a long word (arcade.css), by a class: the page takes styles from its
+// files only.
+function setTitle(text) {
+  const sign = $("title");
+  sign.textContent = text;
+  document.title = text;
+  const longest = Math.max(0, ...String(text).split(/\s+/).map((w) => w.length));
+  sign.classList.toggle("long", longest > 6 && longest <= 8);
+  sign.classList.toggle("longer", longest > 8 && longest <= 11);
+  sign.classList.toggle("longest", longest > 11);
+}
+// The line saying whose the game's names are: in About, and at the foot of
+// the page where it shows without opening anything. None for a game made
+// with pictures of its own.
+function setMark(text) {
+  $("about-mark").textContent = text;
+  $("mark-line").textContent = text;
+  $("mark-line").hidden = !text;
+}
 
 // The files this page takes, by a game's ROM kind (its play/page.json's
 // rom.kind; docs/web.md, "Players"): the picker's file types (null for
@@ -148,19 +169,19 @@ function showFacts(f) {
     // the game is and who made it, as text.
     $("rom-help").textContent = "";
     $("start").hidden = true;
-    $("title").textContent = f.title;
-    document.title = f.title;
+    setTitle(f.title);
+    showLegend(f.player === "arcade" ? "arcade" : "nes");
     const lines = f.howto?.length ? f.howto : OWN_HOWTO;
     $("howto").replaceChildren(...lines.map((t) => Object.assign(document.createElement("p"), { textContent: t })));
     $("about-what").textContent = "This page plays a game made playable in the browser with Game Printer. This one was made with pictures of its own.";
     $("about-rom").textContent = ownAbout(f);
-    $("about-mark").textContent = "";
+    setMark("");
     return;
   }
   $("rom-help").textContent =
     `Load your own ${rom.name} ${k.noun} (${rom.file}) to play. ` + "It is checked and read in this browser and never uploaded.";
-  $("title").textContent = f.title;
-  document.title = f.title;
+  setTitle(f.title);
+  showLegend(f.player === "arcade" ? "arcade" : "nes");
   // The how-to-play lines, and for a player whose sound needs saying a
   // line about it, as text.
   const sound = PLAYERS[f.player]?.sound;
@@ -169,11 +190,12 @@ function showFacts(f) {
   if (lines.length) $("howto").replaceChildren(...lines.map((t) => Object.assign(document.createElement("p"), { textContent: t })));
   $("about-rom").textContent = `"Load your own ROM" accepts a ${rom.name} ${k.file} that you own. The page checks and reads it in your browser. It is never uploaded.`;
   if (!link.own || f.trademark) {
-    $("about-mark").textContent =
+    setMark(
       f.trademark ??
-      (rom.kind === "zip"
-        ? arcadeNotice(f.title)
-        : `This page is not affiliated with or endorsed by the makers of ${f.title}, which is named here only to say which file is accepted.`);
+        (rom.kind === "zip"
+          ? arcadeNotice(f.title)
+          : `This page is not affiliated with or endorsed by the makers of ${f.title}, which is named here only to say which file is accepted.`),
+    );
   }
   // An arcade game's notice shows by the picker too, not only in About.
   const notice = rom.kind === "zip" ? (f.trademark ?? arcadeNotice(f.title)) : "";
@@ -230,11 +252,10 @@ const ready = pageFile.then((p) => {
     // Nothing of the page's own game shows for another: its name from the
     // link (held to a package name's shape) until its package says more,
     // and help that names no game's keys.
-    $("title").textContent = link.game.name;
-    document.title = link.game.name;
+    setTitle(link.game.name);
     $("rom-help").textContent = `Getting ${link.game.name} from the page's source...`;
     $("about-rom").textContent = '"Load your own ROM" accepts a ROM file of the game that you own. The page checks and reads it in your browser. It is never uploaded.';
-    $("about-mark").textContent = "This page is not affiliated with or endorsed by the makers of the games it plays.";
+    setMark("This page is not affiliated with or endorsed by the makers of the games it plays.");
     $("howto").replaceChildren(
       ...[
         "Settings: press Esc or the Settings button (top right) to switch theme and mode.",
@@ -420,9 +441,12 @@ for (const e of ["keydown", "pointerdown", "click", "touchend"]) addEventListene
 // never leave this browser. Null until one is loaded, and for an NES game.
 let romBytes = null;
 window.__gpRom = () => romBytes;
-// A key pressed while the shell has the focus goes to the game.
+// A key pressed while the shell has the focus goes to the game, when one
+// plays. With none the keys stay the page's: Tab then walks its links and
+// buttons from the first, where moving the focus into the empty frame
+// skipped every one before it.
 addEventListener("keydown", (e) => {
-  if (e.target === document.body) focusGame();
+  if (e.target === document.body && !frame.hidden) focusGame();
 });
 
 // The Settings button opens the game's own screen (docs/settings.md): the
@@ -445,6 +469,149 @@ $("fullscreen").addEventListener("click", () => {
   }
   frame.contentWindow?.postMessage({ gp: "fullscreen" }, location.origin);
   focusGame();
+});
+
+// The game's keys beside it (docs/web.md, "The page's look"): a row for
+// the coin, Start, the arrows and each button, with its keys as key caps,
+// from the layout the game plays in (keys.js legendOf on the player's own
+// table, game/controls.js LAYOUTS: an arcade game's or a pad game's).
+// Before a game plays the layout is the one its player has; the game's
+// frame then says which it took ({gp: "keys", layout}). A row that is one
+// button presses the game while it is held: the frame takes
+// {gp: "press", code, down} and hands the key to its controls as a key
+// press. The arrows are a legend only.
+let layoutsFile = null;
+const layoutsOf = () => (layoutsFile ??= import("./game/controls.js").then((m) => m.LAYOUTS));
+let legendLayout = null;
+let legendOn = false;
+// The shortest a click holds the game's key, so a quick tap is a press
+// some game frame reads.
+const PRESS_MS = 120;
+const capEl = (c) => {
+  const k = document.createElement("kbd");
+  k.className = "cap";
+  if (c.arrow) {
+    k.setAttribute("aria-label", c.say);
+    k.append(Object.assign(document.createElement("i"), { className: `arrow ${c.arrow}` }));
+  } else k.textContent = c.text;
+  return k;
+};
+const orEl = () => Object.assign(document.createElement("span"), { className: "or", textContent: "or" });
+function pressable(el, code) {
+  let held = false;
+  let downAt = 0;
+  let timer = 0;
+  const send = (down) => frame.contentWindow?.postMessage({ gp: "press", code, down }, location.origin);
+  const press = () => {
+    clearTimeout(timer);
+    held = true;
+    downAt = performance.now();
+    send(true);
+  };
+  const release = () => {
+    if (!held) return;
+    held = false;
+    timer = setTimeout(() => send(false), Math.max(0, PRESS_MS - (performance.now() - downAt)));
+  };
+  // The keyboard stays the game's: a mouse press doesn't move the focus.
+  el.addEventListener("mousedown", (e) => e.preventDefault());
+  el.addEventListener("pointerdown", (e) => {
+    if (el.disabled || e.button > 0) return;
+    el.setPointerCapture?.(e.pointerId);
+    press();
+  });
+  for (const ev of ["pointerup", "pointercancel", "lostpointercapture"]) el.addEventListener(ev, release);
+  // Enter or Space on the row (a click no pointer made): one short press.
+  el.addEventListener("click", (e) => {
+    if (e.detail !== 0 || el.disabled) return;
+    press();
+    release();
+  });
+}
+function legendRow(r) {
+  const el = document.createElement(r.press ? "button" : "div");
+  el.className = `tube ${r.color}`;
+  el.setAttribute("aria-label", r.say);
+  if (r.press) {
+    el.type = "button";
+    el.disabled = !legendOn;
+    pressable(el, r.press);
+  } else el.setAttribute("role", "group");
+  const keys = Object.assign(document.createElement("span"), { className: "keys" });
+  r.keys.forEach((k, i) => {
+    if (i && r.press) keys.append(orEl());
+    keys.append(capEl(capOf(k)));
+  });
+  el.append(Object.assign(document.createElement("span"), { textContent: r.label }), keys);
+  return el;
+}
+async function showLegend(name) {
+  if (name === legendLayout) return;
+  legendLayout = name;
+  const all = await layoutsOf().catch(() => null);
+  if (!all || legendLayout !== name) return;
+  const rows = legendOf(all[name]);
+  $("legend-rows").replaceChildren(...rows.map(legendRow));
+  $("legend").hidden = !rows.length;
+}
+// The rows that press the game work while one plays.
+function legendPlays(on) {
+  legendOn = on;
+  for (const b of $("legend-rows").querySelectorAll("button")) b.disabled = !on;
+}
+addEventListener("message", (e) => {
+  const m = e.data;
+  if (e.origin !== location.origin || e.source !== frame.contentWindow || !m || m.gp !== "keys") return;
+  void showLegend(m.layout === "arcade" ? "arcade" : "nes").then(() => legendPlays(!frame.hidden));
+});
+
+// ALL KEYS: every key the game and its shell take, in a dialog. The list
+// is the player's own (the frame's `__gp.keys()`, same origin: it knows
+// the layout and which of saves, rewind and the picture's keys this game
+// has); before a game plays, the game's own keys from the layout.
+function keyGroup(g) {
+  const s = document.createElement("section");
+  const dl = document.createElement("dl");
+  for (const r of g.rows ?? []) {
+    const dd = document.createElement("dd");
+    if (r.how) dd.append(Object.assign(document.createElement("span"), { className: "how", textContent: r.how }));
+    capsOf(r.keys).forEach((combo, i) => {
+      if (i) dd.append(orEl());
+      dd.append(...combo.map(capEl));
+    });
+    const row = document.createElement("div");
+    row.append(Object.assign(document.createElement("dt"), { textContent: r.name }), dd);
+    dl.append(row);
+  }
+  s.append(Object.assign(document.createElement("h3"), { textContent: g.name }), dl);
+  if (g.note) s.append(Object.assign(document.createElement("p"), { className: "note", textContent: g.note }));
+  return s;
+}
+function playerKeys() {
+  try {
+    const list = !frame.hidden && frame.getAttribute("src") ? frame.contentWindow?.__gp?.keys?.() : null;
+    return Array.isArray(list) && list.length ? list : null;
+  } catch {
+    return null;
+  }
+}
+$("keys-open").addEventListener("click", async () => {
+  let groups = playerKeys();
+  let note = "";
+  if (!groups) {
+    const all = await layoutsOf().catch(() => null);
+    groups = all ? [playGroup(all[legendLayout ?? "nes"])] : [];
+    note = "The keys for saves, the picture, the sound and the pace are listed here once a game is playing.";
+  }
+  $("keys-list").replaceChildren(...groups.map(keyGroup));
+  $("keys-note").textContent = note;
+  $("keys-note").hidden = !note;
+  if (!$("keys").open) $("keys").showModal();
+  $("keys-title").focus();
+});
+$("keys-close").addEventListener("click", () => $("keys").close());
+$("keys").addEventListener("close", () => {
+  if (!frame.hidden) focusGame();
 });
 
 // Share: a link to this page with the game, the theme or look, and the
@@ -615,13 +782,13 @@ function play(mode, found = null, skipped = [], partial = []) {
     else q.set("own-look", "");
     if (linked?.profile) q.set("profile", linked.profile);
     q.set("scale", "fit");
+    q.set("keys", "page");
     frame.src = `${FRAME}?${q.toString().replace(/%3A/gi, ":").replace(/own-look=(&|$)/, "own-look$1")}`;
   } else frame.removeAttribute("src");
   frame.hidden = !romMode;
-  if (facts) {
-    $("title").textContent = facts.title;
-    document.title = facts.title;
-  }
+  document.body.dataset.state = romMode ? "playing" : "norom";
+  if (!romMode) legendPlays(false);
+  if (facts) setTitle(facts.title);
   $("mode").textContent = romMode
     ? `Playing your own ${romName(found)} ${kindOf().noun}: ${foundText(found)}, kept in this browser only`
     : "No ROM loaded";
@@ -644,10 +811,11 @@ function playOwn() {
   else q.set("own-look", "");
   if (linked?.profile) q.set("profile", linked.profile);
   q.set("scale", "fit");
+  q.set("keys", "page");
   frame.src = `${FRAME}?${q.toString().replace(/own-look=(&|$)/, "own-look$1")}`;
   frame.hidden = false;
-  $("title").textContent = facts.title;
-  document.title = facts.title;
+  document.body.dataset.state = "playing";
+  setTitle(facts.title);
   $("mode").textContent = `Playing ${facts.title}${facts.madeBy ? `, made by ${facts.madeBy}` : ""}: it plays from its own files, with no ROM`;
   $("back").hidden = true;
   $("start").hidden = true;
@@ -796,11 +964,13 @@ if (typeof page?.dev_reload === "string") {
 }
 if (keptRom) {
   const again = document.createElement("button");
-  again.className = "quiet";
+  again.type = "button";
+  again.className = "tube quiet violet";
   again.textContent = "Play my ROM";
   again.addEventListener("click", () => liftAndPlay(keptRom, "your ROM"));
   const forget = document.createElement("button");
-  forget.className = "quiet";
+  forget.type = "button";
+  forget.className = "tube quiet red";
   forget.textContent = "Forget my ROM data";
   forget.addEventListener("click", async () => {
     try {

@@ -4,38 +4,52 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Game Printer</title>
+<link rel="stylesheet" href="arcade.css">
 <link rel="stylesheet" href="page.css">
 </head>
-<body>
-<header>
-  <h1 id="title">Game Printer</h1>
-  <span id="mode">No ROM loaded</span>
-  <span class="spacer"></span>
-  <a id="home" class="quiet" hidden>All games</a>
-  <button id="howto-toggle" class="quiet" type="button" aria-expanded="true" aria-controls="howto">How to play</button>
-  <button id="settings" class="quiet" type="button">Settings</button>
-  <button id="fullscreen" class="quiet" type="button">Full screen</button>
-  <button id="share" class="quiet" type="button">Share</button>
-  <button id="back" class="quiet" hidden>Unload ROM</button>
-  <span id="skipped" hidden></span>
-</header>
-<p id="registry-line" role="note" hidden></p>
-<section id="howto" aria-label="How to play">
-  <p><b>Controls:</b> arrows move, X jumps, Enter starts. A controller works too.</p>
-  <p><b>Settings:</b> press Esc or the Settings button (top right) to switch theme and mode.</p>
-  <p>Load your own ROM to play. Under Settings, Theme switches between the original's art and a theme.</p>
-</section>
-<main>
-  <section id="start" aria-label="Load a ROM">
-    <label class="button big" id="load-label">Load your own ROM<input id="rom" type="file"></label>
-    <p id="drop-hint">or drop the ROM file here</p>
-    <div id="rom-help"></div>
-    <p id="rom-notice" hidden></p>
+<body class="arcade" data-state="norom">
+<div class="floor">
+  <header class="wing left">
+    <div class="top">
+      <a id="home" class="tube cyan home" hidden><span class="chev" aria-hidden="true"></span>All games</a>
+      <h1 id="title" class="sign">Game Printer</h1>
+    </div>
+    <p id="mode">No ROM loaded</p>
+    <p id="skipped" hidden></p>
+  </header>
+  <main class="stage">
+    <section id="start" aria-label="Load a ROM">
+      <label class="tube yellow big" id="load-label">Load your own ROM<input id="rom" type="file"></label>
+      <p id="drop-hint">or drop the ROM file here</p>
+      <div id="rom-help"></div>
+      <p id="rom-notice" hidden></p>
+    </section>
+    <iframe id="game" title="The game" allow="gamepad; autoplay; fullscreen" hidden></iframe>
+  </main>
+  <section id="legend" aria-label="The game's keys" hidden>
+    <h2 class="label">Play</h2>
+    <div id="legend-rows"></div>
   </section>
-  <iframe id="game" title="The game" allow="gamepad; autoplay; fullscreen" hidden></iframe>
-</main>
+  <nav class="wing right" aria-label="Page controls">
+    <h2 class="label">Page</h2>
+    <button id="settings" class="tube cyan" type="button">Settings</button>
+    <button id="fullscreen" class="tube pink" type="button">Full screen</button>
+    <button id="share" class="tube yellow" type="button">Share</button>
+    <button id="keys-open" class="tube green" type="button" aria-haspopup="dialog">All keys</button>
+    <button id="howto-toggle" class="tube violet" type="button" aria-expanded="true" aria-controls="howto">How to play</button>
+    <section id="howto" aria-label="How to play" tabindex="0">
+      <p><b>Controls:</b> arrows move, X jumps, Enter starts. A controller works too.</p>
+      <p><b>Settings:</b> press Esc or the Settings button (top right) to switch theme and mode.</p>
+      <p>Load your own ROM to play. Under Settings, Theme switches between the original's art and a theme.</p>
+    </section>
+    <span class="grow"></span>
+    <button id="back" class="tube quiet red" type="button" hidden>Unload ROM</button>
+  </nav>
+</div>
 <footer>
+  <p id="registry-line" role="note" hidden></p>
   <div id="message" role="status" aria-live="polite"></div>
+  <p id="mark-line">This page is not affiliated with or endorsed by the makers of the games it plays.</p>
   <details id="about-box">
     <summary>About</summary>
     <div id="about">
@@ -48,6 +62,12 @@
     </div>
   </details>
 </footer>
+<dialog id="keys" class="card green" aria-labelledby="keys-title">
+  <h2 id="keys-title" tabindex="-1">All keys</h2>
+  <div id="keys-list"></div>
+  <p id="keys-note" hidden></p>
+  <button id="keys-close" class="tube green" type="button">Close</button>
+</dialog>
 <script type="module" src="page.js"></script>
 <script src="boot.js"></script>
 </body>

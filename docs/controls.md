@@ -45,6 +45,8 @@ controls.setOptions({ leadMs: 4 });   // a person's setting; controls.opts as ke
 controls.lastPress();                  // {ms, frames} of the newest press, or null
 ```
 
+A button drawn on a page presses the game the same way. The public page's legend rows (docs/web.md, "The page's look") send the game's frame `{gp: "press", code, down}` with a key of the layout, and the player calls `keyDown` or `keyUp` with that code, so a click is read by the same rules as the key it stands for.
+
 A late browser frame catches up four game frames at most; the frame's own time is the present less what is still owed.
 
 ## Where it stands

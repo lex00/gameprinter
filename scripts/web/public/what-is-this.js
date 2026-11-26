@@ -25,11 +25,14 @@ export function whatIsThis({ frame, installing }) {
   link.href = "what-is-this.css";
   document.head.append(link);
 
-  const button = Object.assign(document.createElement("button"), { id: "what", type: "button", className: "quiet", textContent: "What is this?" });
+  const button = Object.assign(document.createElement("button"), { id: "what", type: "button", className: "tube quiet violet", textContent: "What is this?" });
   button.setAttribute("aria-pressed", "false");
   button.title = "Pause the game and point at something to hear what it is";
   button.hidden = true;
-  (document.getElementById("share") ?? document.getElementById("settings"))?.after(button);
+  // With the page's lesser buttons, before Unload ROM.
+  const back = document.getElementById("back");
+  if (back) back.before(button);
+  else (document.getElementById("share") ?? document.getElementById("settings"))?.after(button);
 
   const layer = Object.assign(document.createElement("div"), { id: "what-layer" });
   layer.hidden = true;
@@ -43,7 +46,9 @@ export function whatIsThis({ frame, installing }) {
   panel.setAttribute("aria-label", "What is this?");
   panel.setAttribute("aria-live", "polite");
   panel.hidden = true;
-  frame.after(panel);
+  // After the game's box, not in it: under the game on a narrow page, and
+  // in the left wing's place on a wide one (what-is-this.css).
+  (frame.closest("main") ?? frame).after(panel);
 
   let on = false;
   let box = null;
@@ -92,7 +97,7 @@ export function whatIsThis({ frame, installing }) {
   const show = (head, paras, extra = []) => {
     const h = Object.assign(document.createElement("h2"), { textContent: head });
     const ps = paras.map((t) => Object.assign(document.createElement("p"), { textContent: t }));
-    const done = Object.assign(document.createElement("button"), { type: "button", className: "quiet", textContent: "Play on" });
+    const done = Object.assign(document.createElement("button"), { type: "button", className: "tube green", textContent: "Play on" });
     done.dataset.what = "done";
     done.addEventListener("click", () => stop());
     panel.replaceChildren(h, ...ps, ...extra, done);
