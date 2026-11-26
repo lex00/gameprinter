@@ -151,6 +151,10 @@ The loop's own trouble becomes tools rows with no one noticing first (the owner,
 
 Trouble with no game named (health, a restart) is filed under the loop's first game (loop.toml's games, else the games checkout's first). The screen page's status line says how many trouble rows are open, as a link to the first on the loop's page.
 
+A health trouble row follows its problem. The commits its problem names (each word of 7 to 40 hex digits with a digit and a letter in it) are kept on the row as `trouble.commits`; when the problem comes back naming others and the row is parked in line (not waiting on another row), it goes back to next with its park taken off and its note led by "Its trouble is now on COMMIT." (`trouble.moved_ms`). A health row whose problem two checks a minute or more apart neither print nor hold back is set done (`trouble.gone_ms`): a row a worker is on waits for the worker to end, and a GitHub row waits while GitHub can't be read. A problem that comes back to a done row sends it to next, as any trouble does.
+
+A failed GitHub check with a newer run of its workflow on main still going (queued or in progress) is held back: health prints a WAITING line naming the failed commit and the running one, counts no problem and files nothing, and the failure's row stays as it is until that run ends (2026-11-26: health filed check-web's failure on aa015082 and a worker took it up while b32f4590's run, its fix, was still going).
+
 ## The runner runs a yes
 
 While the runner is on, a YES on a card runs that exact call at once: the runner takes the yes (the ask is marked used, with `ran` {state: running}), runs `gp --json COMMAND ARGV` with the home and the games checkout, and records landed, passed or failed with its last lines. The card shows each, for 15 minutes. A later gp_run with that ask's id is told what the runner did instead of running it again. A yes that puts a held change back stays gp_run's.

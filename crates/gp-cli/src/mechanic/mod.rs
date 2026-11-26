@@ -1523,7 +1523,7 @@ fn parked_words(why: &str) -> String {
 }
 
 /// Row `r`'s note without its park's words in front.
-fn unparked_note(r: &Value) -> String {
+pub(crate) fn unparked_note(r: &Value) -> String {
     let note = r["note"].as_str().unwrap_or("");
     match r["parked"].as_str() {
         Some(w) => note

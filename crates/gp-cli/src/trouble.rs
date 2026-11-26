@@ -18,7 +18,10 @@
 //! count (`trouble.count`, `trouble.last_ms`) and leaves the note as it is
 //! (the note is in the row's step key: crate::steps). A row the trouble
 //! comes back to after it was done goes back to next; one put out of scope
-//! stays so. docs/loop.md, "The loop files its own trouble".
+//! stays so. A row parked in line goes back to next when the commits its
+//! trouble names change (a newer push failing the same way), and a health
+//! row whose problem two checks a minute apart no longer print is set done.
+//! docs/loop.md, "The loop files its own trouble".
 
 use std::collections::HashMap;
 use std::fs;
@@ -155,8 +158,29 @@ pub(crate) fn row_name(key: &str) -> String {
     }
 }
 
+/// The commits a message names, in order and each once: a word of 7 to 40
+/// hex digits with a digit and a letter in it (aa015082, 8f3989f0ac37), so
+/// a run id or a count isn't one. A trouble row keeps them (`commits`), and
+/// a parked row goes back to next when they change.
+pub(crate) fn commits(what: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for w in what.split(|c: char| !c.is_ascii_alphanumeric()) {
+        let w = w.to_lowercase();
+        if (7..=40).contains(&w.len())
+            && w.bytes().all(|b| b.is_ascii_hexdigit())
+            && w.bytes().any(|b| b.is_ascii_digit())
+            && w.bytes().any(|b| b.is_ascii_alphabetic())
+            && !out.contains(&w)
+        {
+            out.push(w);
+        }
+    }
+    out
+}
+
 /// Files the trouble: a new tools row, or one more on its cause's row.
-/// Says the row, whether it was added, its count and whether it came back.
+/// Says the row, whether it was added, its count, whether it came back and
+/// whether it moved (a parked row whose commits changed, set next).
 pub(crate) fn file(paths: &Paths, t: &Trouble, now: u64) -> Result<Value> {
     let what = crate::next::cut(t.what, 400);
     let _one = WRITING.lock().unwrap_or_else(|e| e.into_inner());
@@ -167,6 +191,7 @@ pub(crate) fn file(paths: &Paths, t: &Trouble, now: u64) -> Result<Value> {
         &crate::mechanic::archive::read_archive(&paths.home, t.game),
     );
     let k = key_named(&what, &names);
+    let at = commits(&what);
     // Trouble that comes back to an archived row brings the row back.
     if !q.iter().any(|r| of_cause(r, &k, &names))
         && let Some(r) =
@@ -183,9 +208,15 @@ pub(crate) fn file(paths: &Paths, t: &Trouble, now: u64) -> Result<Value> {
             r["status"] = json!("next");
             r["trouble"]["came_back"] = json!(now);
         }
+        let moved = !back && moved_on(r, &at, now);
+        if !at.is_empty() {
+            r["trouble"]["commits"] = json!(at);
+        }
         let row = r["mechanic"].clone();
         write_queue(&f, &q)?;
-        return Ok(json!({"row": row, "added": false, "count": count, "came_back": back}));
+        let mut v = json!({"row": row, "added": false, "count": count, "came_back": back});
+        v["moved"] = json!(moved);
+        return Ok(v);
     }
     let row = row_name(&k);
     q.push(json!({
@@ -201,10 +232,49 @@ pub(crate) fn file(paths: &Paths, t: &Trouble, now: u64) -> Result<Value> {
             "count": 1,
             "first_ms": now,
             "last_ms": now,
+            "commits": at,
         },
     }));
     write_queue(&f, &q)?;
     Ok(json!({"row": row, "added": true, "count": 1, "came_back": false}))
+}
+
+/// A parked row of the trouble whose commits changed goes back to next,
+/// its park taken off and its note led by where the trouble is now
+/// (2026-11-26: check-web's row stayed parked while GitHub failed on newer
+/// pushes). A row waiting on another row stays: the wait is its reason.
+/// Says whether it moved.
+fn moved_on(r: &mut Value, at: &[String], now: u64) -> bool {
+    let had: Vec<&str> = r["trouble"]["commits"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .collect();
+    if at.is_empty()
+        || had.is_empty()
+        || had == at
+        || !crate::mechanic::is_parked(r)
+        || r.get("waits_on").is_some()
+    {
+        return false;
+    }
+    let lead = format!("Its trouble is now on {}. ", at.join(", "));
+    let bare = crate::mechanic::unparked_note(r);
+    let bare = r["trouble"]["moved_words"]
+        .as_str()
+        .and_then(|w| bare.strip_prefix(w))
+        .unwrap_or(&bare)
+        .to_owned();
+    r["note"] = json!(format!("{lead}{bare}"));
+    r["status"] = json!("next");
+    r["trouble"]["moved_words"] = json!(lead);
+    r["trouble"]["moved_ms"] = json!(now);
+    if let Some(o) = r.as_object_mut() {
+        o.remove("parked");
+        o.remove("parked_ms");
+    }
+    true
 }
 
 /// The trouble rows of a quest log not done yet.
@@ -290,8 +360,18 @@ fn health_file(home: &Path) -> std::path::PathBuf {
 
 /// The problems a health check printed: each one the check before also
 /// printed, a minute or more ago, is filed (and again each check it lasts,
-/// which adds to its count). Says the rows filed.
-pub(crate) fn health_seen(paths: &Paths, game: &str, problems: &[String], now: u64) -> Vec<Value> {
+/// which adds to its count). `held` are failures the check holds back
+/// rather than prints (a GitHub check failed with a newer run still going:
+/// crate::github_checks::held), None when GitHub couldn't be read. The
+/// open health rows of no problem printed or held are settled
+/// (settle_gone). Says the rows filed.
+pub(crate) fn health_seen(
+    paths: &Paths,
+    game: &str,
+    problems: &[String],
+    held: Option<&[String]>,
+    now: u64,
+) -> Vec<Value> {
     let f = health_file(&paths.home);
     let before: Value = fs::read(&f)
         .ok()
@@ -322,12 +402,71 @@ pub(crate) fn health_seen(paths: &Paths, game: &str, problems: &[String], now: u
             filed.push(v);
         }
     }
+    let missing = settle_gone(paths, game, problems, held, &before["missing"], now);
     let _ = fs::create_dir_all(gp_mcp::steps::loop_dir(&paths.home));
-    let _ = fs::write(
-        &f,
-        serde_json::to_vec_pretty(&json!({"at_ms": now, "seen": seen})).unwrap_or_default(),
-    );
+    let kept = json!({"at_ms": now, "seen": seen, "missing": missing});
+    let _ = fs::write(&f, serde_json::to_vec_pretty(&kept).unwrap_or_default());
     filed
+}
+
+/// Settles the open health rows of the game that no problem of this check
+/// is of, printed or held back: one missed by two checks a minute or more
+/// apart is set done, its problem gone (2026-11-26: trouble rows stayed
+/// open after their checks said OK). A row a worker is on waits for it to
+/// end, and a GitHub row waits while GitHub can't be read. Says the rows
+/// missed so far, each with the first check that missed it.
+fn settle_gone(
+    paths: &Paths,
+    game: &str,
+    problems: &[String],
+    held: Option<&[String]>,
+    before: &Value,
+    now: u64,
+) -> serde_json::Map<String, Value> {
+    let mut missing = serde_json::Map::new();
+    let _one = WRITING.lock().unwrap_or_else(|e| e.into_inner());
+    let Ok(f) = queue_file(paths, game) else {
+        return missing;
+    };
+    let mut q = read_queue(&f);
+    let names = row_names(
+        &q,
+        &crate::mechanic::archive::read_archive(&paths.home, game),
+    );
+    let keys: Vec<String> = problems
+        .iter()
+        .chain(held.unwrap_or_default())
+        .map(|p| key_named(&crate::next::cut(p, 400), &names))
+        .collect();
+    let mut gone = false;
+    for r in q.iter_mut() {
+        let Some(row) = r["mechanic"].as_str().map(str::to_owned) else {
+            continue;
+        };
+        let status = r["status"].as_str().unwrap_or("");
+        let had = r["trouble"]["key"].as_str().unwrap_or("");
+        if r["trouble"]["kind"] != json!("health")
+            || status == "done"
+            || status.contains("working")
+            || (had.starts_with("github s ") && held.is_none())
+            || keys.iter().any(|k| of_cause(r, k, &names))
+        {
+            continue;
+        }
+        let first = before[&row]["first_ms"].as_u64().unwrap_or(now);
+        let checks = before[&row]["checks"].as_u64().unwrap_or(0) + 1;
+        if checks >= 2 && now.saturating_sub(first) >= HEALTH_LASTS_MS {
+            r["status"] = json!("done");
+            r["trouble"]["gone_ms"] = json!(now);
+            gone = true;
+        } else {
+            missing.insert(row, json!({"first_ms": first, "checks": checks}));
+        }
+    }
+    if gone {
+        let _ = write_queue(&f, &q);
+    }
+    missing
 }
 
 /// The environment a server that moves itself onto a new build sets for
@@ -627,21 +766,108 @@ mod tests {
         let p = paths(d.path());
         let card = "Card c1 failed in the last hour: FAIL (corpus)".to_owned();
         let row = "made-up/jump is marked agent working, and no worker is on it".to_owned();
-        assert!(health_seen(&p, "made-up", &[card.clone(), row.clone()], 0).is_empty());
-        assert!(
-            health_seen(&p, "made-up", std::slice::from_ref(&card), 30_000).is_empty(),
-            "under a minute"
-        );
-        let filed = health_seen(&p, "made-up", &[card.clone(), row.clone()], 61_000);
+        let both = [card.clone(), row];
+        assert!(health_seen(&p, "made-up", &both, None, 0).is_empty());
+        let once = health_seen(&p, "made-up", std::slice::from_ref(&card), None, 30_000);
+        assert!(once.is_empty(), "under a minute");
+        let filed = health_seen(&p, "made-up", &both, None, 61_000);
         assert_eq!(filed.len(), 1, "the row's problem started over");
         assert_eq!(filed[0]["added"], json!(true));
         let q = read_queue(&queue_file(&p, "made-up").unwrap());
         assert_eq!(q.len(), 1);
         assert_eq!(q[0]["trouble"]["kind"], "health");
-        assert_eq!(
-            health_seen(&p, "made-up", &[card], 200_000)[0]["count"],
-            json!(2)
-        );
+        let again = health_seen(&p, "made-up", &[card], None, 200_000);
+        assert_eq!(again[0]["count"], json!(2));
+    }
+
+    /// A parked row whose trouble names a newer commit goes back to next,
+    /// its note led by the commit and its park taken off; the same commit
+    /// again, or a row waiting on another row, stays (2026-11-26).
+    #[test]
+    fn a_parked_row_follows_its_commit() {
+        let d = tempfile::tempdir().unwrap();
+        let p = paths(d.path());
+        let red = |sha: &str| format!("GitHub's check fails on main, the newest on {sha}");
+        let t = |what: &str| {
+            file(
+                &p,
+                &Trouble {
+                    game: "made-up",
+                    kind: Kind::Health,
+                    what,
+                    from: "gp loop health",
+                },
+                1000,
+            )
+            .unwrap()
+        };
+        assert_eq!(t(&red("aa015082"))["added"], json!(true));
+        let f = queue_file(&p, "made-up").unwrap();
+        let mut q = read_queue(&f);
+        assert_eq!(q[0]["trouble"]["commits"], json!(["aa015082"]));
+        crate::mechanic::park_row(&mut q[0], "a person's look");
+        write_queue(&f, &q).unwrap();
+        assert_eq!(t(&red("aa015082"))["moved"], json!(false));
+        assert_eq!(read_queue(&f)[0]["status"], "in line");
+        assert_eq!(t(&red("b32f4590"))["moved"], json!(true));
+        let q = read_queue(&f);
+        assert_eq!(q[0]["status"], "next");
+        assert!(q[0].get("parked").is_none());
+        let note = q[0]["note"].as_str().unwrap();
+        assert!(note.starts_with("Its trouble is now on b32f4590. Proposed"));
+
+        let mut q = read_queue(&f);
+        crate::mechanic::park_row(&mut q[0], "again");
+        write_queue(&f, &q).unwrap();
+        t(&red("c0ffee12"));
+        let q = read_queue(&f);
+        let note = q[0]["note"].as_str().unwrap();
+        assert!(note.starts_with("Its trouble is now on c0ffee12. Proposed"));
+        assert_eq!(note.matches("Its trouble").count(), 1);
+
+        let mut q = read_queue(&f);
+        q[0]["status"] = json!("in line");
+        q[0]["waits_on"] = json!("made-up/other");
+        write_queue(&f, &q).unwrap();
+        assert_eq!(t(&red("d00d1234"))["moved"], json!(false));
+    }
+
+    /// A health row whose problem two checks a minute apart no longer print
+    /// is done; one check isn't enough, a failure held back keeps its row,
+    /// and a GitHub row waits while GitHub can't be read (2026-11-26).
+    #[test]
+    fn a_health_row_whose_problem_is_gone_is_done() {
+        let d = tempfile::tempdir().unwrap();
+        let p = paths(d.path());
+        let g = "made-up";
+        let lock = "gate.lock is held by process 12 with no step logged".to_owned();
+        let red = "GitHub's check-web fails on main, the newest on aa015082".to_owned();
+        let none: &[String] = &[];
+        let both = [lock, red.clone()];
+        health_seen(&p, g, &both, Some(none), 0);
+        assert_eq!(health_seen(&p, g, &both, Some(none), 61_000).len(), 2);
+        let f = queue_file(&p, g).unwrap();
+        assert_eq!(open(&read_queue(&f)).len(), 2);
+        // A newer push's run going: its failure is held back, and the
+        // lock's problem is gone from this check and the next.
+        let held = std::slice::from_ref(&red);
+        health_seen(&p, g, none, Some(held), 120_000);
+        assert_eq!(open(&read_queue(&f)).len(), 2, "one check");
+        health_seen(&p, g, none, Some(held), 130_000);
+        assert_eq!(open(&read_queue(&f)).len(), 2, "under a minute");
+        health_seen(&p, g, none, Some(held), 181_000);
+        let q = read_queue(&f);
+        assert_eq!(q[0]["status"], "done");
+        assert_eq!(q[0]["trouble"]["gone_ms"], 181_000);
+        assert_eq!(q[1]["status"], "next", "held back, it stays");
+        // GitHub unread: its row stays, however long.
+        health_seen(&p, g, none, None, 300_000);
+        health_seen(&p, g, none, None, 400_000);
+        assert_eq!(read_queue(&f)[1]["status"], "next");
+        // Read again and passing: two checks, and it is done.
+        health_seen(&p, g, none, Some(none), 500_000);
+        health_seen(&p, g, none, Some(none), 600_000);
+        assert_eq!(read_queue(&f)[1]["status"], "done");
     }
 
     /// A start after a server that stopped within the hour is a restart; a

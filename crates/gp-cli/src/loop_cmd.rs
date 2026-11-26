@@ -643,7 +643,9 @@ pub(crate) fn health_in(paths: &gp_evidence::Paths, games_dir: Option<&std::path
         return v;
     };
     if crate::trouble::live_home(home) {
-        crate::trouble::health_seen(paths, &game, &problems, gp_mcp::asks::now_ms());
+        let held = crate::github_checks::held(home);
+        let now = gp_mcp::asks::now_ms();
+        crate::trouble::health_seen(paths, &game, &problems, held.as_deref(), now);
     }
     if let Ok(f) = crate::mechanic::session::queue_file(paths, &game) {
         let q = crate::mechanic::session::read_queue(&f);

@@ -54,6 +54,9 @@ pub(crate) struct Standing {
     pub sha: String,
     pub url: String,
     pub failed_in_a_row: usize,
+    /// The commit of a run of the workflow still going (queued or in
+    /// progress) newer than this one, when there is one.
+    pub running: Option<String>,
 }
 
 /// Each workflow's standing from `gh run list --json` (newest first), in
@@ -61,9 +64,18 @@ pub(crate) struct Standing {
 pub(crate) fn standings(runs: &Value) -> Vec<Standing> {
     let mut out: Vec<Standing> = Vec::new();
     let mut done: Vec<String> = Vec::new();
+    let mut going: Vec<(String, String)> = Vec::new();
     for r in runs.as_array().into_iter().flatten() {
         let w = r["workflowName"].as_str().unwrap_or("").to_owned();
         let c = r["conclusion"].as_str().unwrap_or("");
+        if !w.is_empty()
+            && r["status"] != json!("completed")
+            && !out.iter().any(|s| s.workflow == w)
+            && !going.iter().any(|g| g.0 == w)
+        {
+            let sha = r["headSha"].as_str().unwrap_or("");
+            going.push((w.clone(), sha.to_owned()));
+        }
         if w.is_empty() || r["status"] != json!("completed") || !settled(c) || done.contains(&w) {
             continue;
         }
@@ -74,12 +86,14 @@ pub(crate) fn standings(runs: &Value) -> Vec<Standing> {
                 if !failed(c) {
                     done.push(w.clone());
                 }
+                let running = going.iter().find(|g| g.0 == w).map(|g| g.1.clone());
                 out.push(Standing {
                     workflow: w,
                     id: r["databaseId"].as_u64().unwrap_or(0),
                     sha: r["headSha"].as_str().unwrap_or("").to_owned(),
                     url: r["url"].as_str().unwrap_or("").to_owned(),
                     failed_in_a_row: usize::from(failed(c)),
+                    running,
                 });
             }
         }
@@ -191,6 +205,28 @@ pub(crate) fn line(
         under.push(format!("           {}", s.url));
     }
     Err((words, under))
+}
+
+/// A failing standing with a newer run of its workflow still going, as
+/// health's WAITING line: the failure is held back, not a PROBLEM, so
+/// nothing new is filed and its trouble row stays as it is until that run
+/// ends (2026-11-26: health filed check-web's failure on aa015082 and a
+/// worker took it up while b32f4590's run, its fix, was still going).
+pub(crate) fn waiting_line(s: &Standing) -> Option<String> {
+    if s.failed_in_a_row == 0 {
+        return None;
+    }
+    let going = s.running.as_deref()?;
+    let at = &s.sha[..s.sha.len().min(8)];
+    let on = if going.is_empty() {
+        String::new()
+    } else {
+        format!(" on {}", &going[..going.len().min(8)])
+    };
+    Some(format!(
+        "GitHub's {} failed on main at {at}, and a newer run{on} is still going: health waits for it to end",
+        s.workflow
+    ))
 }
 
 /// The `gh` to run: $GP_GH, else gh on the PATH, else Homebrew's (gp serve
@@ -325,9 +361,11 @@ pub(crate) fn read_now(repo: &Path, now: u64) -> Value {
         } else {
             (Vec::new(), None)
         };
-        lines.push(match line(&s, &steps, why.as_deref()) {
-            Ok(l) => json!({"ok": l}),
-            Err((p, under)) => json!({"problem": p, "under": under}),
+        // A failure with a newer run going is held back until that run ends.
+        lines.push(match (waiting_line(&s), line(&s, &steps, why.as_deref())) {
+            (_, Ok(l)) => json!({"ok": l}),
+            (Some(w), Err((p, _))) => json!({"waiting": w, "held": p}),
+            (None, Err((p, under))) => json!({"problem": p, "under": under}),
         });
     }
     json!({"read_ms": now, "lines": lines})
@@ -380,6 +418,24 @@ pub(crate) fn refresh_behind(home: &Path, repo: &Path) {
     });
 }
 
+/// The failures health holds back while a newer run goes (their PROBLEM
+/// words, for crate::trouble to keep their rows open), or None when the
+/// kept read can't say: there is none yet, or gh couldn't read GitHub.
+pub(crate) fn held(home: &Path) -> Option<Vec<String>> {
+    let v = kept(home)?;
+    if v["unread"].is_string() {
+        return None;
+    }
+    let held = v["lines"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|l| l["held"].as_str())
+        .map(str::to_owned)
+        .collect();
+    Some(held)
+}
+
 /// Health's lines from the kept read: Ok lines, Err problems with the
 /// lines that go under each, and an UNREAD line when gh couldn't say.
 pub(crate) fn health_lines(home: &Path, now: u64) -> Vec<Result<String, (String, Vec<String>)>> {
@@ -401,6 +457,8 @@ pub(crate) fn health_lines(home: &Path, now: u64) -> Vec<Result<String, (String,
     for l in v["lines"].as_array().into_iter().flatten() {
         if let Some(ok) = l["ok"].as_str() {
             out.push(Ok(format!("OK       {ok} ({read})")));
+        } else if let Some(w) = l["waiting"].as_str() {
+            out.push(Ok(format!("WAITING  {w} ({read})")));
         } else if let Some(p) = l["problem"].as_str() {
             let under = l["under"]
                 .as_array()
@@ -448,6 +506,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![("check-web", 8, 3), ("check", 7, 0), ("site", 4, 0)]
         );
+        assert_eq!(s[0].running.as_deref(), Some(""));
         let jobs = json!({"jobs": [
             {"name": "build", "conclusion": "success", "steps": []},
             {"name": "web", "conclusion": "failure", "steps": [
@@ -491,11 +550,38 @@ mod tests {
         );
     }
 
+    /// A failure with a newer run of its workflow still going is held back
+    /// as a WAITING line (2026-11-26: check-web's fix b32f4590 was still
+    /// running while health filed aa015082's failure); a run still going
+    /// that is older than the settled one holds nothing.
+    #[test]
+    fn a_failure_with_a_newer_run_going_waits_for_it() {
+        let runs = json!([
+            run("check-web", 3, "b32f4590ffff", "in_progress", ""),
+            run("check-web", 2, "aa015082aaaa", "completed", "failure"),
+            run("site", 1, "aa015082aaaa", "completed", "failure"),
+            run("site", 0, "0c0ffee12345", "queued", ""),
+        ]);
+        let s = standings(&runs);
+        assert_eq!(s[0].running.as_deref(), Some("b32f4590ffff"));
+        assert_eq!(s[1].running, None, "its run going is older");
+        let w = waiting_line(&s[0]).unwrap();
+        assert!(w.starts_with("GitHub's check-web failed on main at aa015082"));
+        assert!(w.contains("newer run on b32f4590 is still going"));
+        assert_eq!(waiting_line(&s[1]), None);
+        let ended = Standing {
+            running: None,
+            ..s[0].clone()
+        };
+        assert_eq!(waiting_line(&ended), None);
+    }
+
     #[test]
     fn health_reads_the_kept_read_and_a_test_home_never_asks_github() {
         let home = tempfile::tempdir().unwrap();
         let repo = tempfile::tempdir().unwrap();
         assert!(health_lines(home.path(), 0).is_empty());
+        assert_eq!(held(home.path()), None, "nothing read yet");
         // A home in the temp folder: no gh is run and nothing is kept.
         refresh(home.path(), repo.path());
         assert!(!file(home.path()).exists());
@@ -503,7 +589,8 @@ mod tests {
             home.path(),
             &json!({"read_ms": 0, "lines": [
             {"ok": "GitHub's check passes on main at aa015082"},
-            {"problem": "GitHub's check-web fails on main", "under": ["           FAIL x"]}]}),
+            {"problem": "GitHub's check-web fails on main", "under": ["           FAIL x"]},
+            {"waiting": "red", "held": "red"}]}),
         );
         let l = health_lines(home.path(), 120_000);
         assert_eq!(
@@ -517,10 +604,13 @@ mod tests {
                 vec!["           FAIL x".to_owned()]
             ))
         );
+        assert_eq!(l[2], Ok("WAITING  red (read 2 min ago)".to_owned()));
+        assert_eq!(held(home.path()), Some(vec!["red".to_owned()]));
         keep(
             home.path(),
             &json!({"read_ms": 0, "unread": "gh auth status failed: not logged in"}),
         );
+        assert_eq!(held(home.path()), None, "gh couldn't say");
         assert_eq!(
             health_lines(home.path(), 1000),
             vec![Ok("UNREAD   GitHub's checks of main (read under a minute ago): gh auth status failed: not logged in".to_owned())]
