@@ -216,6 +216,27 @@ function fakeDecider() {
 const frame = (page) => page.evaluate(() => Number(document.body.dataset.frame ?? -1));
 const text = (page, sel) => page.evaluate((s) => document.querySelector(s)?.textContent ?? "", sel);
 
+/** What `page` shows, in one line, for a wait on it that timed out: its
+ * address, its title, its busy line, why it couldn't start, and gp serve's
+ * waiting or moving line when it is one of those. */
+async function pageSays(page) {
+  const s = await page.evaluate(() => ({
+    title: document.querySelector("#title")?.textContent ?? "",
+    busy: document.querySelector("#busy-text")?.textContent ?? "",
+    failed: document.body?.dataset.failed ?? "",
+    waiting: document.querySelector("#wait-line, #moving")?.textContent ?? "",
+  })).catch((e) => ({ unread: String(e) }));
+  return `at ${page.url()}: ${JSON.stringify(s)}`;
+}
+
+/** Reads a gp serve's stderr as it comes, so it never stops on a full
+ * pipe; the last of it, for a failure to quote. */
+function stderrTail(p) {
+  let err = "";
+  p.stderr.on("data", (d) => { err = (err + d).slice(-4000); });
+  return () => err.trim();
+}
+
 /** REVIEW REBUILD's two pictures side by side (#game, #game2): their
  * size and place, whether both are inside the window, and the picture's
  * own size. */
@@ -596,6 +617,11 @@ async function main() {
   if (!(await text(p2, "#busy-text")).includes("isn't built")) fail("the message isn't on the page");
   if (/CompileError/.test(why) || errors2.length) fail(`with no player: ${why} ${errors2.join("; ")}`);
   ok("with no player built the page says how to build it");
+  // Closed, as every other part's pages are: left open, the first page
+  // plays the original and the model on through every part after, which
+  // on CI's four cores slowed gp serve's page past its waits.
+  await p2.close();
+  await page.close();
 }
 
 /** The arcade run: the owner's romset in the page (see the head). */
@@ -919,9 +945,10 @@ async function arcadeOriginalFreePlay(game, head, pressed) {
 async function oneServer() {
   const p = spawn(gp, ["serve", "--port", "0", "--games", games], { env });
   servers.push(p);
+  const serveSaid = stderrTail(p);
   const base = await new Promise((res, rej) => {
     let out = "";
-    const t = setTimeout(() => rej(new Error(`gp serve printed no address: ${out}`)), 20000);
+    const t = setTimeout(() => rej(new Error(`gp serve printed no address: ${out}${serveSaid()}`)), 20000);
     p.stdout.on("data", (d) => {
       out += d;
       const m = out.match(/http:\/\/127\.0\.0\.1:(\d+)\//);
@@ -940,10 +967,20 @@ async function oneServer() {
   await page.goto(base[0]);
   const listed = await until("gp serve's root lists the games", async () => page.evaluate(() => [...document.querySelectorAll("#games a")].map((a) => a.textContent)));
   if (!listed.includes(GAME)) fail(`gp serve's root lists ${listed}`);
+  // The game's page loads the player, the ROM and the controls before it
+  // names the session: a minute, for CI's four cores. A wait that ends
+  // says what the page showed and what gp serve said.
+  const gamePage = async (what) => {
+    try {
+      await until(what, async () => page.url().includes(`/mechanic/${GAME}/`) && (await text(page, "#title").catch(() => "")) === `${GAME} / ${MECH}`, 60000);
+    } catch (e) {
+      fail(`${e.message}; the page ${await pageSays(page)}${errors.length ? `; it threw ${errors.join("; ")}` : ""}; gp serve's stderr: ${serveSaid() || "nothing"}`);
+    }
+  };
   await page.click(`#games a:text("${GAME}")`);
-  await until("the game's page", async () => page.url().includes(`/mechanic/${GAME}/`) && (await text(page, "#title").catch(() => "")) === `${GAME} / ${MECH}`);
+  await gamePage("the game's page");
   await page.goto(base[0]);
-  await until("gp serve's root opens the last game", async () => page.url().includes(`/mechanic/${GAME}/`) && (await text(page, "#title").catch(() => "")) === `${GAME} / ${MECH}`);
+  await gamePage("gp serve's root opens the last game");
   ok(`gp serve's root lists the games (${listed.join(", ")}), then opens the last one opened: ${page.url()}`);
   const logo = await page.evaluate(() => document.getElementById("logo").href);
   const logoAt = await fetch(logo);
@@ -1087,9 +1124,10 @@ async function gpServe(gamesDir) {
   standInLaya ??= await fakeDecider();
   const p = spawn(gp, ["serve", "--port", "0", "--games", gamesDir], { env: { ...env, GP_LAYA_URL: process.env.CHECK_LAYA_URL ?? standInLaya } });
   servers.push(p);
+  const said = stderrTail(p);
   return new Promise((res, rej) => {
     let out = "";
-    const t = setTimeout(() => rej(new Error(`gp serve printed no address: ${out}`)), 20000);
+    const t = setTimeout(() => rej(new Error(`gp serve printed no address: ${out}${said()}`)), 20000);
     p.stdout.on("data", (d) => {
       out += d;
       const m = out.match(/http:\/\/127\.0\.0\.1:\d+\//);
@@ -1111,6 +1149,8 @@ async function openGame(page, base, query) {
 function mcpClient() {
   const p = spawn(gp, ["mcp", "--games", games], { env });
   servers.push(p);
+  // Read, so it never stops on a full pipe.
+  p.stderr.resume();
   let buf = "", id = 0;
   const waiting = new Map();
   p.stdout.on("data", (d) => {
