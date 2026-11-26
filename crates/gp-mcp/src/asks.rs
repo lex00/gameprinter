@@ -511,6 +511,42 @@ pub fn set_ran(home: &Path, id: &str, state: &str, lines: &[String]) -> Result<(
     write(home, &v)
 }
 
+/// Closes an open gate card whose change is on main already (`why`, with
+/// the commit that has its message when one does): state `used`, `ran`
+/// {by: "main", state: "landed", lines: [why]} and `landed`, so its row
+/// follows it as landed and nothing runs it. The person's words, when
+/// they answered it, are kept. Err when it isn't open any more.
+pub fn settle_on_main(
+    home: &Path,
+    id: &str,
+    why: &str,
+    commit: Option<&str>,
+    words: &str,
+) -> Result<Value, String> {
+    let mut v = read(home, id).ok_or_else(|| format!("there's no ask {id}"))?;
+    let now = now_ms();
+    if !is_open(&v, now) {
+        return Err(format!(
+            "this ask was answered already, or is too old ({})",
+            v["state"].as_str().unwrap_or("?")
+        ));
+    }
+    let words: String = words.trim().chars().take(WORDS_MAX).collect();
+    if !words.is_empty() {
+        v["words"] = json!(words);
+        v["answered_ms"] = json!(now);
+    }
+    v["state"] = json!("used");
+    v["used_ms"] = json!(now);
+    v["ran"] =
+        json!({"by": "main", "state": "landed", "at_ms": now, "done_ms": now, "lines": [why]});
+    if let Some(c) = commit {
+        v["landed"] = json!(c);
+    }
+    write(home, &v)?;
+    Ok(v)
+}
+
 /// Sets one field of an ask (the runner's `row_settled`, once the card's
 /// quest-log row has followed it).
 pub fn mark(home: &Path, id: &str, key: &str, value: Value) -> Result<(), String> {

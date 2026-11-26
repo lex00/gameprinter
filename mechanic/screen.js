@@ -1882,6 +1882,12 @@ const asksOpen = new Set();
 // to the card's row, as the person's turn.
 const asksWording = new Set();
 const askWords = new Map();
+// Why an answer to a card didn't save (the server refused it, or wasn't
+// there), by card: drawn on the card until an answer to it saves. It was
+// written into the card and wiped by the redraw right after, so a refused
+// answer left the card as it was with no word why (2026-11-25: "answered
+// cards, one of them does not go away").
+const askRefused = new Map();
 let asksDrawn = "";
 let asksShown = 0; // the yes cards in YOUR TURN now
 let asksNow = []; // those cards, as /api/asks last gave them
@@ -1913,6 +1919,14 @@ function cardButtons(a) {
     ["DON'T LAND IT YET", "keep", "Lands nothing: you like it for now and are still trying it. Its row waits, and no worker gates it, until you press LAND IT on the row"],
     ["NO", "no", "Lands nothing; with words, its row goes back to its worker to change it as you say"],
   ];
+}
+
+/** An answer to card `id` that didn't save, and why: kept on the card
+ * (askRefused) and said at once. */
+function refused(id, why) {
+  const text = `Your answer didn't save: ${String(why).replace(/\.$/, "")}. The card is as it was.`;
+  askRefused.set(id, text);
+  fault(text, 8000);
 }
 
 /** The card whose change a LOOK AT IT on card `a` plays (its id), when it
@@ -2002,6 +2016,7 @@ async function refreshAsks() {
     card.append(q);
     const says = el("span", "ask-says", msg || (a.says ?? ""));
     card.append(says);
+    if (askRefused.has(a.id)) card.append(el("span", "ask-refused", askRefused.get(a.id)));
     // The quest-log row it is for: its step's (row:GAME/ROW), which a
     // click opens; a card with no step was raised outside the loop.
     // The server names it (`row`, from the step's worker record) even after
@@ -2094,17 +2109,19 @@ async function refreshAsks() {
               body: JSON.stringify(body),
             });
             const out = await r.json().catch(() => ({}));
-            if (!r.ok) says.textContent = `${a.says} (Your answer didn't save: ${out.error ?? r.status}.)`;
+            if (!r.ok) refused(a.id, `${out.error ?? r.status}`);
             else {
+              askRefused.delete(a.id);
               askWords.delete(a.id);
               asksWording.delete(a.id);
               if (out.talk_error) fault(`Your answer saved, but your words didn't reach the row: ${out.talk_error}`, 8000);
+              else if (out.on_main) note(`Nothing to land: ${out.on_main}. The card is closed.`, 8000);
               else if (val === "keep") note("Nothing lands. Its row stays as it is until you press LAND IT on it.", 6000);
               else if (val === "yes" && isGate(a)) note("Landing it: the checks run first, about half an hour, and other landings wait.", 6000);
               else if (words && out.row) note(`Your words went to ${out.row.split("/").slice(1).join("/")}.`, 5000);
             }
           } catch (err) {
-            says.textContent = `${a.says} (Your answer didn't save. Is the page's server still running?)`;
+            refused(a.id, "the page's server didn't answer (it may be restarting): try again in a minute");
           }
           asksDrawn = "";
           void refreshAsks();
@@ -2143,14 +2160,15 @@ async function refreshAsks() {
               body: JSON.stringify(body),
             });
             const out = await r.json().catch(() => ({}));
-            if (!r.ok) says.textContent = `${a.says} (Your answer didn't save: ${out.error ?? r.status}.)`;
+            if (!r.ok) refused(a.id, `${out.error ?? r.status}`);
             else {
+              askRefused.delete(a.id);
               askWords.delete(a.id);
               asksWording.delete(a.id);
-              note("NO, as a duplicate: its row waits for the other card.", 5000);
+              note(out.on_main ? `Nothing to land: ${out.on_main}. The card is closed.` : "NO, as a duplicate: its row waits for the other card.", 5000);
             }
           } catch (err) {
-            says.textContent = `${a.says} (Your answer didn't save. Is the page's server still running?)`;
+            refused(a.id, "the page's server didn't answer (it may be restarting): try again in a minute");
           }
           asksDrawn = "";
           void refreshAsks();

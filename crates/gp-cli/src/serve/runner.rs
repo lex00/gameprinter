@@ -398,6 +398,10 @@ pub(crate) fn start(ctx: Arc<Ctx>) {
                 // Rows parked on another row go on once it lands (owner,
                 // waits-wake-on-landing), before that row is archived.
                 let now = gp_mcp::asks::now_ms();
+                // An open gate card whose change is on main already (landed
+                // by hand) closes as landed, so it leaves the page and its
+                // row follows it (card-stays-after-its-change-landed).
+                settle_cards_on_main(&ctx.paths.home, &ctx.games, &tools_checkout(&ctx.repo), now);
                 // A row asking the person about a card that is gone goes on
                 // (trouble-rows-dont-ask-the-person-open-questions).
                 settle_card_asks(&ctx.paths.home, now);
@@ -491,20 +495,7 @@ fn run_yeses(ctx: &Arc<Ctx>) {
         let gp = yes_gp(&home, &a)
             .unwrap_or_else(|| std::env::current_exe().unwrap_or_else(|_| PathBuf::from("gp")));
         let games = ctx.games.clone();
-        // The person's own gameprinter checkout: the one the build tree is
-        // a worktree of (its git's common folder's parent), on its branch.
-        let tools = Command::new("git")
-            .args(["rev-parse", "--path-format=absolute", "--git-common-dir"])
-            .current_dir(&ctx.repo)
-            .output()
-            .ok()
-            .filter(|o| o.status.success())
-            .and_then(|o| {
-                PathBuf::from(String::from_utf8_lossy(&o.stdout).trim())
-                    .parent()
-                    .map(Path::to_path_buf)
-            })
-            .unwrap_or_else(|| ctx.repo.clone());
+        let tools = tools_checkout(&ctx.repo);
         let home = home.clone();
         YES_IDS
             .lock()
@@ -622,6 +613,151 @@ fn run_yeses(ctx: &Arc<Ctx>) {
             let _ = fs::remove_file(&err_f);
         });
     }
+}
+
+/// The person's own gameprinter checkout: the one the build tree `repo`
+/// is a worktree of (its git's common folder's parent), on its branch;
+/// `repo` itself when git can't say.
+pub(crate) fn tools_checkout(repo: &Path) -> PathBuf {
+    Command::new("git")
+        .args(["rev-parse", "--path-format=absolute", "--git-common-dir"])
+        .current_dir(repo)
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .and_then(|o| {
+            PathBuf::from(String::from_utf8_lossy(&o.stdout).trim())
+                .parent()
+                .map(Path::to_path_buf)
+        })
+        .unwrap_or_else(|| repo.to_path_buf())
+}
+
+/// Where gate card `a`'s change lands: the games checkout for a model
+/// gate, gameprinter's own for a tool gate; None for any other card.
+pub(crate) fn card_repo(a: &Value, games: &Path, tools: &Path) -> Option<PathBuf> {
+    match a["command"].as_str()? {
+        "model gate" => Some(games.to_path_buf()),
+        "tool gate" => Some(tools.to_path_buf()),
+        _ => None,
+    }
+}
+
+/// Whether gate card `a`'s change is on `repo`'s main already: its patch
+/// comes off main's tree (`git apply --reverse --check` on main, in an
+/// index of its own, and it doesn't go on again), or, when its patch can't
+/// be read, a commit on main has its message's first line. Some((why, the
+/// commit with its message, when one has it)) when it is. A card landed by
+/// hand (its gate command run outside the runner, as for card
+/// 1795635968175-2d84654b on 2026-11-25) stayed open with its change on
+/// main, and the person's answer to it changed nothing.
+pub(crate) fn on_main(home: &Path, repo: &Path, a: &Value) -> Option<(String, Option<String>)> {
+    let main = git_in(
+        repo,
+        &["rev-parse", "--verify", "--quiet", "refs/heads/main"],
+    )
+    .ok()?;
+    let message = arg_values(a, "--message")
+        .pop()
+        .or_else(|| arg_values(a, "-m").pop())
+        .unwrap_or_default();
+    let first = message.lines().next().unwrap_or("").trim().to_owned();
+    let commit = (!first.is_empty())
+        .then(|| {
+            git_in(
+                repo,
+                &[
+                    "log",
+                    "refs/heads/main",
+                    "-n",
+                    "1",
+                    "--format=%h",
+                    "-F",
+                    "--grep",
+                    &first,
+                ],
+            )
+            .ok()
+        })
+        .flatten()
+        .filter(|c| !c.is_empty());
+    let game = a["game"].as_str().unwrap_or("");
+    let short = &main[..main.len().min(9)];
+    match card_patch(home, game, a) {
+        Ok(patch) => {
+            if !patch_on_tree(repo, &main, &patch) {
+                return None;
+            }
+            let why = match &commit {
+                Some(c) => format!("its change is on main already, as {c}"),
+                None => format!("its change is on main already (main at {short})"),
+            };
+            Some((why, commit))
+        }
+        Err(_) => commit.map(|c| (format!("a commit on main has its message: {c}"), Some(c))),
+    }
+}
+
+/// Whether `patch` is in commit `tree_of`'s tree: it comes off it
+/// (reversed, it applies) and doesn't go on again. Read in an index of its
+/// own, so no checkout is touched.
+fn patch_on_tree(repo: &Path, tree_of: &str, patch: &[u8]) -> bool {
+    use std::io::Write as _;
+    let index = std::env::temp_dir().join(format!(
+        "gp-on-main-{}-{}.index",
+        std::process::id(),
+        gp_mcp::asks::now_ms()
+    ));
+    let git = |args: &[&str], input: Option<&[u8]>| -> bool {
+        let child = Command::new("git")
+            .arg("-C")
+            .arg(repo)
+            .args(args)
+            .env("GIT_INDEX_FILE", &index)
+            .stdin(if input.is_some() {
+                Stdio::piped()
+            } else {
+                Stdio::null()
+            })
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn();
+        let Ok(mut c) = child else { return false };
+        if let (Some(i), Some(mut s)) = (input, c.stdin.take()) {
+            let _ = s.write_all(i);
+        }
+        c.wait().is_ok_and(|s| s.success())
+    };
+    let on = git(&["read-tree", tree_of], None)
+        && git(
+            &["apply", "--cached", "--check", "--reverse", "-"],
+            Some(patch),
+        )
+        && !git(&["apply", "--cached", "--check", "-"], Some(patch));
+    let _ = fs::remove_file(&index);
+    on
+}
+
+/// Each open gate card whose change is on main already ([`on_main`]) is
+/// closed as landed (gp_mcp::asks::settle_on_main), so it leaves the
+/// person's page and its row follows it as landed. Returns the ids.
+fn settle_cards_on_main(home: &Path, games: &Path, tools: &Path, now: u64) -> Vec<String> {
+    let mut out = Vec::new();
+    for a in gp_mcp::asks::all(home) {
+        if !gp_mcp::asks::is_open(&a, now) {
+            continue;
+        }
+        let Some(repo) = card_repo(&a, games, tools) else {
+            continue;
+        };
+        let id = a["id"].as_str().unwrap_or("");
+        if let Some((why, commit)) = on_main(home, &repo, &a)
+            && gp_mcp::asks::settle_on_main(home, id, &why, commit.as_deref(), "").is_ok()
+        {
+            out.push(id.to_owned());
+        }
+    }
+    out
 }
 
 /// A yes to `gp corpus import GAME --write ...` (a --replace or --remove
@@ -1054,7 +1190,17 @@ fn settle_row_by_card(
     // What the person wrote beside their answer, kept in the note (it is in
     // the row's talk too, POST /api/asks/ID).
     let words = a["words"].as_str().map(str::trim).filter(|w| !w.is_empty());
+    // A card closed because its change was on main already (landed outside
+    // the runner): no YES landed it (settle_cards_on_main).
+    let by_main = a["ran"]["by"] == json!("main");
     let (status, note) = match kind {
+        "landed" if by_main => (
+            "done",
+            format!(
+                "Its card closed with nothing to land: {}. {what}.",
+                why.trim_end_matches('.')
+            ),
+        ),
         "landed" => ("done", format!("Landed on your YES: {what}.")),
         "passed" => ("done", format!("Done on your YES: {what}.")),
         "failed" => (
@@ -1085,6 +1231,7 @@ fn settle_row_by_card(
         ("no", Some(w)) => format!(
             "You said NO to its card ({what}) and wrote: \"{w}\". The loop takes it up again and makes the fix you asked for."
         ),
+        (_, Some(w)) if by_main => format!("{note} On its card you wrote: \"{w}\"."),
         (_, Some(w)) => format!("{note} Beside your YES you wrote: \"{w}\"."),
         (_, None) => note,
     };
@@ -5442,5 +5589,125 @@ mod tests {
             crate::gate::StandsOn::Landed(g) if g.len() == 1
         ));
         assert_eq!(hold_for_after(home, &read("1-base"), now), None);
+    }
+
+    /// card-stays-after-its-change-landed: card 1795635968175-2d84654b's
+    /// change landed by its gate command run by hand, and the card stayed
+    /// open on the page with nothing to land.
+    #[test]
+    fn an_open_gate_card_whose_change_is_on_main_closes_as_landed() {
+        let t = tempfile::tempdir().unwrap();
+        let home = t.path().join("home");
+        let home = home.as_path();
+        let games = t.path().join("games");
+        fs::create_dir_all(games.join("g")).unwrap();
+        git_in(&games, &["init", "-q", "-b", "main"]);
+        let model = games.join("g/model.toml");
+        fs::write(&model, "a = 1\nb = 1\n").unwrap();
+        git_in(&games, &["add", "-A"]);
+        git_in(&games, &["commit", "-q", "-m", "base"]);
+        // A patch, then the same change committed on main by hand.
+        let diff = |to: &str, name: &str| -> PathBuf {
+            fs::write(&model, to).unwrap();
+            let o = Command::new("git")
+                .arg("-C")
+                .arg(&games)
+                .arg("diff")
+                .output()
+                .unwrap();
+            let p = t.path().join(name);
+            fs::write(&p, o.stdout).unwrap();
+            git_in(&games, &["checkout", "-q", "--", "."]);
+            p
+        };
+        let landed = diff("a = 2\nb = 1\n", "landed.patch");
+        fs::write(&model, "a = 2\nb = 1\n").unwrap();
+        let msg = "g: a is two. Expect: two";
+        git_in(&games, &["commit", "-q", "-am", msg]);
+        let open = diff("a = 2\nb = 3\n", "open.patch");
+        let sha = {
+            let o = Command::new("git")
+                .arg("-C")
+                .arg(&games)
+                .args(["log", "-n", "1", "--format=%h"])
+                .output()
+                .unwrap();
+            String::from_utf8_lossy(&o.stdout).trim().to_owned()
+        };
+        // Row a's card has its change on main; row b's doesn't; row c's
+        // patch is gone and main has its message; row d's card is a NO.
+        let f = home.join("mechanics/g/queue.json");
+        fs::create_dir_all(f.parent().unwrap()).unwrap();
+        fs::write(
+            &f,
+            json!([
+                {"mechanic": "a", "status": "asking you", "note": "Its card is on your page: press YES"},
+                {"mechanic": "b", "status": "asking you", "note": "Its card is on your page: press YES"},
+            ])
+            .to_string(),
+        )
+        .unwrap();
+        fs::create_dir_all(gp_mcp::asks::dir(home)).unwrap();
+        fs::create_dir_all(loop_state::workers_dir(home)).unwrap();
+        let now = gp_mcp::asks::now_ms();
+        let card = |n: u64, row: &str, patch: &Path, state: &str| {
+            let step = format!("s{n:012x}");
+            fs::write(
+                file(home, &step),
+                json!({"step": {"id": step, "touches": [format!("row:g/{row}")]}}).to_string(),
+            )
+            .unwrap();
+            let a = json!({"id": format!("ask-{n}"), "made_ms": now - 1000 + n, "step": step,
+                "game": "g", "command": "model gate", "state": state,
+                "argv": ["--patch", patch.to_string_lossy(), "--message", msg, "g"]});
+            fs::write(
+                gp_mcp::asks::dir(home).join(format!("ask-{n}.json")),
+                a.to_string(),
+            )
+            .unwrap();
+        };
+        card(1, "a", &landed, "open");
+        card(2, "b", &open, "open");
+        card(3, "c", &t.path().join("gone.patch"), "open");
+        card(4, "d", &landed, "no");
+        let tools = t.path().join("no-tools");
+        let mut ids = settle_cards_on_main(home, &games, &tools, now);
+        ids.sort();
+        assert_eq!(ids, ["ask-1", "ask-3"]);
+        let a1 = gp_mcp::asks::read(home, "ask-1").unwrap();
+        assert_eq!(a1["state"], "used");
+        assert_eq!(a1["ran"]["state"], "landed");
+        assert_eq!(a1["ran"]["by"], "main");
+        assert_eq!(a1["landed"], json!(sha));
+        assert_eq!(
+            a1["ran"]["lines"],
+            json!([format!("its change is on main already, as {sha}")])
+        );
+        assert_eq!(gp_mcp::asks::read(home, "ask-2").unwrap()["state"], "open");
+        assert_eq!(gp_mcp::asks::read(home, "ask-4").unwrap()["state"], "no");
+        assert_eq!(
+            gp_mcp::asks::read(home, "ask-3").unwrap()["ran"]["lines"],
+            json!([format!("a commit on main has its message: {sha}")])
+        );
+        // Closed, it isn't open for an answer any more, and it is gone
+        // from the page's open cards.
+        assert!(gp_mcp::asks::settle_on_main(home, "ask-1", "x", None, "").is_err());
+        assert!(!gp_mcp::asks::is_open(&a1, now));
+        // Its row follows it as landed, saying nothing landed on a YES.
+        settle_card_rows(home);
+        let row = |m: &str| -> Value {
+            crate::mechanic::session::read_queue(&f)
+                .into_iter()
+                .find(|r| r["mechanic"] == json!(m))
+                .unwrap()
+        };
+        assert_eq!(row("a")["status"], "done");
+        assert_eq!(
+            row("a")["note"],
+            format!(
+                "Its card closed with nothing to land: its change is on main already, as {sha}. a is two."
+            )
+        );
+        assert_eq!(row("b")["status"], "asking you");
     }
 }

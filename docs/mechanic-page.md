@@ -604,6 +604,23 @@ with their words. A row an agent works on waits; a done row moves only
 when its note still talks of the card; only a row's newest card moves it,
 once (`row_settled` on the card).
 
+A gate card whose change is on main already (its gate command was run by
+hand, say) has nothing to land. Once a minute the runner's
+`settle_cards_on_main` checks each open model gate and tool gate card: its
+patch is on main when it comes off main's tree (`git apply --reverse
+--check` in an index of its own) and doesn't go on again, or, with its
+patch gone, when a commit on main has its message's first line. Such a
+card closes as landed (`ran.by` is `main`, `landed` the commit), leaves
+the page, and its row follows it ("Its card closed with nothing to land:
+its change is on main already, as COMMIT"). An answer to such a card does
+the same at once, whatever the answer, and the reply's `on_main` says why;
+the page says "Nothing to land".
+
+An answer the server doesn't take (it refused it, or didn't answer while
+it restarted) stays written on the card in red, "Your answer didn't save:
+WHY. The card is as it was.", until an answer to it saves. Before, the
+words went into the card and the redraw right after wiped them.
+
 A row asking the person about a card, with no clip, asks nothing of its
 own: YOUR TURN shows its card while the card is there and never an open
 question once it is gone. `gp mechanic queue` under a loop step refuses

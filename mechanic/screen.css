@@ -178,6 +178,9 @@ body.loop-page #input-set { display: none; }
 .asks .ask-head { flex: none; font: bold 11px var(--mono); color: var(--gold); letter-spacing: 0.06em; white-space: nowrap; }
 .asks .ask-detail { flex-basis: 100%; order: 3; color: var(--muted); font: 12px var(--mono); overflow-wrap: anywhere; }
 .asks .ask-card:not(.open) .ask-detail, .asks .ask-card:not(.open) .ask-says { display: none; }
+/* Why the person's answer didn't save, kept on the card through redraws
+   (open or not) until an answer saves. */
+.asks .ask-refused { flex-basis: 100%; order: 2; color: var(--rec); font: 12px var(--mono); overflow-wrap: anywhere; }
 .asks button { flex: none; font: bold 12px var(--mono); padding: 0 10px; }
 .asks .ask-yes { color: var(--bg); background: var(--gold); border: 2px solid var(--gold); }
 .asks .ask-no { color: var(--fg); background: transparent; border: 2px solid var(--muted); }

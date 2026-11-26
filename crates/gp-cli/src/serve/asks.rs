@@ -6,7 +6,7 @@
 //! | Endpoint | What |
 //! |---|---|
 //! | `GET /api/asks` | The asks still open, and the yeses not yet used, newest first |
-//! | `POST /api/asks/{id}` | `{answer: "yes" \| "no", words?, duplicate_of?, keep_going?}`: the person's answer to an open ask, with what they wrote beside it: kept on the ask, written to its row's talk as their turn, and put in the row's note when the runner settles the row by the card (a NO with words sends the row to next with them). A NO with `duplicate_of` (another open card of the game, the card's DUPLICATE OF) parks the row in line waiting on that card's row, instead of sending it back to make the same card again. A NO with `keep_going` (a gate card's DON'T LAND IT YET) lands nothing and parks the row in line marked iterating: no worker gates it until the person presses LAND IT on the row |
+//! | `POST /api/asks/{id}` | `{answer: "yes" \| "no", words?, duplicate_of?, keep_going?}`: the person's answer to an open ask, with what they wrote beside it: kept on the ask, written to its row's talk as their turn, and put in the row's note when the runner settles the row by the card (a NO with words sends the row to next with them). A NO with `duplicate_of` (another open card of the game, the card's DUPLICATE OF) parks the row in line waiting on that card's row, instead of sending it back to make the same card again. A NO with `keep_going` (a gate card's DON'T LAND IT YET) lands nothing and parks the row in line marked iterating: no worker gates it until the person presses LAND IT on the row. An answer to a gate card whose change is on main already (runner::on_main) closes it as landed whatever the answer, and the reply's `on_main` says why |
 
 use serde_json::{Value, json};
 
@@ -65,12 +65,28 @@ fn answer(ctx: &Ctx, req: &Request, params: &Params) -> Result<Response, Fail> {
     }
     let home = &ctx.paths.home;
     let dup = duplicate_of(home, id, a, &v)?;
-    let mut done = asks::answer_with(home, id, a, words).map_err(Fail::conflict)?;
-    if let Some(d) = &dup {
+    // A gate card whose change is on main already (landed by hand) has
+    // nothing to land: whatever the answer, it closes as landed and the
+    // reply says why (`on_main`), where before a YES to it ran a gate that
+    // could only fail (card-stays-after-its-change-landed).
+    let on_main = asks::read(home, id)
+        .filter(|c| asks::is_open(c, asks::now_ms()))
+        .and_then(|c| {
+            let tools = super::runner::tools_checkout(&ctx.repo);
+            let repo = super::runner::card_repo(&c, &ctx.games, &tools)?;
+            super::runner::on_main(home, &repo, &c)
+        });
+    let mut done = match &on_main {
+        Some((why, commit)) => {
+            asks::settle_on_main(home, id, why, commit.as_deref(), words).map_err(Fail::conflict)?
+        }
+        None => asks::answer_with(home, id, a, words).map_err(Fail::conflict)?,
+    };
+    if let Some(d) = dup.as_ref().filter(|_| on_main.is_none()) {
         asks::mark(home, id, "duplicate_of", json!(d)).map_err(Fail::conflict)?;
         done["duplicate_of"] = json!(d);
     }
-    if keep_going {
+    if keep_going && on_main.is_none() {
         asks::mark(home, id, "keep_going", json!(true)).map_err(Fail::conflict)?;
         done["keep_going"] = json!(true);
     }
@@ -78,10 +94,13 @@ fn answer(ctx: &Ctx, req: &Request, params: &Params) -> Result<Response, Fail> {
     // reads them with the row; the row's status is the runner's to set
     // when it settles the card (runner::settle_card_rows).
     let mut out = done.clone();
+    if let Some((why, _)) = &on_main {
+        out["on_main"] = json!(why);
+    }
     let said_words = done["words"]
         .as_str()
         .map(str::to_owned)
-        .or_else(|| keep_going.then(String::new));
+        .or_else(|| (keep_going || on_main.is_some()).then(String::new));
     if let Some(w) = said_words
         && let Some((game, row)) = super::runner::ask_row(&ctx.paths.home, &done)
     {
@@ -90,12 +109,17 @@ fn answer(ctx: &Ctx, req: &Request, params: &Params) -> Result<Response, Fail> {
             asks::Answer::Yes => "YES",
             asks::Answer::No => "NO",
         };
-        let w = if w.is_empty() {
-            "nothing lands; it stays iterating until LAND IT on the row".to_owned()
-        } else {
-            w
+        let w = match &on_main {
+            Some((why, _)) if w.is_empty() => {
+                format!("{why}; the card closed with nothing to land")
+            }
+            Some((why, _)) => format!("{w} ({why}; the card closed with nothing to land)"),
+            None if w.is_empty() => {
+                "nothing lands; it stays iterating until LAND IT on the row".to_owned()
+            }
+            None => w,
         };
-        let text = match &dup {
+        let text = match dup.as_ref().filter(|_| on_main.is_none()) {
             Some(d) => format!(
                 "NO to the card ({}), a duplicate of card {d}: {w}",
                 super::runner::card_what(&done)
