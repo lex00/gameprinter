@@ -298,6 +298,28 @@ fn gate_builds(gate_home: &Path) -> Vec<PathBuf> {
     vec![tool.join("target"), tool.join("target-tests")]
 }
 
+/// The build folder inside the tree a tool gate of a gp from before the two
+/// locks worked in (`tool/tree/target`: the scripts' page, preview and
+/// wasm builds and a debug build, 7.1 GB on 2026-11-25). A tool gate of
+/// this gp works in `tool/tree-tool-lock` ([`crate::tool_gate::TREE`]), so
+/// nothing builds there unless such an older gate runs, and gp loop clean
+/// --gate clears it whenever none does, a tool gate of this gp running or
+/// not (trouble-the-home-s-disk-has-gb-free-under-gb-gp-8546ab: the tool
+/// gate ran, so the gate's builds were skipped, with 15.7 GB free).
+fn old_tree_build(gate_home: &Path) -> PathBuf {
+    gate_home.join("tool").join("tree").join("target")
+}
+
+/// The build folder inside the tool gate's own tree, where the scripts
+/// build the page and the wasm modules and some steps run cargo in place:
+/// its incremental caches are pruned with the gate's targets.
+fn tree_build(gate_home: &Path) -> PathBuf {
+    gate_home
+        .join("tool")
+        .join(crate::tool_gate::TREE)
+        .join("target")
+}
+
 /// A crate's incremental folder in the gate's builds untouched this long
 /// belongs to a build no gate makes now (other features, an older rustc).
 const INCREMENTAL_IDLE: Duration = Duration::from_secs(7 * 24 * 60 * 60);
@@ -316,7 +338,9 @@ const INCREMENTAL_IDLE: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 pub(crate) fn prune_gate_incremental(gate_home: &Path) -> u64 {
     let now = SystemTime::now();
     let mut freed = 0;
-    for target in gate_builds(gate_home) {
+    let mut targets = gate_builds(gate_home);
+    targets.push(tree_build(gate_home));
+    for target in targets {
         // TARGET/PROFILE/incremental, and TARGET/TRIPLE/PROFILE/incremental.
         for d in fs::read_dir(&target).into_iter().flatten().flatten() {
             let d = d.path();
@@ -473,6 +497,7 @@ pub(crate) fn clearable(
         out.extend(
             gate_builds(g)
                 .into_iter()
+                .chain([old_tree_build(g)])
                 .filter(|p| p.is_dir())
                 .map(Clear::folder),
         );
@@ -506,13 +531,34 @@ pub(crate) fn clean(
         }
     }
     if let Some(g) = gate {
+        let older = crate::gate_hold::older_tool_gate_runs(g);
+        let old = old_tree_build(g);
+        if old.is_dir() {
+            if older {
+                skipped.push(format!(
+                    "{}: an older gp's tool gate runs now",
+                    old.display()
+                ));
+            } else {
+                let bytes = remove(&old);
+                if old.exists() {
+                    skipped.push(format!("{}: couldn't be removed", old.display()));
+                } else {
+                    done.push(Clear {
+                        path: old,
+                        bytes,
+                        old_files: false,
+                    });
+                }
+            }
+        }
         // The tool gate holds its lock while it runs (crate::tool_gate), and
         // a tool gate of a gp from before the two locks held gate.lock.
         let free = crate::gate_hold::open_lock(g, crate::gate_hold::Lane::Tool)
             .ok()
             .filter(|f| f.try_lock().is_ok());
         match free {
-            Some(_held) if !crate::gate_hold::older_tool_gate_runs(g) => {
+            Some(_held) if !older => {
                 for p in gate_builds(g).into_iter().filter(|p| p.is_dir()) {
                     let bytes = remove(&p);
                     done.push(Clear {
@@ -663,6 +709,57 @@ mod tests {
         let (done, _) = clean(&home, &BTreeSet::new(), Some(&g), Some(&g));
         assert_eq!(done, vec![Clear::of(t.clone(), 5)]);
         assert!(!t.exists());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// The build in an older gp's tool tree goes while a tool gate of this
+    /// gp runs, its own builds kept; the incremental caches of its own
+    /// tree's build are pruned with its targets.
+    #[test]
+    fn the_old_tool_trees_build_clears_while_a_tool_gate_runs() {
+        if std::env::var_os("GP_TARGET_DIR").is_some_and(|v| !v.is_empty()) {
+            return;
+        }
+        let root = tmp("old-tree");
+        let g = root.join("gate");
+        let t = g.join("tool").join("target");
+        fs::create_dir_all(&t).unwrap();
+        fs::write(t.join("f"), b"12345").unwrap();
+        let old = old_tree_build(&g);
+        fs::create_dir_all(old.join("debug")).unwrap();
+        fs::write(old.join("debug").join("gp"), b"1234567").unwrap();
+        let mine = g.join("tool/tree-tool-lock/target");
+        let k = mine.join("debug/incremental/gp_web-1x");
+        let hour = Duration::from_secs(60 * 60);
+        file_aged(&k.join("s-old-aaa-svh1/query-cache.bin"), 11, hour);
+        file_aged(
+            &k.join("s-new-bbb-svh2/query-cache.bin"),
+            3,
+            Duration::from_secs(60),
+        );
+        fs::File::open(k.join("s-old-aaa-svh1"))
+            .unwrap()
+            .set_modified(SystemTime::now() - hour)
+            .unwrap();
+        let home = root.join("home");
+        fs::create_dir_all(&home).unwrap();
+        assert_eq!(
+            clearable(&home, &BTreeSet::new(), Some(&g), None),
+            vec![Clear::of(old.clone(), 7), Clear::of(t.clone(), 5)]
+        );
+        let lock = crate::gate_hold::open_lock(&g, crate::gate_hold::Lane::Tool).unwrap();
+        lock.try_lock().unwrap();
+        let (done, skipped) = clean(&home, &BTreeSet::new(), Some(&g), None);
+        assert_eq!(done, vec![Clear::of(old.clone(), 7)]);
+        assert_eq!(
+            skipped,
+            vec!["the gate's build folders: a tool gate runs now"]
+        );
+        assert!(!old.exists());
+        assert!(t.join("f").exists());
+        assert_eq!(prune_gate_incremental(&g), 11);
+        assert!(k.join("s-new-bbb-svh2/query-cache.bin").exists());
+        drop(lock);
         let _ = fs::remove_dir_all(&root);
     }
 

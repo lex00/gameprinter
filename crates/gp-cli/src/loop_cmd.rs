@@ -48,7 +48,8 @@ pub enum LoopCmd {
         /// Also clear the tool gate's build folders (tool/target and
         /// tool/target-tests in its home, $GP_GATE_HOME else
         /// ~/.gameprinter/gate), unless a gate runs now; its next run
-        /// builds from nothing.
+        /// builds from nothing. The build in an older gp's gate tree
+        /// (tool/tree/target) goes even while a tool gate runs.
         #[arg(long)]
         gate: bool,
         /// List what would be cleared, with sizes, and remove nothing.
