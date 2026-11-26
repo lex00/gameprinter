@@ -15,3 +15,6 @@ root = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEoXL5YfJ6rWdggoGhTubKRNnHfvNOByMUTP
 [registry]
 name = "gp-registry"
 url = "https://raw.githubusercontent.com/lex00/gp-registry/main"
+# The list of this source's games: the page's header links to it ("All
+# games"). A source without `home` shows no link.
+home = "https://lex00.github.io/games/"

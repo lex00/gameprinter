@@ -189,6 +189,14 @@ if by_url:
         if not re.fullmatch(r"ssh-ed25519 [A-Za-z0-9+/]{68}( \S+)?", root):
             sys.exit("build-page.sh: GP_PAGE_SOURCE_ROOT must be an ssh-ed25519 public key line")
         source["root"] = root
+# GP_PAGE_HOME is the list of the source's games, an https address: the
+# page's header links to it ("All games"). It replaces the source's own
+# `home` in sources.toml; a source with neither shows no link.
+home_url = os.environ.get("GP_PAGE_HOME", "")
+if home_url:
+    if not re.fullmatch(r"https://[^\s]+", home_url):
+        sys.exit(f"build-page.sh: GP_PAGE_HOME must be an https address, not {home_url}")
+    source["home"] = home_url
 # GP_PAGE_LINK_REGISTRY=1 builds a page that also takes themes from the
 # registry a link names (r=). Off by default: the page plays only its own
 # registries' themes.

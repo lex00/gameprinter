@@ -214,6 +214,13 @@ const ready = pageFile.then((p) => {
   page = p;
   link = gameLink(p);
   source = p.source;
+  // The way back to the list of games: the page's source may name its
+  // index (sources.toml's `home`, an https address), and the header then
+  // links to it. A source with none shows no link.
+  if (typeof p.source?.home === "string" && /^https:\/\/[^\s]+$/.test(p.source.home)) {
+    $("home").href = p.source.home;
+    $("home").hidden = false;
+  }
   extra = themesSource(p.source, link, p.themes ?? null, p.link_registry === true);
   showSource(extra, link, p.link_registry === true);
   if (link.own) {

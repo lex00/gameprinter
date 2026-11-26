@@ -87,7 +87,7 @@ GP_PAGE_CONTENT=acme/harbor-lights \
   scripts/web/release-check.sh --no-roms --game ../games/donkey-kong
 ```
 
-`GP_PAGE_THEMES_URL` goes in the page's `page.json` as `themes`: with no `r=` in its link the page offers that registry's themes beside its own registry's, and the line under its header says so (`GP_PAGE_THEMES_ROOT` gives a signed registry's root key line). `GP_PAGE_CONTENT` is the theme the page opens in. Nothing in the repo is edited. (`GP_PAGE_SOURCE_URL` replaces the page's own registry, where games come from, for someone hosting games too.) On a pass the check records the page's digest, marked as made without ROMs, and prints `bundle: DIR`. Only that folder, file for file as it passed, can be uploaded.
+`GP_PAGE_THEMES_URL` goes in the page's `page.json` as `themes`: with no `r=` in its link the page offers that registry's themes beside its own registry's, and the line under its header says so (`GP_PAGE_THEMES_ROOT` gives a signed registry's root key line). `GP_PAGE_CONTENT` is the theme the page opens in. `GP_PAGE_HOME` is the https address of your list of games: the page's header then has an "All games" link to it (a page built for the repo's own registry links to that registry's list, `home` in `scripts/web/sources.toml`; with neither, the header has no link). Nothing in the repo is edited. (`GP_PAGE_SOURCE_URL` replaces the page's own registry, where games come from, for someone hosting games too.) On a pass the check records the page's digest, marked as made without ROMs, and prints `bundle: DIR`. Only that folder, file for file as it passed, can be uploaded.
 
 ### On Cloudflare
 

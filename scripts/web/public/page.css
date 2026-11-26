@@ -39,6 +39,10 @@ button, label.button {
   cursor: pointer;
 }
 button.quiet { background: transparent; color: var(--text); border: 1px solid var(--border); }
+/* The header's link to the list of games, drawn as its buttons are. */
+a.quiet { color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 6px 14px; text-decoration: none; font: inherit; }
+a.quiet[hidden] { display: none; }
+a.quiet:focus-visible { outline: 3px solid var(--text); outline-offset: 2px; }
 button:focus-visible, label.button:focus-within { outline: 3px solid var(--text); outline-offset: 2px; }
 #rom { position: absolute; width: 1px; height: 1px; opacity: 0; }
 main { flex: 1; min-height: 0; display: flex; }
