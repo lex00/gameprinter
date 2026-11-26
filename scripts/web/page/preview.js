@@ -1543,7 +1543,10 @@ async function main() {
           else if (heard) play();
         },
         restart() {
+          // A model's own sound is forgotten when its bundle is loaded
+          // again: given again, as a restart in free play does.
           if (boardSound) boardSound.load(boardZip);
+          else if (soundText) p.loadSound(soundText);
           audioAt = 0;
         },
         wake() {

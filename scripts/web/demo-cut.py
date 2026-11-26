@@ -265,7 +265,16 @@ def main():
                 gw, gh = rw // 2, rh
             gx, gy = (W - gw) // 2, (H - gh) // 2
             graph = SHOWS[show].format(fps=fps, bw=gw, bh=gh, swing=part.get("swing", 4))
-            graph += f";[g]pad={W}:{H}:(ow-iw)/2:(oh-ih)/2:color={ground_hex}[v0]"
+            if gw > W or gh > H:
+                # A screen larger than the frame (a theme drawn at six
+                # times a 256 by 224 game) is brought down to fit it.
+                k = min(W / gw, H / gh)
+                gw, gh = int(gw * k) // 2 * 2, int(gh * k) // 2 * 2
+                gx, gy = (W - gw) // 2, (H - gh) // 2
+                graph += f";[g]scale={gw}:{gh}:flags=lanczos[gs];[gs]pad="
+            else:
+                graph += ";[g]pad="
+            graph += f"{W}:{H}:(ow-iw)/2:(oh-ih)/2:color={ground_hex}[v0]"
             last = "v0"
             times = []
             # The bubbles of a shot are one stream of whole-frame pictures,
