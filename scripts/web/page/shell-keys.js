@@ -35,6 +35,7 @@ export const BINDINGS = [
   { action: "scale", keys: ["F8"], shift: false, buttons: [], standard: [], on: "web", when: "play", needs: "always" },
   { action: "widescreen", keys: ["F9"], shift: false, buttons: [], standard: [], on: "web", when: "play", needs: "always" },
   { action: "dim-flashes", keys: ["F10"], shift: false, buttons: [], standard: [], on: "web", when: "play", needs: "always" },
+  { action: "fullscreen", keys: ["KeyF"], shift: false, buttons: [], standard: [], on: "web", when: "play", needs: "always" },
   { action: "mute-pulse1", keys: ["Digit5"], shift: false, buttons: [], standard: [], on: "web", when: "play", needs: "always" },
   { action: "mute-pulse2", keys: ["Digit6"], shift: false, buttons: [], standard: [], on: "web", when: "play", needs: "always" },
   { action: "mute-triangle", keys: ["Digit7"], shift: false, buttons: [], standard: [], on: "web", when: "play", needs: "always" },

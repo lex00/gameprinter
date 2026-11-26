@@ -196,6 +196,9 @@ pub const BINDINGS: &[Binding] = &[
     b("scale", &["F8"], &[], Web, Play),
     b("widescreen", &["F9"], &[], Web, Play),
     b("dim-flashes", &["F10"], &[], Web, Play),
+    // Full screen and back (the browser's own F11 is not the page's to
+    // read; Esc leaves it by the browser's rule).
+    b("fullscreen", &["KeyF"], &[], Web, Play),
     b("mute-pulse1", &["Digit5"], &[], Web, Play),
     b("mute-pulse2", &["Digit6"], &[], Web, Play),
     b("mute-triangle", &["Digit7"], &[], Web, Play),

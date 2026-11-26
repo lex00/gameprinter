@@ -1,2 +1,9 @@
 body { margin: 0; background: #111; }
 canvas { display: block; margin: 0 auto; width: 768px; height: 720px; image-rendering: pixelated; }
+/* Full screen (preview.js sets `full` on the page): the picture in the
+   middle of a black screen, and the line under it laid over its foot,
+   shown only while it says something. */
+html.full, html.full body { height: 100%; background: #000; overflow: hidden; }
+html.full body { display: flex; flex-direction: column; justify-content: center; }
+html.full .key-hint { position: fixed; left: 0; right: 0; bottom: 0; background: rgba(0, 0, 0, 0.7); }
+html.full .key-hint:empty { display: none; }

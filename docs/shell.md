@@ -94,12 +94,15 @@ The preview reads it as `scripts/web/page/shell-keys.js`, with the rewind policy
 | Rewind (held) | Backspace | The left trigger (`LeftTrigger2`) | Yes. Off while Console only is on |
 | Pause, one frame, slow motion | F2, F3, F4 | | Yes |
 | Scale, widescreen, flash dimming | F8, F9, F10 | | Yes |
+| Full screen | F | | Yes. Esc leaves it too, by the browser's rule |
 | Mute a channel | 5 to 9 | | Yes |
 | Save slot N, load slot N | Shift+1 to Shift+4, 1 to 4 | | Yes. Off while Console only is on |
 | Quick save, quick load (to the last slot used, slot 1 at first) | | The right bumper (`RightTrigger`), the left bumper (`LeftTrigger`) | Only with Quick save buttons on |
 | A shell screen's up, down, left, right, choose, back | The arrows or W A S D; Enter, Space or X; Esc, Backspace or Z | The D-pad, South, East | Yes |
 
 The mechanic page's own keys (F5 and F8 for the original's quick save and load) are a tool's and not in the table.
+
+Full screen is the browser's (the Fullscreen API). F, or the public page's Full screen button (it sends the preview `{gp: "fullscreen"}`), enters and leaves it. The picture is drawn as large as the screen takes, whatever F8 is at, in the middle, on black, with hard pixel edges. The line under the game is laid over the picture's foot and shows only what was just said. Keys and gamepads play as before. On the public page the game's frame is what fills the screen: the preview asks it of the page that holds the frame, when that page is of its own site. Opened alone, or in a frame of another site, the preview's own document is asked, and such a frame needs `allow="fullscreen"`. Where the browser has no full screen (an iPhone's) or refuses it, the line under the game says so. Esc leaves full screen by the browser's own rule and doesn't open the settings screen; with the settings screen open in full screen, Esc leaves full screen and the screen stays open (Backspace or Z closes it), and F1 opens it there.
 
 ## The standard's checks
 

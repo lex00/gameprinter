@@ -427,6 +427,19 @@ $("settings").addEventListener("click", () => {
   focusGame();
 });
 
+// The Full screen button: the game's frame fills the screen and comes back
+// (the game's F key does the same). The preview asks the browser for it
+// (preview.js, `toggleFull`) and says so in its own line if it is refused.
+$("fullscreen").addEventListener("click", () => {
+  $("fullscreen").blur();
+  if (frame.hidden || !frame.getAttribute("src")) {
+    say("Full screen is for a game that is playing. Load one first.", "warn");
+    return;
+  }
+  frame.contentWindow?.postMessage({ gp: "fullscreen" }, location.origin);
+  focusGame();
+});
+
 // Share: a link to this page with the game, the theme or look, and the
 // mode or switches being played (read from the game's frame, same origin),
 // else the ones the link asked for. Nothing else: never the ROM, a save,

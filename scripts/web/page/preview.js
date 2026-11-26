@@ -54,7 +54,10 @@
 // save and load once turned on; Console only turns saves and rewind off.
 // F8 steps the scale (1x to 4x, then fit), F9 draw-only widescreen (off,
 // 16:10, 16:9), F10 flash dimming, and 5 to 9 mute a sound channel
-// (gp_present::view; none of them changes a step). F2 pauses, F3 plays one
+// (gp_present::view; none of them changes a step). F enters and leaves
+// full screen (so does {gp: "fullscreen"} from the page that embeds this,
+// of its own origin): the picture as large as the screen takes, in the
+// middle, on black; Esc leaves it by the browser's rule. F2 pauses, F3 plays one
 // frame while paused and F4 steps slow motion (1/2, 1/4), pacing only.
 // `level=NAME` starts at that level (preview.json lists them). A slot is a
 // save record naming the build that made it (gp_sim::save, the generated
@@ -801,11 +804,21 @@ const down = new Set();
 let resetPressed = false;
 // Keys pressed since the shell last looked, for the slot and scale keys.
 const pressed = [];
+// Full screen, set by the shell once the game plays from the keyboard:
+// `toggle` enters or leaves it, `escaped` says whether an Esc is the one
+// that left it. Null in control mode and before the game is up.
+let fullScreen = null;
 addEventListener("keydown", (e) => {
   down.add(e.code);
   controls?.keyDown(e.code, e.timeStamp);
   if (shellAction(e.code, false) === "reset") resetPressed = true;
-  if (!e.repeat) pressed.push({ code: e.code, shift: e.shiftKey });
+  // The full screen key is acted on here and not in the game's loop: a
+  // browser grants full screen only while the key press is being handled.
+  if (!e.repeat && fullScreen && shellAction(e.code, false) === "fullscreen") fullScreen.toggle();
+  // Esc leaves full screen by the browser's own rule. Where the browser
+  // also hands the page that Esc, it isn't the settings key too.
+  const left = e.code === "Escape" && fullScreen?.escaped();
+  if (!e.repeat && !left) pressed.push({ code: e.code, shift: e.shiftKey });
   e.preventDefault();
 });
 addEventListener("keyup", (e) => {
@@ -2555,6 +2568,7 @@ function shell(p, cfg, canvas, profileNow, host) {
   // needs the module's ring (2026-11-05).
   const canSave = can && p.saveRecord(profileNow()) !== null;
   const bar = document.createElement("div");
+  bar.className = "key-hint";
   Object.assign(bar.style, { font: "12px monospace", color: "#ccc", textAlign: "center", padding: "6px" });
   canvas.after(bar);
   const canView = p.view("");
@@ -2563,6 +2577,7 @@ function shell(p, cfg, canvas, profileNow, host) {
   const loadKeys = keySpan(slots.map((n) => `load-${n}`));
   const muteKeys = keySpan(["pulse1", "pulse2", "triangle", "noise", "dmc"].map((c) => `mute-${c}`));
   const gameKeys = takenKeys();
+  const fullKey = keySpan(["fullscreen"]);
   const help = () =>
     (gameKeys.length ? `${gameKeys.join(", ")}, ` : "") +
     (!can
@@ -2571,6 +2586,7 @@ function shell(p, cfg, canvas, profileNow, host) {
         ? "Console only: no saves or rewind, F8 scale"
         : `${canSave ? [saveKeys && `${saveKeys} save`, loadKeys && `${loadKeys} load`].filter(Boolean).map((x) => `${x}, `).join("") : ""}hold Backspace to rewind, F8 scale${settings.quick_buttons && canSave ? ", RB quick save, LB quick load" : ""}`) +
     (canView ? `, F9 widescreen, F10 dim flashes${muteKeys ? `, ${muteKeys} mute a channel` : ""}` : "") +
+    (fullKey ? `, ${fullKey} full screen` : "") +
     ", F2 pause, F3 one frame, F4 slow motion" +
     (p.hasSettings() ? ", Esc settings" : "");
   // The hint, for the checks.
@@ -2608,8 +2624,21 @@ function shell(p, cfg, canvas, profileNow, host) {
     halted = !!m.on;
     say(halted ? "Paused" : "Playing");
   });
+  // Full screen (the standard Fullscreen API). In the public page's frame
+  // (a frame of this page's own site) the frame itself is what fills the
+  // screen, asked of the page that holds it: a press in here and a click on
+  // that page's button both count there as the person's own act, which a
+  // browser wants before it grants full screen. Opened alone, or in a frame
+  // of another site, this page's own document is asked, and such a frame
+  // needs allow="fullscreen".
+  const fullEl = window.frameElement ?? document.documentElement;
+  const fullDoc = fullEl.ownerDocument;
+  const isFull = () => fullDoc.fullscreenElement === fullEl;
+  let leftFullAt = -Infinity;
   const show = () => {
-    bar.textContent = note && performance.now() < noteUntil ? note : help();
+    // In full screen the line is laid over the picture's foot, so it holds
+    // what was just said and nothing else.
+    bar.textContent = note && performance.now() < noteUntil ? note : isFull() ? "" : help();
   };
   const frameOf = (bytes) => Number(new DataView(bytes.buffer, bytes.byteOffset).getBigUint64(8, true));
   const time = (f) => {
@@ -2629,12 +2658,52 @@ function shell(p, cfg, canvas, profileNow, host) {
     const [w, h] = [Math.round((cfg.window[0] * canvas.width) / (canvas.gpScale ?? 1) / cfg.visible[2]), cfg.window[1]];
     let k = scale;
     if (scale === "fit") k = Math.min((innerWidth - 16) / w, (innerHeight - 40) / h);
+    // Full screen: as large as the screen takes, whatever F8 is at, with no
+    // room kept for the line under the picture.
+    if (isFull()) k = Math.min(innerWidth / w, innerHeight / h);
     canvas.style.width = `${Math.floor(w * k)}px`;
     canvas.style.height = `${Math.floor(h * k)}px`;
   };
   addEventListener("resize", applyScale);
   canvas.addEventListener("gp-resize", applyScale);
   applyScale();
+  const fullName = fullKey ? `${fullKey} or Esc` : "Esc";
+  const toggleFull = () => {
+    if (isFull()) {
+      fullDoc.exitFullscreen().catch(() => {});
+      return;
+    }
+    if (typeof fullEl.requestFullscreen !== "function" || fullDoc.fullscreenEnabled === false) {
+      say("Full screen isn't available here: this browser, or the page this game is framed in, doesn't allow it");
+      return;
+    }
+    Promise.resolve(fullEl.requestFullscreen({ navigationUI: "hide" })).catch((e) => say(`Full screen was refused: ${e?.message ?? e}`));
+  };
+  // The page's `full` class centres the picture on black (preview.css).
+  const fullChanged = () => {
+    const on = isFull();
+    // Something else on the holding page changed: nothing of this game's.
+    if (on === document.documentElement.classList.contains("full")) return;
+    if (!on) leftFullAt = performance.now();
+    document.documentElement.classList.toggle("full", on);
+    applyScale();
+    // The keys stay the game's.
+    window.focus();
+    say(on ? `Full screen: ${fullName} leaves it` : "Left full screen");
+  };
+  fullDoc.addEventListener("fullscreenchange", fullChanged);
+  fullScreen = {
+    toggle: toggleFull,
+    // An Esc pressed in full screen, or just after it ended (the page is
+    // told of the end a moment after it), left it.
+    escaped: () => isFull() || document.documentElement.classList.contains("full") || performance.now() - leftFullAt < 300,
+  };
+  // The page that embeds this has a Full screen button ({gp: "fullscreen"},
+  // of its own origin only), as its Settings button has its message.
+  addEventListener("message", (e) => {
+    if (e.origin === location.origin && e.data && e.data.gp === "fullscreen") toggleFull();
+  });
+  t.fullScreen = isFull;
   show();
   // The slot the quick save buttons use: the last one saved or loaded.
   let lastSlot = 1;
