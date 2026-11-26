@@ -103,7 +103,10 @@ export function whatIsThis({ frame, installing }) {
     panel.replaceChildren(h, ...ps, ...extra, done);
   };
   const hint = () =>
-    show("What is this?", ["The game is paused. Click or tap something in the game's picture: a character, an enemy, a number, the stage."]);
+    show("What is this?", [
+      "A game built with Game Printer. You need your own ROM to play it.",
+      "It is paused now. Click or tap anything in its picture to ask what it is.",
+    ]);
 
   function start() {
     if (on || !gp()) return;
