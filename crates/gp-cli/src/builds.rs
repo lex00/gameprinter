@@ -24,6 +24,11 @@
 //! files older than [`CACHE_AGE`] go instead, the folder kept: `gp loop
 //! clean` clears them, and gp serve's runner every hour. A cleared score
 //! is only scored again.
+//!
+//! Each gp binary makes its own module kit in work/module-kit, so every
+//! worker's dev build of gp left one of 63 MB: 21 GB of them on 2026-11-25
+//! (trouble-the-home-s-disk-has-gb-free-under-gb-gp-7e400a). Those no gp
+//! used in a day go the same way ([`idle_module_kits`]).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -233,13 +238,57 @@ fn remove_old_cache(dir: &Path) -> u64 {
 
 /// gp serve runner's hourly sweep: every work/regenerate folder still in
 /// use, the home's and the gate's home's, loses its cache files older
-/// than [`CACHE_AGE`]. The bytes freed.
+/// than [`CACHE_AGE`], and the module kits no gp used in a day go
+/// ([`idle_module_kits`]). The bytes freed.
 pub(crate) fn clear_old_caches(home: &Path, gate_cache: Option<&Path>) -> u64 {
-    regenerate_roots(home, gate_cache)
+    let caches: u64 = regenerate_roots(home, gate_cache)
         .iter()
         .flat_map(|r| regenerate_folders(r).1)
         .map(|d| remove_old_cache(&d))
-        .sum()
+        .sum();
+    caches
+        + idle_module_kits(home)
+            .iter()
+            .map(|k| remove(k))
+            .sum::<u64>()
+}
+
+/// A module kit (crate::module::own_kit) no gp has used this long belongs
+/// to a gp no longer run.
+const KIT_IDLE: Duration = CACHE_AGE;
+
+/// The module kits of work/module-kit no gp has used in [`KIT_IDLE`]. Each
+/// gp binary makes its own (it is named by the binary's hash), so every
+/// worker's dev build of gp made one of 63 MB and none was ever removed: on
+/// 2026-11-25 they were 21 GB of 330 kits, with the disk under 20 GB free.
+/// A kit's Cargo.lock is touched each time a gp uses it; a kit with none
+/// (a `.tmpPID` one a stopped gp left half made) goes by its folder's time.
+/// The running gp's own kit is always kept; a gp whose kit went makes it
+/// again.
+pub(crate) fn idle_module_kits(home: &Path) -> Vec<PathBuf> {
+    let Some(before) = SystemTime::now().checked_sub(KIT_IDLE) else {
+        return Vec::new();
+    };
+    let own = crate::module::own_kit_dir(home).ok();
+    let used = |p: &Path| {
+        let lock = p.join("Cargo.lock");
+        let m = if lock.is_file() {
+            fs::metadata(&lock)
+        } else {
+            fs::metadata(p)
+        };
+        m.and_then(|m| m.modified()).ok()
+    };
+    let mut out: Vec<PathBuf> = fs::read_dir(home.join("work").join("module-kit"))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.is_dir() && own.as_deref() != Some(p.as_path()))
+        .filter(|p| used(p).is_some_and(|t| t < before))
+        .collect();
+    out.sort();
+    out
 }
 
 /// The tool gate's build folders under its home (crate::gate::gate_home):
@@ -392,7 +441,8 @@ fn prune_crate(krate: &Path, now: SystemTime) -> u64 {
 }
 
 /// What gp loop clean can clear, each with its bytes, biggest first:
-/// ended workers' builds, idle regenerate folders and the cache files
+/// ended workers' builds, module kits no gp used in a day, idle
+/// regenerate folders and the cache files
 /// older than a day of those in use (the home's, and with `gate_cache`
 /// the gate's home's), and with `gate_builds_of` (the gate's home) the
 /// gate's build folders.
@@ -404,6 +454,7 @@ pub(crate) fn clearable(
 ) -> Vec<Clear> {
     let mut out: Vec<Clear> = ended_loop_builds(home, live)
         .into_iter()
+        .chain(idle_module_kits(home))
         .map(Clear::folder)
         .collect();
     for root in regenerate_roots(home, gate_cache) {
@@ -514,7 +565,7 @@ pub(crate) fn disk_line(home: &Path) -> Option<Result<String, String>> {
         .map(|c| c.line())
         .collect();
     Some(Err(format!(
-        "The home's disk has {} free, under {}. gp loop clean clears ended workers' builds, old regenerate folders and score cache files older than a day (--gate also the gate's builds){}",
+        "The home's disk has {} free, under {}. gp loop clean clears ended workers' builds, old regenerate folders, and module kits and score cache files older than a day (--gate also the gate's builds){}",
         gb(free),
         gb(LOW_DISK),
         if top.is_empty() {
@@ -786,6 +837,54 @@ mod tests {
         assert_eq!(clear_old_caches(&home, Some(&g)), 9);
         assert_eq!(clear_old_caches(&home, Some(&g)), 0);
         assert!(gate_run.join("new.json").exists());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn module_kits_no_gp_used_in_a_day_are_cleared() {
+        if std::env::var_os("GP_TARGET_DIR").is_some_and(|v| !v.is_empty()) {
+            return;
+        }
+        let root = tmp("kits");
+        let home = root.join("home");
+        let kits = home.join("work").join("module-kit");
+        let day = Duration::from_secs(25 * 60 * 60);
+        let new = Duration::from_secs(60);
+        // An old gp's kit, last used two days ago.
+        file_aged(&kits.join("0000old").join("Cargo.lock"), 30, day);
+        file_aged(&kits.join("0000old").join("src").join("lib.rs"), 70, day);
+        // A kit used a minute ago, though made long ago.
+        file_aged(&kits.join("0000new").join("Cargo.lock"), 5, new);
+        file_aged(&kits.join("0000new").join("src").join("lib.rs"), 9, day);
+        // The running gp's own kit, its time old: it is kept anyway.
+        let own = crate::module::own_kit_dir(&home).unwrap();
+        file_aged(&own.join("Cargo.lock"), 4, day);
+        // A half-made kit a stopped gp left, with no Cargo.lock.
+        let half = kits.join("0000new.tmp123");
+        file_aged(&half.join("src").join("lib.rs"), 8, day);
+        fs::File::open(&half)
+            .unwrap()
+            .set_modified(SystemTime::now() - day)
+            .unwrap();
+        assert_eq!(
+            idle_module_kits(&home),
+            vec![kits.join("0000new.tmp123"), kits.join("0000old")]
+        );
+        let none = BTreeSet::new();
+        let list = clearable(&home, &none, None, None);
+        assert_eq!(
+            list,
+            vec![
+                Clear::of(kits.join("0000old"), 100),
+                Clear::of(kits.join("0000new.tmp123"), 8),
+            ]
+        );
+        assert_eq!(clear_old_caches(&home, None), 108);
+        assert!(!kits.join("0000old").exists());
+        assert!(!half.exists());
+        assert!(kits.join("0000new").join("src").join("lib.rs").exists());
+        assert!(own.join("Cargo.lock").exists());
+        assert!(idle_module_kits(&home).is_empty());
         let _ = fs::remove_dir_all(&root);
     }
 }

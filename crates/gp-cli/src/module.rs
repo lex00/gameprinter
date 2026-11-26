@@ -626,11 +626,23 @@ fn own_exe_key() -> Result<String> {
     Ok(KEY.get_or_init(|| k).clone())
 }
 
+/// Where the running gp's module kit is: `home/work/module-kit/<gp's hash>`.
+pub(crate) fn own_kit_dir(home: &Path) -> Result<PathBuf> {
+    Ok(home.join("work").join("module-kit").join(own_exe_key()?))
+}
+
 /// The running gp's module kit, made once (`gp game kit`) into
-/// `home/work/module-kit/<gp's hash>` and reused after.
+/// [`own_kit_dir`] and reused after. Each use touches its Cargo.lock (its
+/// time only: tree_hash reads the bytes), so gp loop clean keeps a kit in
+/// use and clears one no gp used in a day (crate::builds::idle_module_kits).
 pub(crate) fn own_kit(home: &Path) -> Result<PathBuf> {
-    let dir = home.join("work").join("module-kit").join(own_exe_key()?);
-    if dir.join("Cargo.lock").is_file() {
+    let dir = own_kit_dir(home)?;
+    let lock = dir.join("Cargo.lock");
+    if lock.is_file() {
+        let _ = fs::File::options()
+            .write(true)
+            .open(&lock)
+            .and_then(|f| f.set_modified(std::time::SystemTime::now()));
         return Ok(dir);
     }
     let tmp = dir.with_extension(format!("tmp{}", std::process::id()));
