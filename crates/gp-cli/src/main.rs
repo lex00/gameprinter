@@ -49,6 +49,7 @@ mod cycles;
 mod cycles_z80;
 mod dataset;
 mod dataset_tables;
+mod deep_thread;
 mod derive;
 mod diagnose;
 mod docs_shell;

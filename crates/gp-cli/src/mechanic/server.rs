@@ -599,7 +599,7 @@ pub(crate) fn start(paths: &Paths, a: &Start) -> Result<Outcome> {
                 let s = server.clone();
                 let b = busy.clone();
                 b.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                std::thread::spawn(move || {
+                crate::deep_thread::spawn(move || {
                     let _ = serve_one(&s, &conn);
                     drop(conn);
                     b.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
@@ -1397,7 +1397,7 @@ fn handle(s: &Server, req: &Request) -> Result<Response> {
             // reads.
             if let Some(w) = v["warm"].as_u64() {
                 let (home, rom, sha) = (home.clone(), s.rom.clone(), path.clone());
-                std::thread::spawn(move || {
+                crate::deep_thread::spawn(move || {
                     let _ = clip_paths::original_at(&home, &rom, &sha, w as usize);
                 });
             }
@@ -2149,7 +2149,7 @@ fn post_clip(s: &Server, v: &Value) -> Result<Response> {
             s.rom.clone(),
             path.to_owned(),
         );
-        std::thread::spawn(move || {
+        crate::deep_thread::spawn(move || {
             let hash =
                 clip_paths::original_at(&home, &rom, &path, start).and_then(|o| o.state_hex());
             match hash {

@@ -109,7 +109,9 @@ fn state(ctx: &Ctx, game: &str, again: bool) -> Result<State, Fail> {
         game.to_owned(),
     );
     let module = ctx.modules.get(game).cloned();
-    std::thread::spawn(move || {
+    // Made on the main thread by gp mechanic start --own-server; here on a
+    // thread with more stack than that (crate::deep_thread).
+    crate::deep_thread::spawn(move || {
         let start = mserver::Start {
             game: &name,
             mechanic: None,

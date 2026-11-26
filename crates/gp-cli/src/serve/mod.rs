@@ -721,7 +721,7 @@ fn serve(listener: TcpListener, ctx: Arc<Ctx>) {
         }
         open.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let (ctx, open) = (ctx.clone(), open.clone());
-        std::thread::spawn(move || {
+        crate::deep_thread::spawn(move || {
             let _ = conn.set_read_timeout(Some(std::time::Duration::from_secs(30)));
             let _ = conn.set_write_timeout(Some(std::time::Duration::from_secs(30)));
             let _ = serve_one(&ctx, &conn);
