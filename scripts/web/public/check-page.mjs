@@ -3384,13 +3384,21 @@ async function arcadePlay(S, { zip }) {
   const after = await gp(() => window.__gp.hashes.length);
   check(after - before > 30, `after a coin and a start it plays on (${after - before} frames)`);
   check((await gp(() => window.__gp.error)) === null, `with no error in the frame: ${await gp(() => window.__gp.error)}`);
-  const lit = await gp(() => {
-    const c = document.getElementById("game");
-    const d = c.getContext("2d").getImageData(0, 0, c.width, c.height).data;
-    const seen = new Set();
-    for (let i = 0; i < d.length; i += 4 * 7) seen.add((d[i] << 16) | (d[i + 1] << 8) | d[i + 2]);
-    return seen.size;
-  });
+  // The most colours seen over a few seconds: one look could land on the
+  // dark screen between the start and the first room, whose moment moves
+  // with how late the held keys reach the game on a busy machine (5
+  // colours seen twice running on 2026-11-26, the game playing on).
+  let lit = 0;
+  for (let i = 0; i < 16 && lit < 8; i++) {
+    if (i) await p.waitForTimeout(500);
+    lit = Math.max(lit, await gp(() => {
+      const c = document.getElementById("game");
+      const d = c.getContext("2d").getImageData(0, 0, c.width, c.height).data;
+      const seen = new Set();
+      for (let i = 0; i < d.length; i += 4 * 7) seen.add((d[i] << 16) | (d[i + 1] << 8) | d[i + 2]);
+      return seen.size;
+    }));
+  }
   check(lit >= 8, `and the board's picture has colours in it (${lit} seen)`);
   // The shots a few seconds into play.
   await p.waitForTimeout(5000);
