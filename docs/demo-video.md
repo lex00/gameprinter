@@ -57,7 +57,7 @@ length = 8
 
 A card's first line is large and the rest small, in the theme's own letters. A line written `{ plain = "..." }` is drawn as typed in a font file (`plain_font`, Menlo unless the plan names one): an address needs its small letters and its slash, which a theme's lettering may not have. With no `ground` in the plan, the frame takes the colour of the letters' own tile.
 
-A shot's `swing` is the seconds a fade or a wipe takes to go from the theme to the original and back. A shot can also carry `[[part.bubble]]` tables (`at`, `for`, `x`, `y`, `text`, `tail`): a few words that pop up over the picture with a blip. One bubble on a shot works; two on one shot fail in ffmpeg and are not fixed yet.
+A shot's `swing` is the seconds a fade or a wipe takes to go from the theme to the original and back. A shot can also carry `[[part.bubble]]` tables (`at`, `for`, `x`, `y`, `text`, `tail`): a few words that pop up over the picture with a blip. `x` and `y` are where the tail points, as fractions of the game's picture; `tail` is `down-left` (the default), `down-right`, `up-left` or `up-right`. A shot's bubbles are drawn into one stream of whole-frame pictures and laid over the video once, since ffmpeg fails when two pictures are laid over a recording one after the other.
 
 ## Text
 

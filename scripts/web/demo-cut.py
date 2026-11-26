@@ -268,6 +268,11 @@ def main():
             graph += f";[g]pad={W}:{H}:(ow-iw)/2:(oh-ih)/2:color={ground_hex}[v0]"
             last = "v0"
             times = []
+            # The bubbles of a shot are one stream of whole-frame pictures,
+            # clear but for the bubbles showing, laid over the video once:
+            # ffmpeg fails when two pictures are laid over a recording one
+            # after the other ("Error while filtering: Invalid argument").
+            shown = []
             for k, bub in enumerate(part.get("bubble", [])):
                 tail = bub.get("tail", "down-left")
                 im, tip = bubble_picture(small, bub["text"], bub.get("width", 620), fill, edge, tail)
@@ -279,15 +284,28 @@ def main():
                 times.append(t0)
                 # It pops: two frames at four fifths of its size, then whole.
                 pop = im.resize((im.width * 4 // 5, im.height * 4 // 5), Image.NEAREST)
-                f_pop, f_whole = os.path.join(work, f"b-{n:02}-{k:02}-pop.png"), os.path.join(work, f"b-{n:02}-{k:02}.png")
-                pop.save(f_pop)
-                im.save(f_whole)
                 grow = 2 / fps
-                inputs += ["-i", f_pop, "-i", f_whole]
-                a = (len([x for x in inputs if x == "-i"]) - 2)
-                graph += f";[{last}][{a}:v]overlay={px + im.width // 10}:{py + im.height // 10}:enable='between(t,{t0},{t0 + grow})'[p{k}]"
-                graph += f";[p{k}][{a + 1}:v]overlay={px}:{py}:enable='between(t,{t0 + grow},{t1})'[q{k}]"
-                last = f"q{k}"
+                shown.append((t0, t0 + grow, pop, (px + im.width // 10, py + im.height // 10)))
+                shown.append((t0 + grow, t1, im, (px, py)))
+            if shown:
+                cuts = sorted({0.0, length} | {min(length, max(0.0, t)) for a, b, _, _ in shown for t in (a, b)})
+                listing = os.path.join(work, f"over-{n:02}.txt")
+                lines = ["ffconcat version 1.0"]
+                for j, (a, b) in enumerate(zip(cuts, cuts[1:])):
+                    over = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+                    for s0, s1, pic, at_xy in shown:
+                        if s0 <= a < s1:
+                            over.alpha_composite(pic, at_xy)
+                    f_over = os.path.join(work, f"over-{n:02}-{j:02}.png")
+                    over.save(f_over)
+                    lines += [f"file '{f_over}'", f"duration {b - a:.6f}"]
+                # The concat reader wants the last picture named again.
+                lines.append(lines[-2])
+                open(listing, "w").write("\n".join(lines) + "\n")
+                inputs += ["-f", "concat", "-safe", "0", "-i", listing]
+                a = len([x for x in inputs if x == "-i"]) - 1
+                graph += f";[{a}:v]fps={fps},format=rgba[ov];[{last}][ov]overlay=0:0:eof_action=pass[q]"
+                last = "q"
             wav = os.path.join(work, f"blips-{n:02}.wav")
             blips(wav, times, length)
             inputs += ["-i", wav]
