@@ -1004,13 +1004,23 @@ async function openClip(n, mechanic, f) {
 
 /** Shows the corpus clip a refine works on (api/screen/work-clip), looping
  * the window's frames [lo, hi] from the clip's start. */
-async function openWorkClip(id, lo, hi, name) {
+async function openWorkClip(id, lo, hi, name, lead = 0) {
   // It loads the model again below, on main's unless a gate card opens it.
   if (!cardOpening) toMainModel();
   const { meta } = await fetchClip(api, apiText, { id }, { away: clipAway });
   if (mode === "clip" && clip) backToClipless();
-  await showClipLog({ key: `work/${id}`, n: null, mechanic: null, work: id, name: name ?? `THE CLIP YOUR AGENT REFINES: ${id.toUpperCase()}`, says: `corpus clip ${id}`, note: meta.name ?? "", start: meta.start, frames: meta.frames, log: meta.log, draws: meta.draws ?? null, drawSites: meta.draw_sites ?? null }, lo);
-  if (clip?.work === id) { clip.loop = [lo, Math.max(lo, hi)]; playClip(true); }
+  // A lead: the clip taken from that many frames before its start, as far
+  // as its play reaches back, so a sound that begins just before the
+  // clip's first frame is heard. Frames then count from the earlier start.
+  const early = Math.max(0, Math.min(meta.start ?? 0, Math.round(Number(lead) || 0)));
+  await showClipLog({ key: `work/${id}`, n: null, mechanic: null, work: id, name: name ?? `THE CLIP YOUR AGENT REFINES: ${id.toUpperCase()}`, says: `corpus clip ${id}`, note: meta.name ?? "", start: (meta.start ?? 0) - early, frames: meta.frames + early, log: meta.log, draws: meta.draws ?? null, drawSites: meta.draw_sites ?? null }, lo);
+  // A window past the clip's end stops at its last frame.
+  if (clip?.work === id) {
+    const last = clip.frames - 1;
+    const from = Math.max(0, Math.min(lo, last));
+    clip.loop = [from, Math.max(from, Math.min(hi, last))];
+    playClip(true);
+  }
 }
 
 // A clip to judge on: a row asking the person may carry the clip that shows
@@ -3538,7 +3548,8 @@ async function main() {
     const lo = Number(asked.get("from") ?? 0) || 0;
     const hi = Number(asked.get("to") ?? lo) || lo;
     try {
-      await openWorkClip(asked.get("work"), lo, hi);
+      // &lead=N: the clip from N frames before its start.
+      await openWorkClip(asked.get("work"), lo, hi, undefined, Number(asked.get("lead") ?? 0) || 0);
       show.by = "person";
       document.body.dataset.work = asked.get("work");
     } catch (e) { fault(`Couldn't open the clip ${asked.get("work")}: ${e.message ?? e}`, 15000); }

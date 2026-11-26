@@ -25,6 +25,38 @@ Both screens are in each picture of the one file, so they can't drift apart. Eve
 
 A recording made in a browser has uneven time stamps: bring each to a steady rate first (`-vf fps=30,settb=AVTB -af aresample=async=1`).
 
+A corpus clip often starts just after the sound of its scene does (a round's tune begins as the round is set up, a few frames before the clip's first). `GP_LEAD=N` before the command takes the clip from N frames before its start, as far back as its play reaches, and FROM and TO then count from there; the link option is `&lead=N`. A TO past the clip's end stops at its last frame.
+
+## Cutting the video
+
+```
+python3 -I scripts/web/demo-cut.py PLAN.toml OUT.mp4
+```
+
+The plan lists the video's parts in order, and the script makes each with ffmpeg and joins them (1920 by 1080, 30 frames a second, unless the plan's `size` and `fps` say otherwise). It needs Pillow.
+
+```toml
+letters = "GAME/themes/NAME/theme/art/font"   # letter-A.png, letter-0.png, letter-x021.png
+title_height = 96
+letter_height = 32
+
+[[part]]
+kind = "card"
+length = 7
+lines = ["A TITLE", "A LINE UNDER IT.", { plain = "example.org/address" }]
+
+[[part]]
+kind = "shot"
+file = "saloon.webm"     # a recording, beside the plan
+show = "theme"           # theme, original, both, fade or wipe
+start = 0
+length = 8
+```
+
+A card's first line is large and the rest small, in the theme's own letters. A line written `{ plain = "..." }` is drawn as typed in a font file (`plain_font`, Menlo unless the plan names one): an address needs its small letters and its slash, which a theme's lettering may not have. With no `ground` in the plan, the frame takes the colour of the letters' own tile.
+
+A shot's `swing` is the seconds a fade or a wipe takes to go from the theme to the original and back. A shot can also carry `[[part.bubble]]` tables (`at`, `for`, `x`, `y`, `text`, `tail`): a few words that pop up over the picture with a blip. One bubble on a shot works; two on one shot fail in ffmpeg and are not fixed yet.
+
 ## Text
 
 A title card, a banner under a stage's name, a line about the original: each is a picture (a PNG drawn with a bitmap font, no smoothing) laid over the video with ffmpeg's `overlay` for a span of time. An ffmpeg built without freetype has no `drawtext`, and pictures keep the letters' edges hard either way.

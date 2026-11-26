@@ -12,6 +12,9 @@
 // FROM TO     the clip's frames to record, from 0 at its start
 // PICTURES    `game` for the game's own pictures, or a theme's id
 //
+// GP_LEAD=N takes the clip from N frames before its start (FROM and TO then
+// count from there), for a tune that begins just before the clip does.
+//
 // It opens the page with ?work=CLIP&from=FROM&to=TO, waits for the clip to
 // be up and for its loop to come round to FROM, and records one pass of it
 // in the page (MediaRecorder on a canvas it draws both screens into, with
@@ -67,6 +70,7 @@ const p = await ctx.newPage();
 const said = [];
 p.on("pageerror", (e) => said.push(String(e).slice(0, 200)));
 const q = new URLSearchParams({ work: clip, from: String(lo), to: String(hi), pictures, view: "side" });
+if (Number(process.env.GP_LEAD) > 0) q.set("lead", String(Number(process.env.GP_LEAD)));
 await p.goto(`${url}?${q}`, { waitUntil: "load" });
 try {
   await p.waitForFunction((id) => document.body.dataset.work === id, clip, { timeout: 180000 });
