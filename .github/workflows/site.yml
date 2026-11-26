@@ -3,7 +3,8 @@ name: site
 on:
   push:
     branches: [main]
-    paths: ["site/**", "CLI.md", "README.md", ".github/workflows/site.yml"]
+    # scripts/web/public/arcade.css is the shared look the site's CSS imports.
+    paths: ["site/**", "CLI.md", "README.md", "scripts/web/public/arcade.css", ".github/workflows/site.yml"]
   workflow_dispatch:
 permissions:
   contents: read

@@ -1,46 +1,30 @@
 ---
-// The site title: the pixel printer and the wordmark, linking home. On a phone
-// a Docs link sits beside it, since Starlight hides the header's right side
-// (where SocialIcons.astro puts Docs) below its md width. From plunge's site.
-import Logo from './Logo.astro';
-
-const base = import.meta.env.BASE_URL.replace(/\/$/, '');
+// The site title: a small pink neon sign (the shared sheet's .sign) that
+// links to the docs home.
 const { siteTitleHref } = Astro.locals.starlightRoute;
 ---
-<a href={siteTitleHref} class="site-title sl-flex">
-	<Logo size={28} />
-	<span translate="no">Game Printer</span>
-</a>
-<a class="gp-docs-phone" href={`${base}/`}>Docs</a>
+<a href={siteTitleHref} class="site-title sign" translate="no">Game Printer</a>
 
 <style>
 	.site-title {
-		align-items: center;
-		gap: var(--sl-nav-gap);
-		font-family: var(--gp-display);
-		font-weight: 600;
-		font-size: 1.1rem;
-		letter-spacing: -0.02em;
-		color: var(--sl-color-white);
-		text-decoration: none;
+		display: block;
+		padding: 0.5rem 0.9rem;
+		border-width: 2px;
+		border-radius: 12px;
+		font-size: 1.125rem;
+		line-height: 1;
+		letter-spacing: 0.08em;
 		white-space: nowrap;
-		min-width: 0;
-	}
-	.gp-docs-phone {
-		align-self: center;
-		margin-left: 0.75rem;
-		padding: 0.2rem 0.65rem;
-		font-size: var(--sl-text-xs);
-		font-weight: 600;
-		color: var(--sl-color-white);
+		overflow-wrap: normal;
 		text-decoration: none;
-		border: 1px solid var(--gp-rule);
-		border-radius: 999px;
-		white-space: nowrap;
+		text-shadow: 0 0 6px #fff, 0 0 14px var(--pink);
+		box-shadow: 0 0 10px var(--pink), inset 0 0 8px color-mix(in srgb, var(--pink) 40%, transparent);
+		animation: none;
 	}
 	@media (min-width: 50rem) {
-		.gp-docs-phone {
-			display: none;
+		.site-title {
+			padding: 0.6rem 1.1rem;
+			font-size: 1.375rem;
 		}
 	}
 </style>

@@ -1,152 +1,227 @@
 /*
- * Game Printer's look, on the plunge site's structure: Geist for reading and
- * headings, Geist Mono for anything a terminal would print, ink-black
- * neutrals, and the four process inks of a printer. Magenta is the one accent
- * (links, buttons, the current highlight); cyan does fine details (hairlines,
- * hover underlines); yellow and ink only appear together with them in the
- * pixel strip that marks headings.
+ * The docs in the arcade look of the games list and the player page: a dark
+ * violet room, neon tube buttons and a neon sign for the title.
  *
- * scripts/check-contrast.mjs reads the two token blocks below and fails the
- * build when a pair drops under WCAG AA: 4.5:1 for text, 3:1 for hairlines and
- * other UI. Change a colour, run `npm run check:contrast`.
+ * The colours, the fonts, the sizes and the classes (.tube, .sign, .card,
+ * .label) come from the shared sheet imported below, the same file the player
+ * page serves, so a change to a token there changes the docs at their next
+ * build. This file maps Starlight's own properties onto those tokens and
+ * restyles what the properties cannot reach. System fonts only, no requests.
  *
- * Starlight's dark theme lives on :root and its light theme on
- * :root[data-theme='light'], so both palettes are set here as tokens.
+ * Docs are for reading: body text is 18 px in a quiet lilac with no glow.
+ * Glow is kept to the sign, headings, buttons and card outlines.
+ *
+ * There is one look. Starlight's dark theme lives on :root, and
+ * src/components/ThemeProvider.astro always sets it; the theme picker
+ * (ThemeSelect.astro) draws nothing.
+ *
+ * scripts/check-contrast.mjs reads the token block below, with the shared
+ * sheet's tokens, and fails the build when a pair drops under WCAG AA: 4.5:1
+ * for text, 3:1 for outlines. Change a colour, run `npm run check:contrast`.
  */
-@import url('https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap');
+@import '../../../scripts/web/public/arcade.css';
 
 :root {
-	--gp-display: 'Geist', 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
-	--sl-font: 'Geist', 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
-	--sl-font-mono: 'Geist Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+	color-scheme: dark;
 
-	/* dark: ink neutrals, magenta accent, cyan details */
-	--sl-color-white: #f4f5f8;
-	--sl-color-gray-1: #dfe2ea;
-	--sl-color-gray-2: #bcc2cf;
-	--sl-color-gray-3: #949cad;
-	--sl-color-gray-4: #5d6576;
-	--sl-color-gray-5: #272c39;
-	--sl-color-gray-6: #181c27;
-	--sl-color-black: #0d0f14;
-	--sl-color-accent-low: #3a1428;
-	--sl-color-accent: #ff6fb1;
-	--sl-color-accent-high: #ffd0e6;
+	--gp-display: var(--display);
+	--sl-font: var(--text);
+	--sl-font-mono: var(--mono);
 
-	--gp-accent: #ff6fb1;   /* links, buttons, the one highlight */
-	--gp-cyan: #3fc6dc;     /* fine details: hairlines, hover underlines */
-	--gp-magenta: #ff6fb1;
-	--gp-yellow: #f2c94c;
-	--gp-key: #8e96a8;      /* the K of CMYK in the strip, readable on ink */
-	--gp-warn: #f5a25d;     /* refusals, cautions */
-	--gp-panel: #131620;
-	--gp-rule: #272c39;
+	/* Starlight's neutrals, from the room's ground up to white. */
+	--sl-color-white: var(--ink);
+	--sl-color-gray-1: #efeaff;
+	--sl-color-gray-2: var(--muted);
+	--sl-color-gray-3: #b9aee0;
+	--sl-color-gray-4: #7f70b8;
+	--sl-color-gray-5: #3b2a7a;
+	--sl-color-gray-6: var(--card);
+	--sl-color-black: var(--bg);
+	--sl-color-accent-low: #3a1250;
+	--sl-color-accent: var(--pink);
+	--sl-color-accent-high: var(--cyan);
+
+	--sl-color-bg-nav: #0c0626;
+	--sl-color-bg-sidebar: #0c0626;
+
+	--gp-panel: var(--card);
+	--gp-rule: #3b2a7a;
+	--gp-chip: #1d1247;
 
 	/* the logo */
-	--gp-paper: #f4f5f8;
-	--gp-body: #8e96a8;
-	--gp-ink: #0d0f14;
+	--gp-paper: #ffffff;
+	--gp-body: var(--violet);
+	--gp-ink: var(--bg);
+
+	/* Nothing on the site is set smaller than 16 px. */
+	--sl-text-2xs: 1rem;
+	--sl-text-xs: 1rem;
+	--sl-text-sm: 1rem;
+	--sl-text-base: 1.0625rem;
+	--sl-text-code: 1rem;
+	--sl-text-code-sm: 1rem;
+	--sl-nav-height: 4.5rem;
+	--sl-content-width: 46rem;
+	--sl-sidebar-width: 20rem;
+}
+@media (min-width: 50em) {
+	:root {
+		--sl-nav-height: 5rem;
+	}
 }
 
-:root[data-theme='light'] {
-	--sl-color-white: #11131a;
-	--sl-color-gray-1: #232733;
-	--sl-color-gray-2: #3a4050;
-	--sl-color-gray-3: #5b6272;
-	--sl-color-gray-4: #9aa0ad;
-	--sl-color-gray-5: #dcdfe7;
-	--sl-color-gray-6: #eeeff4;
-	--sl-color-gray-7: #f6f6f9;
-	--sl-color-black: #ffffff;
-	--sl-color-accent-low: #fbe3ef;
-	--sl-color-accent: #b0256d;
-	--sl-color-accent-high: #7a1149;
-
-	--gp-accent: #b0256d;
-	--gp-cyan: #0a7187;
-	--gp-magenta: #c42f7c;
-	--gp-yellow: #b38600;
-	--gp-key: #11131a;
-	--gp-warn: #a8431a;
-	--gp-panel: #f6f6f9;
-	--gp-rule: #dcdfe7;
-
-	--gp-paper: #e3e6ee;
-	--gp-body: #646b7c;
-	--gp-ink: #11131a;
+/* The room: the ground with a pink and a cyan light in two corners. */
+body {
+	background:
+		radial-gradient(circle at 8% 15%, color-mix(in srgb, var(--pink) 15%, transparent), transparent 38%),
+		radial-gradient(circle at 92% 85%, color-mix(in srgb, var(--cyan) 13%, transparent), transparent 38%),
+		var(--bg);
+	background-attachment: fixed;
+}
+:focus-visible {
+	outline: 4px solid #fff;
+	outline-offset: 3px;
 }
 
-/*
- * The print strip: four pixels in cyan, magenta, yellow and key, like a
- * printer's test pattern. It marks each section heading and stands in for a
- * horizontal rule. Bullets are a single printed pixel.
- */
-:root {
-	--gp-strip: linear-gradient(
-		90deg,
-		var(--gp-cyan) 0 8px,
-		transparent 8px 10px,
-		var(--gp-magenta) 10px 18px,
-		transparent 18px 20px,
-		var(--gp-yellow) 20px 28px,
-		transparent 28px 30px,
-		var(--gp-key) 30px 38px
-	);
+/* The header: a hairline of violet under it; the sign's glow is not cut off. */
+header.header {
+	border-bottom: 2px solid var(--gp-rule);
+}
+.header .title-wrapper {
+	overflow: visible;
+}
+.header .social-icons::after {
+	display: none;
+}
+.header .social-icons a:not(.tube) {
+	color: var(--muted);
+}
+.header .social-icons a:not(.tube):hover {
+	color: var(--cyan);
 }
 
-/* Headings: Geist, semibold, tracked in a little. */
-.sl-markdown-content :is(h1, h2, h3),
+/* A smaller tube, for the header and for a page's own tools. */
+.tube.small {
+	min-height: 44px;
+	padding: 4px 18px;
+	border-width: 2px;
+	font-size: 1rem;
+	white-space: nowrap;
+}
+
+/* The search button: a quiet violet tube that lights cyan. */
+site-search > button[data-open-modal] {
+	color: var(--muted);
+}
+@media (min-width: 50rem) {
+	site-search > button[data-open-modal] {
+		min-height: 44px;
+		border: 2px solid color-mix(in srgb, var(--violet) 70%, var(--bg));
+		border-radius: 999px;
+		background: color-mix(in srgb, var(--bg) 60%, transparent);
+		padding-inline: 1rem;
+	}
+	site-search > button[data-open-modal]:hover {
+		border-color: var(--cyan);
+		color: var(--ink);
+	}
+}
+site-search dialog {
+	border: 2px solid var(--cyan);
+	background: var(--card);
+	box-shadow: 0 0 18px color-mix(in srgb, var(--cyan) 55%, transparent);
+}
+@media (min-width: 50rem) {
+	site-search dialog {
+		border-radius: 22px;
+	}
+}
+/* Search results at full size: a result's excerpt is 16 px. */
+#starlight__search {
+	--pagefind-ui-scale: 1;
+}
+
+/* The phone's menu button: a round violet tube. */
+button.sl-menu-button {
+	border: 2px solid var(--violet);
+	background: var(--card);
+	color: var(--ink);
+	box-shadow: 0 0 10px color-mix(in srgb, var(--violet) 60%, transparent);
+}
+button.sl-menu-button[aria-expanded='true'] {
+	border-color: var(--pink);
+	background: var(--card);
+	box-shadow: 0 0 10px color-mix(in srgb, var(--pink) 60%, transparent);
+}
+
+/* Headings: the display face. The page's title and the section heads glow. */
+.sl-markdown-content :is(h1, h2, h3, h4):not(.not-content, .not-content *),
 h1#_top {
 	font-family: var(--gp-display);
-	font-weight: 600;
-	letter-spacing: -0.02em;
+	font-weight: 700;
+	color: var(--ink);
 }
 h1#_top {
-	font-size: clamp(1.75rem, 3.5vw, 2.25rem);
+	font-size: clamp(2rem, 4vw, 2.75rem);
+	line-height: 1.1;
+	letter-spacing: 0.05em;
+	text-transform: uppercase;
+	overflow-wrap: anywhere;
+	text-shadow: 0 0 6px #fff, 0 0 20px var(--cyan);
+}
+.sl-markdown-content h2:not(.not-content, .not-content *) {
+	font-size: 1.75rem;
+	letter-spacing: 0.03em;
+	margin-top: 3rem;
+	text-shadow: 0 0 14px var(--pink);
+}
+/* A short pink tube marks each section; it stands in for a rule too. */
+.sl-markdown-content h2:not(.not-content, .not-content *)::before {
+	content: '';
+	display: block;
+	width: 3rem;
+	height: 6px;
+	margin: 0 0 0.9rem;
+	border-radius: 999px;
+	background: var(--pink);
+	box-shadow: 0 0 12px var(--pink);
+}
+.sl-markdown-content hr:not(.not-content, .not-content *) {
+	width: 3rem;
+	height: 6px;
+	margin: 2.5rem auto;
+	border: none;
+	border-radius: 999px;
+	background: var(--violet);
+	box-shadow: 0 0 12px var(--violet);
+}
+.sl-markdown-content h3:not(.not-content, .not-content *) {
+	font-size: 1.35rem;
+	letter-spacing: 0.02em;
+	margin-top: 2.25rem;
+	color: var(--cyan);
+}
+.sl-markdown-content h4:not(.not-content, .not-content *) {
+	font-size: 1.15rem;
+	color: var(--yellow);
 }
 
-/* Reading text: a size down from Starlight's, quieter grey, more air between blocks. */
+/* Reading text: 18 px, open lines, the quiet lilac, no glow. */
 .sl-markdown-content {
-	font-size: 0.9375rem;
+	font-size: 1.125rem;
 	line-height: 1.7;
 	color: var(--sl-color-gray-2);
 }
 .sl-markdown-content :is(strong, b):not(.not-content, .not-content *) {
-	color: var(--sl-color-white);
-	font-weight: 600;
-}
-.sl-markdown-content :is(h2, h3, h4):not(.not-content, .not-content *) {
-	color: var(--sl-color-white);
-}
-.sl-markdown-content h2:not(.not-content, .not-content *) {
-	font-size: 1.3rem;
-	margin-top: 2.75rem;
-}
-.sl-markdown-content h2:not(.not-content, .not-content *)::before {
-	content: '';
-	display: block;
-	width: 38px;
-	height: 8px;
-	margin: 0 0 0.85rem;
-	background: var(--gp-strip);
-}
-.sl-markdown-content hr:not(.not-content, .not-content *) {
-	width: 38px;
-	height: 8px;
-	margin: 2.5rem auto;
-	border: none;
-	background: var(--gp-strip);
-}
-.sl-markdown-content h3:not(.not-content, .not-content *) {
-	font-size: 1.05rem;
-	margin-top: 2rem;
+	color: var(--ink);
+	font-weight: 700;
 }
 
-/* Bullets are a printed pixel in the accent. Nested lists keep a plain marker. */
+/* Bullets are a small pink lamp. Nested lists keep a plain marker. */
 .sl-markdown-content > ul:not(.not-content, .not-content *),
 .sl-markdown-content :not(li) > ul:not(.not-content, .not-content *, .starlight-aside *) {
 	list-style: none;
-	padding-left: 1.4rem;
+	padding-left: 1.5rem;
 }
 .sl-markdown-content > ul:not(.not-content, .not-content *) > li,
 .sl-markdown-content :not(li) > ul:not(.not-content, .not-content *, .starlight-aside *) > li {
@@ -156,96 +231,92 @@ h1#_top {
 .sl-markdown-content :not(li) > ul:not(.not-content, .not-content *, .starlight-aside *) > li::before {
 	content: '';
 	position: absolute;
-	left: -1.15rem;
-	top: calc((1lh - 6px) / 2);
-	width: 6px;
-	height: 6px;
-	background: var(--gp-accent);
+	left: -1.2rem;
+	top: calc((1lh - 8px) / 2);
+	width: 8px;
+	height: 8px;
+	border-radius: 50%;
+	background: var(--pink);
 }
 
-/* Links: the accent, a fine underline that turns cyan on hover. */
+/* Links: cyan and underlined, white on hover. */
 .sl-markdown-content a:not(.not-content, .not-content *, :is(h1, h2, h3, h4) a) {
-	color: var(--gp-accent);
+	color: var(--cyan);
 	text-decoration-line: underline;
-	text-decoration-thickness: 1px;
+	text-decoration-thickness: 2px;
 	text-underline-offset: 0.2em;
-	text-decoration-color: color-mix(in srgb, var(--gp-accent) 35%, transparent);
+	text-decoration-color: color-mix(in srgb, var(--cyan) 50%, transparent);
 }
-.sl-markdown-content a:not(.not-content, .not-content *):hover {
-	text-decoration-color: var(--gp-cyan);
+.sl-markdown-content a:not(.not-content, .not-content *, :is(h1, h2, h3, h4) a):hover {
+	color: var(--ink);
+	text-decoration-color: var(--cyan);
 }
 
-/* Tables: smaller type, a tracked caps header over a cyan hairline, hairline rows. */
+/* Tables: a card outlined in violet, a cyan head, hairline rows. A wide
+   table scrolls inside its card. */
 .sl-markdown-content table:not(.not-content, .not-content *) {
-	border-collapse: collapse;
-	font-size: 0.85rem;
+	display: block;
+	width: fit-content;
+	max-width: 100%;
+	overflow-x: auto;
+	border-collapse: separate;
+	border-spacing: 0;
+	border: 2px solid var(--violet);
+	border-radius: 16px;
+	background: var(--card);
+	box-shadow: 0 0 14px color-mix(in srgb, var(--violet) 45%, transparent);
+	font-size: 1rem;
 	line-height: 1.55;
 }
 .sl-markdown-content :is(th, td):not(.not-content, .not-content *) {
 	border: none;
 	border-bottom: 1px solid var(--gp-rule);
-	padding: 0.6rem 0.9rem 0.6rem 0;
+	padding: 0.7rem 1rem;
 	vertical-align: top;
 }
+.sl-markdown-content tbody tr:last-child td:not(.not-content, .not-content *) {
+	border-bottom: none;
+}
 .sl-markdown-content th:not(.not-content, .not-content *) {
-	font-size: 0.68rem;
-	font-weight: 600;
+	font-family: var(--gp-display);
+	font-size: 1rem;
+	font-weight: 700;
 	letter-spacing: 0.1em;
 	text-transform: uppercase;
-	color: var(--sl-color-gray-3);
+	text-align: start;
+	color: var(--cyan);
 	background: none;
-	border-bottom: 1px solid var(--gp-cyan);
+	border-bottom: 2px solid var(--violet);
 }
 .sl-markdown-content td:first-child:not(.not-content, .not-content *) {
-	color: var(--sl-color-white);
+	color: var(--ink);
+}
+.sl-markdown-content tbody tr:nth-child(2n) td:not(.not-content, .not-content *) {
+	background: none;
 }
 .sl-markdown-content tbody tr:hover td:not(.not-content, .not-content *) {
-	background: color-mix(in srgb, var(--gp-cyan) 5%, transparent);
+	background: color-mix(in srgb, var(--cyan) 7%, transparent);
 }
 
-/* Inline code: a quiet grey chip. */
+/* Inline code: a key cap's ground. */
 .sl-markdown-content :not(pre):not(.not-content, .not-content *) > code {
-	background: var(--sl-color-gray-6);
+	background: var(--gp-chip);
 	color: var(--sl-color-gray-1);
 	border: 1px solid var(--gp-rule);
-	border-radius: 0.3rem;
+	border-radius: 0.35rem;
 	padding: 0.05em 0.35em;
+	font-size: max(1rem, 0.92em);
 }
 
-/* The home hero: a large, tight claim, a quiet tagline and the big printer. */
-.hero .gp-hero-logo {
-	width: clamp(8rem, 22vw, 15rem);
-	height: auto;
-	margin-inline: auto;
-	padding: 1.25rem;
-	background: var(--gp-panel);
-	border-radius: 1rem;
-	box-shadow: 0 0 0 1px var(--gp-rule), 0 0 0 6px var(--sl-color-black), 0 0 0 7px var(--gp-cyan);
+/* Code blocks: the card's ground, a violet outline, round corners. */
+.expressive-code .frame {
+	--ec-brdCol: color-mix(in srgb, var(--violet) 60%, var(--bg));
+	--ec-brdRad: 14px;
+	--ec-codeFontSize: 1rem;
+	--ec-codeLineHt: 1.6;
 }
-.hero {
-	padding-block: clamp(2.5rem, 8vw, 5rem) 1rem;
-}
-.hero h1 {
-	font-family: var(--gp-display);
-	font-weight: 600;
-	font-size: clamp(2.4rem, 6vw, 4rem);
-	line-height: 1.05;
-	letter-spacing: -0.035em;
-	text-wrap: balance;
-	color: var(--sl-color-white);
-}
-.hero .tagline {
-	font-size: clamp(1.05rem, 2vw, 1.3rem);
-	color: var(--sl-color-gray-2);
-	max-width: 42rem;
-	text-wrap: pretty;
-}
-
-/* Splash sections: generous air between them, headings set large. */
-[data-has-hero] .sl-markdown-content h2:not(.not-content *) {
-	font-size: clamp(1.5rem, 3vw, 2rem);
-	margin-top: 4rem;
-	border: none;
+.sl-markdown-content blockquote:not(.not-content, .not-content *) {
+	border-inline-start: 4px solid var(--violet);
 }
 
 /* Long identifiers wrap rather than widen the page. */
@@ -254,8 +325,9 @@ h1#_top {
 }
 
 /* Command names stay whole in table cells. */
-.sl-markdown-content td > code {
+.sl-markdown-content td > code:not(.not-content, .not-content *) {
 	white-space: nowrap;
+	font-size: 1rem;
 }
 
 /* Code shows exactly what was typed: no ligatures turning -> into arrows. */
@@ -264,55 +336,118 @@ code, pre, kbd, samp {
 	font-feature-settings: 'calt' 0, 'liga' 0;
 }
 
-/* The current page in the sidebar: a quiet tint, not a solid block. */
-.sidebar-content a[aria-current='page'],
-.sidebar-content a[aria-current='page']:hover,
-.sidebar-content a[aria-current='page']:focus {
-	background: var(--sl-color-gray-6);
-	color: var(--sl-color-white);
-	font-weight: 600;
+/* The sidebar: group names as small spaced labels, the current page as a
+   pink tube. */
+.sidebar-pane {
+	border-inline-end: 2px solid var(--gp-rule);
 }
-.sidebar-content a {
-	font-size: var(--sl-text-sm);
+.sidebar-content .top-level a {
+	font-size: 1.0625rem;
+	color: var(--muted);
+	border-radius: 999px;
+	padding-block: 0.45em;
+	padding-inline: 1rem;
 }
-
-/* Each top-level sidebar group's label starts with a cyan pixel. */
+.sidebar-content .top-level a:hover,
+.sidebar-content .top-level a:focus {
+	color: var(--ink);
+	background: color-mix(in srgb, var(--violet) 18%, transparent);
+}
+.sidebar-content .top-level a[aria-current='page'],
+.sidebar-content .top-level a[aria-current='page']:hover,
+.sidebar-content .top-level a[aria-current='page']:focus {
+	background: color-mix(in srgb, var(--pink) 20%, var(--bg));
+	color: var(--ink);
+	font-weight: 700;
+	box-shadow: inset 0 0 0 2px var(--pink), 0 0 12px color-mix(in srgb, var(--pink) 60%, transparent);
+}
+.sidebar-content .top-level > li > details > summary .group-label .large,
 .sidebar-content .top-level > li > details > summary .group-label {
-	display: inline-flex;
-	align-items: center;
-	gap: 0.6rem;
-}
-.sidebar-content .top-level > li > details > summary .group-label::before {
-	content: '';
-	flex: none;
-	width: 6px;
-	height: 6px;
-	margin-left: 2px;
-	background: var(--gp-cyan);
+	font-family: var(--gp-display);
+	font-size: 1rem;
+	font-weight: 700;
+	letter-spacing: 0.07em;
+	text-transform: uppercase;
+	color: var(--cyan);
 }
 
-/* Callouts: a neutral panel with a coloured edge. */
+/* The table of contents: a label over quiet links, the current one cyan. */
+starlight-toc h2,
+mobile-starlight-toc .toggle {
+	font-family: var(--gp-display);
+	letter-spacing: 0.12em;
+	text-transform: uppercase;
+}
+starlight-toc h2 {
+	font-size: 1rem;
+	color: var(--muted);
+}
+starlight-toc a {
+	font-size: 1rem;
+	line-height: 1.4;
+	color: var(--sl-color-gray-3);
+}
+starlight-toc a:hover {
+	color: var(--ink);
+}
+starlight-toc a[aria-current='true'] {
+	color: var(--cyan);
+	font-weight: 700;
+}
+.right-sidebar {
+	border-inline-start: 2px solid var(--gp-rule);
+}
+
+/* Asides: a card outlined in the colour of its kind. */
 .starlight-aside {
-	background: var(--sl-color-gray-6);
-	border-inline-start-color: var(--gp-accent);
-	color: var(--sl-color-gray-1);
+	--c: var(--cyan);
+	border: 2px solid var(--c);
+	border-radius: 16px;
+	padding: 1rem 1.25rem;
+	background: var(--card);
+	color: var(--sl-color-gray-2);
+	box-shadow: 0 0 14px color-mix(in srgb, var(--c) 45%, transparent);
+}
+.starlight-aside--tip {
+	--c: var(--green);
+}
+.starlight-aside--caution {
+	--c: var(--yellow);
+}
+.starlight-aside--danger {
+	--c: var(--red);
 }
 .starlight-aside .starlight-aside__title {
-	color: var(--sl-color-white);
+	font-family: var(--gp-display);
+	font-size: 1.125rem;
+	letter-spacing: 0.1em;
+	text-transform: uppercase;
+	color: var(--c);
 }
 .starlight-aside .starlight-aside__icon {
-	color: var(--gp-accent);
-}
-.starlight-aside--caution,
-.starlight-aside--danger {
-	border-inline-start-color: var(--gp-warn);
-}
-.starlight-aside--caution .starlight-aside__icon,
-.starlight-aside--danger .starlight-aside__icon {
-	color: var(--gp-warn);
+	color: var(--c);
 }
 .starlight-aside a {
-	color: var(--sl-color-accent-high);
+	color: var(--cyan);
+}
+
+/* The next and previous page links: cards that light up. */
+.pagination-links a {
+	border: 2px solid color-mix(in srgb, var(--violet) 70%, var(--bg));
+	border-radius: 18px;
+	background: var(--card);
+	box-shadow: none;
+	color: var(--muted);
+}
+.pagination-links a:hover {
+	border-color: var(--cyan);
+	box-shadow: 0 0 14px color-mix(in srgb, var(--cyan) 55%, transparent);
+}
+.pagination-links .link-title {
+	font-family: var(--gp-display);
+	font-size: 1.35rem;
+	letter-spacing: 0.03em;
+	color: var(--ink);
 }
 
 /* The 404 page: the printer, the news, and the way back. */
@@ -326,28 +461,34 @@ code, pre, kbd, samp {
 .gp-404 p {
 	margin: 0;
 	max-width: 36rem;
+	font-size: 1.125rem;
 	color: var(--sl-color-gray-2);
 }
 .gp-404 .gp-404-title {
 	font-family: var(--gp-display);
 	font-size: clamp(2rem, 5vw, 3rem);
-	font-weight: 600;
-	letter-spacing: -0.02em;
-	color: var(--sl-color-white);
+	font-weight: 700;
+	letter-spacing: 0.05em;
+	text-transform: uppercase;
+	color: var(--ink);
+	text-shadow: 0 0 6px #fff, 0 0 20px var(--pink);
 }
 .gp-404 a {
-	color: var(--sl-color-accent-high);
-	font-weight: 500;
+	color: var(--cyan);
+	font-weight: 600;
 }
 
-/* On a phone a wide table scrolls in its box, so its columns keep readable widths. */
+/* On a phone a table's columns keep readable widths and the card scrolls. */
 @media (max-width: 40rem) {
-	.sl-markdown-content table:not(.not-content, .not-content *) {
-		display: block;
-		overflow-x: auto;
-		font-size: 0.8rem;
-	}
 	.sl-markdown-content :is(th, td):not(.not-content, .not-content *) {
-		min-width: 7.5rem;
+		min-width: 8rem;
+	}
+	.sl-markdown-content h2:not(.not-content, .not-content *) {
+		font-size: 1.5rem;
+	}
+}
+@media (prefers-reduced-motion: reduce) {
+	.sign {
+		animation: none;
 	}
 }

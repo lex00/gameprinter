@@ -1,44 +1,12 @@
 ---
-// Starlight's theme provider with dark as the default (from plunge's site): a reader who never
-// picked a theme gets dark, and "Auto" in the picker still follows the system.
-import { Icon } from '@astrojs/starlight/components';
+// The site has one look, the dark arcade one, so this stands in for
+// Starlight's theme provider: it always sets the dark theme, whatever a
+// reader's system prefers or an earlier visit stored. ThemeSelect.astro draws
+// no picker.
 ---
 
-{/* This is intentionally inlined to avoid FOUC. */}
+{/* Inlined so the theme is set before the page is drawn. */}
 <script is:inline>
-	window.StarlightThemeProvider = (() => {
-		let storedTheme = null;
-		try {
-			storedTheme = localStorage.getItem('starlight-theme');
-		} catch {}
-		const picked = storedTheme || 'dark';
-		const theme =
-			picked === 'auto'
-				? window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark'
-				: picked;
-		document.documentElement.dataset.theme = theme === 'light' ? 'light' : 'dark';
-		return {
-			updatePickers(theme = storedTheme || 'dark') {
-				document.querySelectorAll('starlight-theme-select').forEach((picker) => {
-					const select = picker.querySelector('select');
-					if (select) select.value = theme;
-					/** @type {HTMLTemplateElement | null} */
-					const tmpl = document.querySelector(`#theme-icons`);
-					const newIcon = tmpl && tmpl.content.querySelector('.' + theme);
-					if (newIcon) {
-						const oldIcon = picker.querySelector('svg.label-icon');
-						if (oldIcon) {
-							oldIcon.replaceChildren(...newIcon.cloneNode(true).childNodes);
-						}
-					}
-				});
-			},
-		};
-	})();
+	document.documentElement.dataset.theme = 'dark';
+	window.StarlightThemeProvider = { updatePickers() {} };
 </script>
-
-<template id="theme-icons">
-	<Icon name="sun" class="light" />
-	<Icon name="moon" class="dark" />
-	<Icon name="laptop" class="auto" />
-</template>

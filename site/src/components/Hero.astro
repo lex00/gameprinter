@@ -1,0 +1,62 @@
+---
+// The home page's hero in the arcade look: the title as a large neon sign,
+// the tagline, and the hero's actions as tube buttons. It reads the same
+// `hero` front matter as Starlight's own Hero (title, tagline, actions); an
+// action's colour is taken in turn from the list below.
+const { data } = Astro.locals.starlightRoute.entry;
+const { title = data.title, tagline, actions = [] } = data.hero || {};
+const colours = ['pink', 'cyan', 'yellow', 'green'];
+---
+<div class="gp-hero">
+	<h1 id="_top" data-page-title class="sign" set:html={title} />
+	{tagline && <p class="gp-tagline" set:html={tagline} />}
+	{actions.length > 0 && (
+		<div class="gp-actions">
+			{actions.map(({ link, text, attrs = {} }, i) => (
+				<a class:list={['tube', colours[i % colours.length]]} href={link} {...attrs}>{text}</a>
+			))}
+		</div>
+	)}
+</div>
+
+<style>
+	.gp-hero {
+		display: grid;
+		justify-items: center;
+		gap: 1.5rem;
+		padding-block: clamp(1.5rem, 5vw, 3.5rem) 1rem;
+	}
+	h1.sign {
+		padding: 1.1rem 2rem;
+		font-size: clamp(2rem, 7vw, 4.25rem);
+		text-shadow: 0 0 6px #fff, 0 0 18px var(--pink), 0 0 40px var(--pink);
+	}
+	.gp-tagline {
+		margin: 0;
+		font-family: var(--gp-display);
+		font-size: clamp(1.25rem, 2.5vw, 1.6rem);
+		font-weight: 700;
+		letter-spacing: 0.1em;
+		text-transform: uppercase;
+		text-align: center;
+		color: var(--muted);
+	}
+	.gp-actions {
+		display: flex;
+		flex-wrap: wrap;
+		justify-content: center;
+		gap: 1rem;
+	}
+	.gp-actions .tube {
+		min-width: 14rem;
+	}
+	@media (max-width: 30rem) {
+		h1.sign {
+			padding: 0.9rem 1rem;
+		}
+		.gp-actions {
+			display: grid;
+			width: 100%;
+		}
+	}
+</style>

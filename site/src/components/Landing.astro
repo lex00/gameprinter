@@ -1,14 +1,15 @@
 ---
 // The home page under the hero: the six paths, making your own game first,
-// each saying where it stands.
+// each saying where it stands. Each path is a card outlined in one of the
+// shared sheet's tube colours.
 const base = import.meta.env.BASE_URL.replace(/\/$/, '');
 const ways = [
-	{ title: 'Make your own game', href: `${base}/make/`, text: 'Copy a small starter game and change how it plays. Early: it runs on your own computer for now.' },
-	{ title: 'Play', href: 'https://lex00.github.io/games/', text: 'Play the published games in your browser.' },
-	{ title: 'Themes and levels', href: `${base}/themes/`, text: 'Draw new pictures and sounds for a game, or lay out a new stage. Early: players can\'t pick a new stage yet.' },
-	{ title: 'Host your game or theme', href: `${base}/host-your-own/`, text: 'Put it online on your own free Cloudflare account and share the link. Your AI agent can walk you through it.' },
-	{ title: 'Bring in a game', href: `${base}/bring/`, text: 'Port a game\'s mechanics from a ROM you own. Early: NES games and Tapper\'s arcade board so far.' },
-	{ title: 'Improve a game', href: `${base}/improve/`, text: 'Fix something in how a published game plays, and send the fix back.' },
+	{ colour: 'cyan', title: 'Make your own game', href: `${base}/make/`, text: 'Copy a small starter game and change how it plays. Early: it runs on your own computer for now.' },
+	{ colour: 'pink', title: 'Play', href: 'https://lex00.github.io/games/', text: 'Play the published games in your browser.' },
+	{ colour: 'yellow', title: 'Themes and levels', href: `${base}/themes/`, text: 'Draw new pictures and sounds for a game, or lay out a new stage. Early: players can\'t pick a new stage yet.' },
+	{ colour: 'green', title: 'Host your game or theme', href: `${base}/host-your-own/`, text: 'Put it online on your own free Cloudflare account and share the link. Your AI agent can walk you through it.' },
+	{ colour: 'violet', title: 'Bring in a game', href: `${base}/bring/`, text: 'Port a game\'s mechanics from a ROM you own. Early: NES games and Tapper\'s arcade board so far.' },
+	{ colour: 'red', title: 'Improve a game', href: `${base}/improve/`, text: 'Fix something in how a published game plays, and send the fix back.' },
 ];
 const more = [
 	{ title: 'Start here: install gp', href: `${base}/install/` },
@@ -24,7 +25,7 @@ const more = [
 	<ul class="gp-ways">
 		{ways.map((w) => (
 			<li>
-				<a href={w.href}>
+				<a class:list={['card', w.colour]} href={w.href}>
 					<span class="gp-way-title">{w.title}</span>
 					<span class="gp-way-text">{w.text}</span>
 				</a>
@@ -38,55 +39,70 @@ const more = [
 	.gp-landing {
 		display: grid;
 		gap: 2rem;
-		max-width: 64rem;
+		max-width: 72rem;
 		margin: 0 auto;
-		font-size: var(--sl-text-sm);
-		line-height: 1.55;
+		font-size: 1.125rem;
+		line-height: 1.6;
 	}
 	.gp-intro {
 		max-width: 44rem;
 		margin: 0 auto;
-		font-size: var(--sl-text-base);
 		color: var(--sl-color-gray-2);
+	}
+	.gp-intro a,
+	.gp-status a {
+		color: var(--cyan);
+		font-weight: 600;
+		text-decoration-thickness: 2px;
+		text-underline-offset: 0.2em;
+	}
+	.gp-intro a:hover,
+	.gp-status a:hover {
+		color: var(--ink);
+	}
+	.gp-intro code {
+		padding: 0.05em 0.35em;
+		border: 1px solid var(--gp-rule);
+		border-radius: 0.35rem;
+		background: var(--gp-chip);
+		color: var(--sl-color-gray-1);
+		font-size: max(1rem, 0.92em);
 	}
 	.gp-ways {
 		display: grid;
-		grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
-		gap: 1rem;
-		margin: 0;
+		grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr));
+		gap: 1.5rem;
+		margin: 0.5rem 0;
 		padding: 0;
 		list-style: none;
 	}
 	.gp-ways a {
 		display: grid;
-		gap: 0.5rem;
+		align-content: start;
+		gap: 0.6rem;
 		height: 100%;
-		padding: 1.1rem 1.2rem;
-		background: var(--gp-panel);
-		border: 1px solid var(--gp-rule);
-		border-radius: 0.6rem;
+		padding: 1.25rem 1.4rem;
 		color: var(--sl-color-gray-2);
 		text-decoration: none;
 	}
 	.gp-ways a:hover {
-		border-color: var(--gp-cyan);
+		background: color-mix(in srgb, var(--c) 14%, var(--card));
+		box-shadow: 0 0 26px color-mix(in srgb, var(--c) 80%, transparent);
 	}
 	.gp-way-title {
 		font-family: var(--gp-display);
-		font-weight: 600;
-		font-size: 1.05rem;
-		color: var(--sl-color-white);
+		font-weight: 700;
+		font-size: 1.4rem;
+		line-height: 1.15;
+		letter-spacing: 0.06em;
+		text-transform: uppercase;
+		color: var(--ink);
+		text-shadow: 0 0 14px var(--c);
 	}
 	.gp-status {
 		margin: 0;
 		text-align: center;
+		line-height: 2;
 		color: var(--sl-color-gray-3);
-	}
-	.gp-status a {
-		color: var(--gp-accent);
-		text-decoration-color: color-mix(in srgb, var(--gp-accent) 35%, transparent);
-	}
-	.gp-status a:hover {
-		text-decoration-color: var(--gp-cyan);
 	}
 </style>

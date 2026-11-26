@@ -9,7 +9,7 @@ const prompt: string | undefined = entry.data.prompt;
 	<details class="gp-prompt not-content">
 		<summary>Optional: hand this page to your coding agent</summary>
 		<pre>{prompt}</pre>
-		<button type="button" class="gp-prompt-copy" data-copy={prompt}>Copy prompt</button>
+		<button type="button" class="tube violet quiet small gp-prompt-copy" data-copy={prompt}>Copy prompt</button>
 	</details>
 )}
 
@@ -31,36 +31,26 @@ const prompt: string | undefined = entry.data.prompt;
 <style>
 	.gp-prompt {
 		margin-top: 1rem;
-		padding: 0.6rem 0.9rem;
+		padding: 0.8rem 1.1rem;
 		background: var(--gp-panel);
-		border: 1px solid var(--gp-rule);
-		border-inline-start: 3px solid var(--gp-cyan);
-		border-radius: 0.4rem;
-		font-size: var(--sl-text-sm);
+		border: 2px solid color-mix(in srgb, var(--violet) 70%, var(--bg));
+		border-radius: 16px;
+		font-size: 1rem;
 	}
 	summary {
 		cursor: pointer;
-		font-weight: 500;
+		font-weight: 600;
 		color: var(--sl-color-white);
 	}
 	pre {
 		margin: 0.75rem 0;
 		white-space: pre-wrap;
 		font-family: var(--sl-font-mono);
-		font-size: 0.8rem;
+		font-size: 1rem;
+		line-height: 1.55;
 		color: var(--sl-color-gray-1);
 	}
 	button {
-		font: inherit;
-		font-weight: 500;
-		color: var(--sl-color-white);
-		background: var(--sl-color-gray-6);
-		border: 1px solid var(--gp-rule);
-		border-radius: 0.4rem;
-		padding: 0.2rem 0.7rem;
-		cursor: pointer;
-	}
-	button:hover {
-		border-color: var(--gp-accent);
+		display: inline-flex;
 	}
 </style>

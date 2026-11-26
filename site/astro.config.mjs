@@ -3,9 +3,11 @@ import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
 import { BASE, ORIGIN } from './site.config.mjs';
 
-// Structure and look follow the plunge site (INTENTIUS/plunge, site/), which
-// follows choudoufu's: Starlight, Geist, dark first, an agent-ready page title,
-// llms.txt, and build checks for links and contrast.
+// Structure follows the plunge site (INTENTIUS/plunge, site/), which follows
+// choudoufu's: Starlight, an agent-ready page title, llms.txt, and build
+// checks for links and contrast. The look is the arcade one of the games list
+// and the player page: src/styles/game-printer.css imports the shared sheet
+// (scripts/web/public/arcade.css) and maps Starlight's properties onto it.
 
 // expressive-code renders each code line as its own block with no newline
 // between them, so text copied or extracted from the page runs lines together.
@@ -42,8 +44,12 @@ export default defineConfig({
 			expressiveCode: { plugins: [newlinesBetweenLines] },
 			customCss: ['./src/styles/game-printer.css'],
 			// The title gets "Copy page as Markdown", an llms.txt pointer and the
-			// page's agent prompt; the header and footer carry the printer.
+			// page's agent prompt; the header's title is a neon sign with a tube
+			// button to the games beside it; the home page's hero is a sign over
+			// tube buttons; the footer carries the printer. There is one look, so
+			// ThemeProvider always sets dark and ThemeSelect draws no picker.
 			components: {
+				Hero: './src/components/Hero.astro',
 				PageTitle: './src/components/PageTitle.astro',
 				Footer: './src/components/Footer.astro',
 				SocialIcons: './src/components/SocialIcons.astro',

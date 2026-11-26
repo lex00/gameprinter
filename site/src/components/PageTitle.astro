@@ -14,7 +14,7 @@ const base = import.meta.env.BASE_URL.replace(/\/$/, '');
 <Default />
 {real && (
 	<div class="gp-page-tools not-content">
-		<button type="button" class="gp-page-copy" data-copy={markdown}>Copy page as Markdown</button>
+		<button type="button" class="tube violet quiet small gp-page-copy" data-copy={markdown}>Copy page as Markdown</button>
 		<a href={`${base}/llms.txt`}>llms.txt</a>
 		<span>lists every page for an agent</span>
 	</div>
@@ -41,27 +41,14 @@ const base = import.meta.env.BASE_URL.replace(/\/$/, '');
 		display: flex;
 		flex-wrap: wrap;
 		align-items: center;
-		gap: 0.4rem 0.6rem;
-		margin-top: 0.75rem;
-		font-size: var(--sl-text-sm);
+		gap: 0.6rem 0.8rem;
+		margin-top: 1.25rem;
+		font-size: 1rem;
 		color: var(--sl-color-gray-3);
 	}
-	button {
-		font: inherit;
-		font-weight: 500;
-		color: var(--sl-color-white);
-		background: var(--sl-color-gray-6);
-		border: 1px solid var(--gp-rule);
-		border-radius: 0.4rem;
-		padding: 0.2rem 0.7rem;
-		cursor: pointer;
-	}
-	button:hover {
-		border-color: var(--gp-accent);
-	}
 	a {
-		color: var(--sl-color-accent-high);
-		font-weight: 500;
+		color: var(--cyan);
+		font-weight: 600;
 	}
 	@media (max-width: 40rem) {
 		span {

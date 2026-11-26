@@ -1,14 +1,12 @@
 ---
 // The home page: the six paths. A Starlight page rather than an
 // MDX file, as on plunge's site, so the build bundles no MDX module.
+// src/components/Hero.astro draws the hero: the title as a neon sign and the
+// two actions as tube buttons.
 import StarlightPage from '@astrojs/starlight/components/StarlightPage.astro';
 import Landing from '../components/Landing.astro';
-import { rects } from '../logo.mjs';
 
-const fill = { p: 'var(--gp-paper)', b: 'var(--gp-body)', k: 'var(--gp-ink)', c: 'var(--gp-cyan)', m: 'var(--gp-magenta)', y: 'var(--gp-yellow)' };
-const logo = `<svg class="gp-hero-logo" viewBox="0 0 16 16" width="240" height="240" shape-rendering="crispEdges" role="img" aria-label="The Game Printer logo, a pixel-art printer">${rects()
-	.map((r) => `<rect x="${r.x}" y="${r.y}" width="${r.w}" height="1" fill="${fill[r.c as keyof typeof fill]}"/>`)
-	.join('')}</svg>`;
+const base = import.meta.env.BASE_URL.replace(/\/$/, '');
 const description = 'Make original games that play in your browser, and port mechanics from ROMs you own.';
 ---
 <StarlightPage
@@ -19,7 +17,10 @@ const description = 'Make original games that play in your browser, and port mec
 		hero: {
 			title: 'Game Printer',
 			tagline: 'What do you want to do?',
-			image: { html: logo },
+			actions: [
+				{ text: 'Start here', link: `${base}/install/#start-here` },
+				{ text: 'Play the games', link: 'https://lex00.github.io/games/', attrs: { rel: 'noopener' } },
+			],
 		},
 	}}
 >
