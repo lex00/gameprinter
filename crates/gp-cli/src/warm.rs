@@ -122,7 +122,9 @@ pub(crate) fn age_like(tree: &Path, like: &Path) -> usize {
 /// folder left to start empty.
 pub(crate) fn start(gate_home: &Path, dst: &Path, worktree: &Path) -> Value {
     let tool = gate_home.join("tool");
-    let (src, src_tree) = (tool.join("target"), tool.join("tree"));
+    // The tree the gate builds its target from (crate::tool_gate::TREE),
+    // not `tool/tree`, an older gp's, whose files and tip may be days old.
+    let (src, src_tree) = (tool.join("target"), tool.join(crate::tool_gate::TREE));
     let cold = |why: &str| json!({"warm": false, "why": why, "target": dst});
     if dst.join(MARKER).is_file() || fs::read_dir(dst).is_ok_and(|mut d| d.next().is_some()) {
         return cold("the worker's build folder already has a build");
@@ -253,8 +255,10 @@ mod tests {
     }
 
     /// The runner's start: the gate's target cloned in whole with its
-    /// files' times, the marker written; a folder that has a build is left
-    /// alone, and with no gate build it starts empty saying why.
+    /// files' times, the marker written; the worktree's files aged like the
+    /// tree the gate builds from, not an older gp's `tool/tree`; a folder
+    /// that has a build is left alone, and with no gate build it starts
+    /// empty saying why.
     #[test]
     fn a_workers_build_folder_starts_as_a_clone_of_the_gates() {
         let root = tmp("start");
@@ -262,8 +266,16 @@ mod tests {
         let target = gate.join("tool").join("target");
         let dep = target.join("fastdev").join("deps").join("libx.rlib");
         let mine = root.join("mine");
-        repo(&gate.join("tool").join("tree"), &[("a.rs", "x")]);
-        repo(&mine, &[("a.rs", "x")]);
+        let gate_tree = gate.join("tool").join(crate::tool_gate::TREE);
+        repo(&gate_tree, &[("a.rs", "x"), ("b.rs", "new")]);
+        // An older gp's tree, left beside it: b.rs as it was then.
+        repo(
+            &gate.join("tool").join("tree"),
+            &[("a.rs", "x"), ("b.rs", "old")],
+        );
+        repo(&mine, &[("a.rs", "x"), ("b.rs", "new")]);
+        let tree_old = SystemTime::now() - Duration::from_secs(2 * 60 * 60);
+        set_time(&gate_tree.join("b.rs"), tree_old);
         let dst = root.join("work").join("target").join("loop-s1").join("abc");
         let none = start(&gate, &dst, &mine);
         assert_eq!(none["warm"], json!(false), "{none}");
@@ -285,7 +297,12 @@ mod tests {
         assert_eq!(fs::read(&built).unwrap(), b"built");
         assert_eq!(time(&built), old, "its build times kept");
         assert!(dst.join(MARKER).is_file());
-        assert_eq!(said["files_aged"], json!(1));
+        assert_eq!(said["files_aged"], json!(2), "{said}");
+        assert_eq!(
+            time(&mine.join("b.rs")),
+            tree_old,
+            "aged like the gate's own tree"
+        );
         assert!(!dst.with_extension("warming").exists());
         let again = start(&gate, &dst, &mine);
         assert_eq!(again["warm"], json!(false));
