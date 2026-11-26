@@ -2426,7 +2426,7 @@ async function gameByName(S) {
   check(await S.installed(), `${MADE_UP} by its name is installed with no click`);
   const rec = await installedOf(p, MADE_UP);
   check(rec?.kind === "game" && rec.files.some((f) => f.path === "play/page.json"), `from its package (${rec?.name}@${rec?.version}, ${rec?.files.length} files, play/page.json among them)`);
-  check((await p.title()) === "Made Up Game" && (await p.locator("#title").innerText()) === "Made Up Game", `the page is titled for it (${await p.title()})`);
+  check((await p.title()) === "Made Up Game" && (await p.locator("#title").textContent()) === "Made Up Game", `the page is titled for it (${await p.title()})`);
   const help = await p.locator("#rom-help").innerText();
   const madeUpFile = JSON.parse(readFileSync(join(registryFolder, "blobs", madeUpFiles().hashes.get("play/page.json")), "utf8")).rom.file;
   check(help.includes("Made Up Game") && help.includes(madeUpFile) && !anyOf(othersNames()).test(help), `the ROM line is its package's (${help.slice(0, 90)}...)`);
@@ -2883,7 +2883,7 @@ async function ownGame(S) {
   check((await S.gp(() => window.__gp?.module)) === "page", "it runs in the page's own interpreter (it has no module of its own)");
   const mode = await p.locator("#mode").innerText();
   check(mode === "Playing Own Hop, made by the page check: it plays from its own files, with no ROM", `the line under the title says what plays ("${mode}")`);
-  check((await p.title()) === "Own Hop" && (await p.locator("#title").innerText()) === "Own Hop", `the page is titled for it (${await p.title()})`);
+  check((await p.title()) === "Own Hop" && (await p.locator("#title").textContent()) === "Own Hop", `the page is titled for it (${await p.title()})`);
   const howto = await p.locator("#howto").innerText();
   check(/X is the A button/.test(howto) && !/Load your own ROM|ROM/.test(howto), `the how-to-play lines name its keys and no ROM ("${howto.replace(/\n+/g, " / ")}")`);
   const about = await p.locator("#about").textContent();
