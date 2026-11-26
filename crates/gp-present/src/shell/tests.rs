@@ -150,6 +150,24 @@ fn the_ring_keeps_its_step_and_cap_and_steps_back() {
     let mut off = Ring::new(2, 0);
     off.note_with(2, snap(2));
     assert!(off.is_empty());
+    // A budget of bytes: states of 8 bytes each, 20 bytes held at most,
+    // so the two newest; a state larger than the budget is kept alone.
+    let mut small = Ring::new(2, 100).with_budget(20);
+    for f in [2u64, 4, 6, 8] {
+        small.note_with(f, snap(f));
+    }
+    assert_eq!((small.len(), small.bytes()), (2, 16));
+    assert_eq!(small.back(10).unwrap().state, 8u64.to_le_bytes());
+    assert_eq!(small.back(8).unwrap().state, 6u64.to_le_bytes());
+    assert_eq!((small.len(), small.bytes()), (1, 8));
+    small.note_with(8, || Snapshot {
+        profile: String::new(),
+        state: vec![0; 64],
+    });
+    assert_eq!((small.len(), small.bytes()), (1, 64));
+    small.clear();
+    assert_eq!(small.bytes(), 0);
+    assert_eq!(Ring::new(2, 3).budget, REWIND_BYTES);
     // The standard ring: 20 seconds, every 2 frames.
     assert_eq!(Ring::standard(60.0).cap, 600);
     assert_eq!(Ring::standard(60.0988).cap, 601);

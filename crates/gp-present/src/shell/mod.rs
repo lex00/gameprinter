@@ -39,6 +39,16 @@ pub use storage::{Picked, Storage};
 /// Frames between two states of the rewind ring.
 pub const REWIND_EVERY: u64 = 2;
 
+/// The most bytes of states the ring holds: past it the oldest go, so the
+/// ring holds fewer seconds of a game whose state has grown large rather
+/// than more memory. A world keeps the place of every body ever removed
+/// (gp_sim::world), so a game that makes and removes bodies all through
+/// play has a state that grows with the time played: on 2026-11-25
+/// a ported game's reached 2650 bodies in 12 minutes of one stage, 466 KB a
+/// state and 140 MB for the ring's 300, and the page stopped the module at
+/// its 256 MB ("The game stopped: its module failed (unreachable)").
+pub const REWIND_BYTES: usize = 32 * 1024 * 1024;
+
 /// Seconds of play the ring holds by default.
 pub const REWIND_SECONDS: u32 = 20;
 
@@ -123,11 +133,16 @@ impl Snapshot {
 }
 
 /// The rewind ring: a state every `every` frames, the newest `cap` of
-/// them. Held rewind steps back one state a tick, newest first.
+/// them, and no more than `budget` bytes of them ([`REWIND_BYTES`]; the
+/// newest is always kept). Held rewind steps back one state a tick, newest
+/// first.
 #[derive(Debug, Clone)]
 pub struct Ring {
     every: u64,
     cap: usize,
+    budget: usize,
+    /// The bytes of the states held.
+    bytes: usize,
     states: VecDeque<(u64, Snapshot)>,
 }
 
@@ -138,8 +153,22 @@ impl Ring {
         Ring {
             every: every.max(1),
             cap,
+            budget: REWIND_BYTES,
+            bytes: 0,
             states: VecDeque::new(),
         }
+    }
+
+    /// The ring holding `budget` bytes of states at most.
+    #[must_use]
+    pub fn with_budget(mut self, budget: usize) -> Self {
+        self.budget = budget;
+        self
+    }
+
+    /// The bytes of the states the ring holds.
+    pub fn bytes(&self) -> usize {
+        self.bytes
     }
 
     /// The ring for `seconds` of play at `rate` ticks a second.
@@ -164,6 +193,13 @@ impl Ring {
 
     pub fn clear(&mut self) {
         self.states.clear();
+        self.bytes = 0;
+    }
+
+    fn drop_oldest(&mut self) {
+        if let Some((_, s)) = self.states.pop_front() {
+            self.bytes -= s.state.len();
+        }
     }
 
     /// Keeps the world's state when its frame is on the ring's step and
@@ -182,16 +218,23 @@ impl Ring {
             return;
         }
         if self.states.len() == self.cap {
-            self.states.pop_front();
+            self.drop_oldest();
         }
-        self.states.push_back((frame, snap()));
+        let s = snap();
+        self.bytes += s.state.len();
+        self.states.push_back((frame, s));
+        while self.bytes > self.budget && self.states.len() > 1 {
+            self.drop_oldest();
+        }
     }
 
     /// The newest state before `frame`, dropping every newer one. It stays
     /// in the ring, so the game can rewind to it again.
     pub fn back(&mut self, frame: u64) -> Option<Snapshot> {
         while self.states.back().is_some_and(|(f, _)| *f >= frame) {
-            self.states.pop_back();
+            if let Some((_, s)) = self.states.pop_back() {
+                self.bytes -= s.state.len();
+            }
         }
         self.states.back().map(|(_, s)| s.clone())
     }
