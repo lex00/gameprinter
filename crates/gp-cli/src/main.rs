@@ -75,6 +75,7 @@ mod gate_append;
 mod gate_copy;
 mod gate_hold;
 mod gate_queue;
+mod github_checks;
 mod harvest;
 mod hints;
 mod hook_closure;

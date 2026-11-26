@@ -371,6 +371,11 @@ fn steps_text(v: &Value) -> String {
 pub(crate) fn run(cmd: &LoopCmd, paths: &gp_evidence::Paths) -> Result<Outcome> {
     match cmd {
         LoopCmd::Health => {
+            // Read by hand, GitHub's checks are read first when the kept
+            // read is old (gp serve's runner reads them in the background).
+            if let Some(repo) = crate::repo::built().filter(|r| r.join(".git").exists()) {
+                crate::github_checks::refresh(&paths.home, &repo);
+            }
             let v = health(paths);
             let text = v["lines"]
                 .as_array()
@@ -870,6 +875,18 @@ fn checks(paths: &gp_evidence::Paths, games_dir: Option<&std::path::Path>) -> Va
             Some(Ok(l)) => ok(&mut lines, l),
             Some(Err(p)) => bad(&mut lines, &mut problems, p),
             None => {}
+        }
+        crate::github_checks::refresh_behind(home, &repo);
+    }
+    // GitHub's checks of main (check-web's browser checks run nowhere else):
+    // the last read kept, a failure a problem with its FAIL line under it.
+    for l in crate::github_checks::health_lines(home, now) {
+        match l {
+            Ok(l) => lines.push(l),
+            Err((p, under)) => {
+                bad(&mut lines, &mut problems, p);
+                lines.extend(under);
+            }
         }
     }
     if live == 0 {
