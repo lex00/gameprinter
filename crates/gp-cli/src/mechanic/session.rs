@@ -339,9 +339,19 @@ impl Session {
     }
 
     /// Clips by number, each with its start, frames, maker and note.
+    /// The session's clips in order; none when it has no clips folder (a
+    /// session made from a quest-log row by `gp mechanic busy` or `log`
+    /// has none until its first clip). Until 2026-11-26 such a session made
+    /// every call that lists clips fail: `api/screen/clips` answered 500
+    /// "No such file or directory" on a game with such a session, so the
+    /// screen page's lists under the screens never filled.
     pub fn clips(&self) -> Result<Vec<Value>> {
         let mut out = Vec::new();
-        let mut names: Vec<PathBuf> = fs::read_dir(self.dir.join("clips"))?
+        let dir = self.dir.join("clips");
+        if !dir.is_dir() {
+            return Ok(out);
+        }
+        let mut names: Vec<PathBuf> = fs::read_dir(dir)?
             .filter_map(|e| e.ok().map(|e| e.path()))
             .filter(|p| p.extension().is_some_and(|x| x == "toml"))
             .collect();
@@ -628,6 +638,7 @@ impl Session {
         by: &str,
     ) -> Result<u64> {
         let _g = self.lock.lock().expect("lock");
+        fs::create_dir_all(self.dir.join("clips"))?;
         fs::write(self.dir.join(format!("clips/{n:03}.log")), log)?;
         t.insert("by".into(), by.into());
         t.insert("note".into(), note.into());
@@ -647,6 +658,7 @@ impl Session {
             .max()
             .unwrap_or(0)
             + 1;
+        fs::create_dir_all(self.dir.join("clips"))?;
         fs::write(self.dir.join(format!("clips/{n:03}.log")), log)?;
         t.insert("by".into(), by.into());
         t.insert("note".into(), note.into());
@@ -838,6 +850,22 @@ mod tests {
         let text = show_text(&v);
         assert!(text.contains("a held jump"), "{text}");
         assert!(text.contains("[choices: ok | not now]"), "{text}");
+    }
+
+    /// A session whose clips folder is gone (one made from a row, or
+    /// emptied by hand) has no clips, and its state reads.
+    #[test]
+    fn a_session_with_no_clips_folder_has_no_clips() {
+        let d = tempfile::tempdir().unwrap();
+        let s = Session::create(&paths(d.path()), "test-hop", "jump", None, "ab").unwrap();
+        let _ = fs::remove_dir_all(s.dir.join("clips"));
+        assert!(!s.dir.join("clips").exists());
+        assert_eq!(s.clips().unwrap().len(), 0);
+        assert_eq!(s.state().unwrap()["clips"], json!([]));
+        // The next clip makes the folder again.
+        let log = "gp-input-log 1\ncontrollers 1\nP ........\nP ........\n";
+        assert_eq!(s.add_clip(log, 1, "", "player").unwrap(), 1);
+        assert_eq!(s.clips().unwrap().len(), 1);
     }
 
     #[test]

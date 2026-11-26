@@ -494,8 +494,12 @@ goes up; the page reads `api/screen` every second, applies a new ask, and
 reports what it shows (`POST api/screen`, kept in `screen-shown.json`):
 the clip and frame, the pictures, the view, the ask it applied, any reason
 it couldn't, and `by: person` once the person picked something
-themselves. The tool waits up to 4 s for an open page to show the ask and
-returns the report with a sentence. A page opened after an ask no page
+themselves. It reports the model's own word too: the step it last said it
+stands at (`model_step`), of how many it was given (`model_steps`), the
+step the page asked for on a clip (`model_asked`) and what it last threw
+(`model_error`); the sentence says when the model isn't following the clip
+(more than 4 steps behind, or no answer) or threw. The tool waits up to 4 s
+for an open page to show the ask and returns the report with a sentence. A page opened after an ask no page
 showed yet, within 10 minutes, shows it.
 
 The screen follows the agent's work. While `gp model refine --lockstep`

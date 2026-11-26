@@ -172,6 +172,9 @@ const model = {
   // main's, so AFTER goes back to it.
   card: null,
   loads: 0, // loads begun, so a switch of model knows one ran
+  at: null, // the step it last said it stands at (its "at"), or null
+  of: null, // how many steps it was given, as it said
+  error: null, // what it last threw, since it was loaded
 };
 
 // The original's random draws, recorded in the player's slot 0 at the
@@ -546,8 +549,17 @@ window.addEventListener("message", (e) => {
   else if (m?.gp === "at") {
     model.draws = m.draws ?? null;
     document.body.dataset.draws = m.draws ? JSON.stringify(m.draws) : "";
+    // Where the model says it stands, of how many steps it has: the
+    // report gives them beside the step the page asked for, so a model
+    // that stands still while the original plays shows in what the page
+    // reports (gp mechanic screen), not only on the person's screen.
+    model.at = typeof m.frame === "number" ? m.frame : null;
+    model.of = typeof m.of === "number" ? m.of : null;
   }
-  else if (m?.gp === "error") fault(`The model: ${m.message}`, 6000);
+  else if (m?.gp === "error") {
+    model.error = String(m.message ?? "");
+    fault(`The model: ${m.message}`, 6000);
+  }
   else if (m?.gp === "settings") onSettings(m);
 });
 
@@ -681,6 +693,7 @@ async function loadModel(why) {
   document.body.dataset.loads = String(Number(document.body.dataset.loads ?? 0) + 1);
   model.ready = false;
   model.on = false;
+  model.at = model.of = model.error = null;
   const base = modelBase();
   try {
     const st = await ensureBuilt();
@@ -3172,6 +3185,14 @@ function report() {
     // How the model took the original's random draws: taken of the
     // script's, and the first desync; null while it rolls its own.
     draws: model.draws,
+    // The model's own word on where it stands: the step it is at, of how
+    // many it was given, and on a clip the step the page asked for there;
+    // its last error. A model that stays at one step while the clip plays
+    // on, or that throws, is read here (gp-mcp's screen.rs says it in words).
+    model_step: model.at,
+    model_steps: model.of,
+    model_asked: clip && model.on ? clip.upTo[clip.f] ?? 0 : null,
+    model_error: model.error,
   };
   void api("api/screen", v).catch(() => undefined);
 }

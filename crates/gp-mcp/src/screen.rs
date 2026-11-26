@@ -343,7 +343,49 @@ fn said_of(s: &Value) -> String {
         Some(e) => format!(" It couldn't show what you asked last: {e}."),
         None => String::new(),
     };
-    format!("The screen shows {what}, {view}, in {pics}{by}.{error}")
+    format!(
+        "The screen shows {what}, {view}, in {pics}{by}.{error}{}",
+        model_words(s)
+    )
+}
+
+/// How far behind the step the page asked for the model may say it is
+/// and still count as following: its answer comes a frame after the ask,
+/// and a report is taken between the two.
+const MODEL_LAG_STEPS: u64 = 4;
+
+/// What the page's report says of the model beside the original
+/// (screen.js's report: `model_step`, `model_steps`, `model_asked`,
+/// `model_error`): empty while it follows. On 2026-11-26 an NES game's
+/// screen page played its clip in the original while the model stood at
+/// its first frame, and the report said only "showing".
+fn model_words(s: &Value) -> String {
+    let mut out = String::new();
+    if let Some(e) = s["model_error"].as_str().filter(|e| !e.is_empty()) {
+        out.push_str(&format!(" The model threw: {e}."));
+    }
+    let asked = s["model_asked"].as_u64();
+    if let Some(asked) = asked
+        && asked > MODEL_LAG_STEPS
+        && s["model_step"].is_null()
+    {
+        out.push_str(&format!(
+            " The model hasn't said where it stands, though the page asked for step {asked}."
+        ));
+    }
+    if let (Some(asked), Some(at)) = (asked, s["model_step"].as_u64())
+        && asked > at + MODEL_LAG_STEPS
+    {
+        let of = s["model_steps"].as_u64();
+        let given = match of {
+            Some(n) if n < asked => format!(", and was given only {n} steps"),
+            _ => String::new(),
+        };
+        out.push_str(&format!(
+            " The model isn't following the clip: it stands at step {at} where the page asked for step {asked}{given}."
+        ));
+    }
+    out
 }
 
 /// `screen_show`: asks the game's screen page to show a clip, a frame, a
@@ -463,6 +505,53 @@ mod tests {
             "The screen shows clip 1 of move at frame 9, the model over the original at 50%, in the theme last-call (the person's choice)."
         );
         assert!(report(h.path(), "rooftop", &json!([1])).is_err());
+    }
+
+    /// A model that stands still while the clip plays on, one given too
+    /// few steps, one that never answers and one that threw are said in
+    /// words; one a frame or two behind follows.
+    #[test]
+    fn a_model_that_stands_still_is_said() {
+        let at = |step: Value, steps: Value, asked: Value, error: Value| {
+            said_of(
+                &json!({"work_clip": "rooftop.climb.001", "frame": 719, "view": "side",
+                "pictures": "last-call", "by": "person", "model_step": step,
+                "model_steps": steps, "model_asked": asked, "model_error": error}),
+            )
+        };
+        let plain = "The screen shows the clip your refine works on, rooftop.climb.001, at frame 719, side by side, in the theme last-call (the person's choice).";
+        assert_eq!(at(json!(700), json!(1400), json!(702), Value::Null), plain);
+        assert_eq!(
+            at(Value::Null, Value::Null, Value::Null, Value::Null),
+            plain
+        );
+        assert_eq!(
+            at(json!(0), json!(1400), json!(702), Value::Null),
+            format!(
+                "{plain} The model isn't following the clip: it stands at step 0 where the page asked for step 702."
+            )
+        );
+        assert_eq!(
+            at(json!(0), json!(0), json!(702), Value::Null),
+            format!(
+                "{plain} The model isn't following the clip: it stands at step 0 where the page asked for step 702, and was given only 0 steps."
+            )
+        );
+        assert_eq!(
+            at(Value::Null, Value::Null, json!(702), Value::Null),
+            format!(
+                "{plain} The model hasn't said where it stands, though the page asked for step 702."
+            )
+        );
+        assert_eq!(
+            at(
+                json!(702),
+                json!(1400),
+                json!(702),
+                json!("TypeError: x is undefined")
+            ),
+            format!("{plain} The model threw: TypeError: x is undefined.")
+        );
     }
 
     /// The work file keeps the clip's window through events with none, is
