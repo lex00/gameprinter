@@ -1991,19 +1991,32 @@ async function refreshAsks() {
       ? (a.ran ? `RUNNING NOW, ${at + 1} OF ${turn.length}` : `YOU SAID YES: WAITS, ${at + 1} OF ${turn.length}`)
       : a.ran ? RAN[a.ran.state] ?? a.ran.state.toUpperCase() : "YOUR AGENT ASKS";
     card.append(el("span", `ask-head${a.ran ? ` ask-ran-${a.ran.state}` : ""}`, head));
-    // The question, naming this change: from the command's own message
-    // (a gate's patch message: its game, then what changes, up to the
-    // first stop), else the ask's sentence.
+    // The question, naming this change. A model gate card asks what the
+    // ask's sentence says: what the person will see change in the game and
+    // what LAND IT does (asks.rs `says`, from the call's --see), never the
+    // commit's subject (cards-must-say-what-changes); answered, it says the
+    // --see sentence. Any other card: from the command's own message (its
+    // game, then what changes, up to the first stop), else the ask's
+    // sentence.
     const argv = a.argv ?? [];
-    const mi = argv.indexOf("--message");
-    const msg = mi >= 0 ? String(argv[mi + 1] ?? "").trim() : "";
+    const argOf = (flag) => {
+      const i = argv.indexOf(flag);
+      return i >= 0 ? String(argv[i + 1] ?? "").trim() : "";
+    };
+    const msg = argOf("--message");
     const game = a.game ?? "";
     let what = msg.replace(new RegExp(`^${game}\\s*:\\s*`, "i"), "");
     what = what.split(/(?<=[a-z0-9)])[.;]\s|\s\(|: /)[0].trim();
-    const verb = a.command === "model gate" ? "Land" : a.command === "registry publish" ? "Publish" : "Allow";
+    const verb = a.command === "registry publish" ? "Publish" : "Allow";
     // A card still asking asks; one answered says what it is.
-    let question = !what ? `${a.says ?? ""}`
-      : asking(a) ? `${verb} in ${game || "the game"}: ${what}?` : `${what}${/[.!?]$/.test(what) ? "" : "."}`;
+    let question;
+    if (a.command === "model gate") {
+      const see = argOf("--see");
+      question = asking(a) || !see ? `${a.says ?? what}` : `${see}${/[.!?]$/.test(see) ? "" : "."}`;
+    } else {
+      question = !what ? `${a.says ?? ""}`
+        : asking(a) ? `${verb} in ${game || "the game"}: ${what}?` : `${what}${/[.!?]$/.test(what) ? "" : "."}`;
+    }
     // A failed run says why on its one line: its last line.
     const why = a.ran?.state === "failed" ? String((a.ran.lines ?? []).filter((l) => String(l).trim()).at(-1) ?? "").trim() : "";
     if (why) question = `${why} (${question})`;
@@ -2047,6 +2060,8 @@ async function refreshAsks() {
     }
     card.append(el("span", "ask-detail", `gp ${a.command ?? ""}`));
     if (a.words) card.append(el("span", "ask-detail", `You wrote: ${a.words}`));
+    // A yes the gate said itself, with why (serve/runner.rs clips_only_yes).
+    if (a.answered_why) card.append(el("span", "ask-detail", `Not asked: ${a.answered_why}.`));
     if (a.ran) {
       for (const l of a.ran.lines ?? []) card.append(el("span", "ask-detail", l));
     } else if (a.state === "yes") {

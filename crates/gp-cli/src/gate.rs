@@ -120,6 +120,20 @@ pub struct GateArgs {
     /// after they land. A dry run says which haven't landed and goes on.
     #[arg(long = "after", value_name = "ASK")]
     pub after: Vec<String>,
+    /// What the person will see change in the game, in one plain sentence
+    /// for someone who hasn't read the code: the question its card on their
+    /// page asks (gp_run refuses a card without it). The gate itself reads
+    /// nothing in it.
+    #[arg(long, value_name = "SENTENCE")]
+    pub see: Option<String>,
+    /// The change shows only inside clips: a game played from power-on
+    /// plays and looks as before (a clip that starts in the middle of play
+    /// is set up right, say). gp serve's runner says yes to such a card
+    /// itself, with no question to the person, once a dry run of its patch
+    /// passed with no regression let pass (the owner's standing rule of
+    /// 2026-11-22); the gate that lands it checks it as any other.
+    #[arg(long)]
+    pub clips_only: bool,
     /// Check only that the card's LOOK AT IT would play, and gate nothing:
     /// --clip is found and its log plays on the game's board and set,
     /// --frames are inside it, and the model as --patch leaves it builds.
@@ -643,10 +657,29 @@ fn kept_tip(c: &Ctx, commit: &str) -> Option<(Rows, Vec<u8>)> {
 
 /// Where a patch's last dry-run pass is kept by the patch's own bytes:
 /// `<gate home>/passed/diff-HASH.json`.
-fn pass_by_diff(home: &Path, diff: &Path) -> Option<PathBuf> {
+pub(crate) fn pass_by_diff(home: &Path, diff: &Path) -> Option<PathBuf> {
     let b = fs::read(diff).ok()?;
     let h = blake3::hash(&b).to_hex()[..32].to_owned();
     Some(home.join("passed").join(format!("diff-{h}.json")))
+}
+
+/// When a dry run of `patch` passed with no regression let pass (its pass
+/// kept by the patch's bytes in `gate_home`, [`pass_by_diff`]), else why
+/// not: what lets the runner say yes to a `--clips-only` card itself.
+pub(crate) fn passed_clean(gate_home: &Path, patch: &Path) -> std::result::Result<String, String> {
+    let f = pass_by_diff(gate_home, patch).ok_or("its patch can't be read")?;
+    let kept: DryPass = fs::read(&f)
+        .ok()
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .ok_or("no dry run of its patch passed")?;
+    if !kept.tolerated.is_empty() {
+        return Err(format!(
+            "its dry run let {} regression{} pass",
+            kept.tolerated.len(),
+            if kept.tolerated.len() == 1 { "" } else { "s" }
+        ));
+    }
+    Ok(kept.at)
 }
 
 /// The commit a dry run of a patch made on cards `after` (asks' ids, in

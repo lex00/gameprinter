@@ -459,6 +459,18 @@ fn run_yeses(ctx: &Arc<Ctx>) {
             }
         }
     }
+    // A worker's model fix that shows only inside clips, whose dry run
+    // passed with nothing measured worse, lands with no question to the
+    // person (cards-must-say-what-changes).
+    for a in gp_mcp::asks::all(&home) {
+        if let Some(why) = clips_only_yes(&a, now)
+            && let Some(id) = a["id"].as_str()
+            && gp_mcp::asks::answer(&home, id, gp_mcp::asks::Answer::Yes).is_ok()
+        {
+            let _ = gp_mcp::asks::mark(&home, id, "answered_by", json!("the gate"));
+            let _ = gp_mcp::asks::mark(&home, id, "answered_why", json!(why));
+        }
+    }
     for a in gp_mcp::asks::all(&home) {
         if !gp_mcp::asks::is_yes(&a, now) {
             continue;
@@ -863,6 +875,36 @@ fn hold_for_after(home: &Path, a: &Value, now: u64) -> Option<Result<(), String>
             Some(Ok(()))
         }
     }
+}
+
+/// Why the runner says yes itself to open card `a`, or None: a worker's
+/// model gate (it cites a step) marked `--clips-only`, the change showing
+/// only inside clips, with nothing changing in a game played from
+/// power-on, whose patch a dry run passed with no regression let pass
+/// (gate::passed_clean, in the card's `--home` or the gate's own). The
+/// owner's standing rule of 2026-11-22: such a fix is the session's to
+/// answer, and the person isn't asked (owner, 2026-11-25, of one such
+/// card: "no fucking idea what it wants"). The gate that lands it scores
+/// it again when main moved, and fails it as any other.
+fn clips_only_yes(a: &Value, now: u64) -> Option<String> {
+    if a["command"] != json!("model gate")
+        || !gp_mcp::asks::is_open(a, now)
+        || !a["step"].as_str().is_some_and(|s| !s.trim().is_empty())
+        || !a["argv"]
+            .as_array()
+            .is_some_and(|v| v.iter().any(|w| w == "--clips-only"))
+    {
+        return None;
+    }
+    let patch = arg_values(a, "--patch").into_iter().next()?;
+    let gate = match arg_values(a, "--home").into_iter().next() {
+        Some(h) => PathBuf::from(h),
+        None => crate::gate::gate_home(None).ok()?,
+    };
+    let at = crate::gate::passed_clean(&gate, Path::new(&patch)).ok()?;
+    Some(format!(
+        "it changes only what clips show (a game played from power-on is as before), and its dry run passed at {at} with nothing measured worse, so it lands with no question (the owner's rule of 2026-11-22)"
+    ))
 }
 
 /// A yes's command that is a gate, which batches with the gates waiting
@@ -2780,7 +2822,7 @@ pub(crate) fn brief(setup: &Setup, step: &Value, wt: &Path, branch: &str, before
             format!("First: {gp} mechanic show {game} {row} (the item, its notes and talk; before the row has a session it prints the row's note). Your first gp_run mechanic busy or mechanic log makes the row's session; mechanic start serves a page and isn't a worker's."),
             format!("At every step say where you are on the person's page: {gp} mechanic busy {game} {row} \"WHAT YOU ARE DOING. Next: WHAT COMES NEXT\"; put what you found with {gp} mechanic log {game} {row} \"...\"."),
             format!("When you ask the person to judge something they can see, give the row the clip that shows it: gp_run mechanic queue with game {game}, mechanic {row}, status \"asking you\", the question as note, clip N (or ROW/N, or a corpus clip's id), frames A-B and look THEME (the theme it is about, or game). The row and its card then have LOOK AT IT, which sets it up on their screens, the original beside the model, and a look in the game's own pictures (look game) has CONFIRM: their CONFIRM, or a plain yes typed, is locked by gp serve's runner with no worker. When they say yes to such a look in other words, lock it: gp_run mechanic approve with game {game} and mechanic {row} (the clip must be in the corpus), and the model gate then fails a change that draws it further from the original."),
-            format!("Land a change with git diff > a patch file in your worktree, then gp_run model gate with game {game}, patch FILE, message \"{game}: WHAT CHANGES. Expect: WHAT THE PERSON SEES. Checked: HOW\", clip N (or ROW/N, or a corpus clip's id), frames A-B and look THEME (or game) for the clip that shows the change, and dry_run first; then the same without dry_run puts a card with LOOK AT IT on the person's page and the loop runs it on their YES. Don't wait for it: say in your report that the card is up, and stop. Never run a gate from your shell, and never land onto your own branch."),
+            format!("Land a change with git diff > a patch file in your worktree, then gp_run model gate with game {game}, patch FILE, message \"{game}: WHAT CHANGES. Expect: WHAT THE PERSON SEES. Checked: HOW\", clip N (or ROW/N, or a corpus clip's id), frames A-B and look THEME (or game) for the clip that shows the change, see \"WHAT THE PERSON WILL SEE CHANGE IN THE GAME\" (one plain sentence, the question their card asks, for someone who hasn't read the code: no clip ids, frame numbers, addresses, file or function names), and clips_only when nothing changes in a game played from power-on (only what a clip that starts in the middle of play shows), and dry_run first; then the same without dry_run puts a card with LOOK AT IT on the person's page and the loop runs it on their YES (a clips_only card whose dry run passed with nothing worse lands with no question to them). Don't wait for it: say in your report that the card is up, and stop. Never run a gate from your shell, and never land onto your own branch."),
             format!("A row with a target (the TARGET line of mechanic show, a measure on the scoreboard) closes itself when gp serve's scoreboard measures it there; you don't set it done, and --status done is refused before. Without one, give it one as you start: gp_run mechanic queue with game {game}, mechanic {row}, target \"LINE sprites at least N of M\" (a line of {game}/scoreboard.toml), or measure_needed \"WHAT WOULD MEASURE IT\" when no line can."),
             format!("When an item with no target is done: {gp} mechanic queue {game} {row} --status done --note \"WHAT LANDED\". A row with a target whose change is on a card: --status \"in line\"; the YES lands it and the measure closes it. A row that can't go on until another row lands: --status \"in line\" --waits-on ROW (GAME/ROW for another game's), never a note alone; the runner moves it to next with the landing named once that row lands or is done. Only a look asks the person: --status \"asking you\" with a clip and frames for them to watch (above), or a card for their YES. The person has handed you every other choice (the tools, the routing, how to do the work): pick, say why in the note, and go on; a question in your report doesn't reach them."),
             format!("A problem you find that isn't this item's becomes a row of its own, with no card: gp_run mechanic propose with game {game}, mechanic NEW-ROW, what \"WHAT IS WRONG\", plain \"ONE SENTENCE A PERSON CAN READ\", from \"WHERE YOU SAW IT\" and its test in the same call (goal \"RAM TEST\", do, stop), which goes in triage.toml so the triage tries it first. Don't fix it in this step."),
@@ -3543,6 +3585,68 @@ fn stop(ctx: &Ctx, req: &Request, params: &Params) -> Result<Response, Fail> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A worker's clips-only model gate card whose patch a dry run passed
+    /// with nothing let pass gets the gate's yes, with why; one without
+    /// --clips-only, one whose dry run let a regression pass or kept no
+    /// pass, and one raised outside a step keep asking the person
+    /// (cards-must-say-what-changes).
+    #[test]
+    fn a_clips_only_fix_whose_dry_run_passed_lands_with_no_question() {
+        let d = tempfile::tempdir().unwrap();
+        let gate = d.path().join("gate");
+        let patch = d.path().join("fix.patch");
+        fs::write(&patch, "diff --git a/g/model.toml b/g/model.toml\n").unwrap();
+        let now = 1_000_000;
+        let card = |extra: &[&str], step: &str| {
+            let mut argv = vec![
+                "--patch".to_owned(),
+                patch.to_string_lossy().into_owned(),
+                "--home".to_owned(),
+                gate.to_string_lossy().into_owned(),
+            ];
+            argv.extend(extra.iter().map(|s| (*s).to_owned()));
+            json!({"id": "ask-1", "command": "model gate", "state": "open", "made_ms": now - 1000,
+                "step": step, "argv": argv})
+        };
+        let only = card(&["--clips-only"], "s000000000001");
+        assert_eq!(clips_only_yes(&only, now), None, "no dry run passed");
+        let kept = |tolerated: Vec<String>| {
+            let f = crate::gate::pass_by_diff(&gate, &patch).unwrap();
+            fs::create_dir_all(f.parent().unwrap()).unwrap();
+            let p = crate::gate::DryPass {
+                tip: "a".repeat(40),
+                gp: "gp".into(),
+                kit_hash: "k".into(),
+                commit: "b".repeat(40),
+                at: "2026-11-25T12:00:00Z".into(),
+                remeasured: false,
+                tolerated,
+            };
+            fs::write(f, serde_json::to_vec(&p).unwrap()).unwrap();
+        };
+        kept(vec!["rooftop.x.001: worse (reason)".into()]);
+        assert_eq!(clips_only_yes(&only, now), None, "a regression let pass");
+        kept(Vec::new());
+        let why = clips_only_yes(&only, now).expect("a clean pass");
+        assert!(
+            why.contains("2026-11-25T12:00:00Z") && why.contains("power-on"),
+            "{why}"
+        );
+        assert_eq!(
+            clips_only_yes(&card(&[], "s000000000001"), now),
+            None,
+            "not clips-only"
+        );
+        assert_eq!(
+            clips_only_yes(&card(&["--clips-only"], ""), now),
+            None,
+            "no step"
+        );
+        let mut answered = only.clone();
+        answered["state"] = json!("no");
+        assert_eq!(clips_only_yes(&answered, now), None, "not open");
+    }
 
     fn s(id: &str, who: &str, touches: &[&str]) -> Value {
         json!({"id": id, "journey": "quest log", "who": who, "subject": "g", "says": "Do it.", "commands": ["corpus import"],

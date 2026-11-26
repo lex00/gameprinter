@@ -686,7 +686,39 @@ pub fn gate_card_refused(
     if gate_clip(values).is_none() || value(values, &["frames"]).is_none() {
         return Some("a model gate card's clip is N, ROW/N or a corpus clip's id, with frames A-B (or A) from the clip's start, so LOOK AT IT shows the frames in question".to_owned());
     }
+    let see = value(values, &["see"]).map(str::trim).unwrap_or_default();
+    if see.is_empty() {
+        return Some(format!(
+            "a model gate card asks the person in one plain sentence what they will see change in the game, not the commit's subject: add see SENTENCE, {SEE_PLAIN}"
+        ));
+    }
+    if let Some(w) = not_plain(see) {
+        return Some(format!(
+            "the card's see sentence has `{w}` in it: {SEE_PLAIN}"
+        ));
+    }
     None
+}
+
+/// What a model gate's `see` sentence is (owner, 2026-11-25, of a card that
+/// asked its commit's subject: "no fucking idea what it wants").
+const SEE_PLAIN: &str = "written for someone who hasn't read the code (what they will see on the screen, with no clip ids, frame numbers, addresses, file or function names)";
+
+/// The first word of `see` that is code, not plain words: an address, a
+/// path in the code, a file, a name with `_`, or a corpus clip's id.
+fn not_plain(see: &str) -> Option<&str> {
+    see.split_whitespace().find(|w| {
+        let w = w.trim_matches(|c: char| ",;:.!?()\"'".contains(c));
+        let dotted = w.split('.').count() >= 3 && w.split('.').all(|p| !p.is_empty());
+        w.contains("::")
+            || w.contains('_')
+            || w.starts_with("0x")
+            || w.starts_with('$')
+            || [".rs", ".toml", ".json", ".js"]
+                .iter()
+                .any(|x| w.ends_with(x))
+            || dotted
+    })
 }
 
 fn value<'a>(values: &'a [(String, String)], names: &[&str]) -> Option<&'a str> {
@@ -794,17 +826,13 @@ pub fn says(n: &New) -> String {
         "theme generate" => format!(
             "Pay an image service (Runway) to draw the pictures for a theme{of}. The pictures are made from our own words, never the game's art."
         ),
-        // What lands, in the patch's own words, and the files it changes.
+        // What the person will see change (the call's `see`, else what its
+        // message says to expect), what LAND IT does, and the files it
+        // changes; a call with neither says what lands in the message's
+        // own words (cards-must-say-what-changes: the commit's subject as
+        // the question told the owner nothing).
         "model gate" => {
             let message = v(&["message"]);
-            let what = message.map_or_else(
-                || format!("the changed model{of}"),
-                |m| format!("\"{}\"", brief(m)),
-            );
-            let expect = message
-                .and_then(|m| m.split_once("Expect: "))
-                .map(|(_, e)| format!(" Expect: {}.", brief(e)))
-                .unwrap_or_default();
             let files = v(&["patch"]).map(patch_files).filter(|f| !f.is_empty());
             let files = files
                 .map(|f| {
@@ -812,7 +840,34 @@ pub fn says(n: &New) -> String {
                     format!(" It changes {}.", few(&f, "files", ", "))
                 })
                 .unwrap_or_default();
-            format!("Land {what}{of}, once it passes the game's checks.{expect}{files}")
+            let see = v(&["see"])
+                .map(brief)
+                .filter(|s| !s.is_empty())
+                .or_else(|| {
+                    message
+                        .and_then(|m| m.split_once("Expect: "))
+                        .map(|(_, e)| brief(e))
+                });
+            match see {
+                Some(see) => {
+                    let into = game.unwrap_or("the game");
+                    let only = if n.argv.iter().any(|a| a == "--clips-only") {
+                        " Only clips that start in the middle of play change: a game played from power-on is as before."
+                    } else {
+                        ""
+                    };
+                    format!(
+                        "What you will see: {see}. LAND IT puts this change in {into} once it passes the game's checks.{only}{files}"
+                    )
+                }
+                None => {
+                    let what = message.map_or_else(
+                        || format!("the changed model{of}"),
+                        |m| format!("\"{}\"", brief(m)),
+                    );
+                    format!("Land {what}{of}, once it passes the game's checks.{files}")
+                }
+            }
         }
         "registry publish" => format!(
             "Publish{} in the registry{to}. Anyone who reads that registry can get it.",
@@ -1090,13 +1145,69 @@ mod tests {
         let s = says(&n);
         assert_eq!(
             s,
-            "Land \"The ball bounces\" of g, once it passes the game's checks. Expect: the ball lands on frame 40."
+            "What you will see: the ball lands on frame 40. LAND IT puts this change in g once it passes the game's checks."
         );
         let many = "word ".repeat(400);
         let c = capped(&many);
         assert_eq!(c.split_whitespace().count(), CARD_WORDS);
         assert!(c.ends_with("word..."), "{c}");
         assert_eq!(capped("a few words"), "a few words");
+    }
+
+    /// A gate card's question is the call's plain `see` sentence and what
+    /// LAND IT does, not the commit's subject (the owner, 2026-11-25: "the
+    /// card on the screen right now, no fucking idea what it wants"); a
+    /// clips-only change says a game from power-on is as before.
+    #[test]
+    fn a_gate_card_asks_what_the_person_will_see() {
+        let message = "rooftop: a clip that starts while the roofer climbs puts the ladder at the wall at its start (Climb::loaded places ladder_layers' objects). Expect: in rooftop.climb-wall.001 the ladder stands at the wall. Checked: gp picture.";
+        let see = "When a recording starts while the roofer is climbing, the ladder at the wall shows from its first picture, as in the original.";
+        let values = vec![
+            ("game".to_owned(), "rooftop".to_owned()),
+            ("message".to_owned(), message.to_owned()),
+            ("see".to_owned(), see.to_owned()),
+        ];
+        let argv: Vec<String> = vec!["--clips-only".into()];
+        let n = New {
+            command: "model gate",
+            needs: Ask::Publish,
+            ..new(&argv, &values)
+        };
+        assert_eq!(
+            says(&n),
+            "What you will see: When a recording starts while the roofer is climbing, the ladder at the wall shows from its first picture, as in the original. LAND IT puts this change in rooftop once it passes the game's checks. Only clips that start in the middle of play change: a game played from power-on is as before."
+        );
+        // A card with no see is refused, and so is one with code in it.
+        let s = |v: &[(&str, &str)]| -> Vec<(String, String)> {
+            v.iter()
+                .map(|(a, b)| ((*a).to_owned(), (*b).to_owned()))
+                .collect()
+        };
+        let none = |_: &str| false;
+        let card = [
+            ("game", "rooftop"),
+            ("clip", "rooftop.climb-wall.001"),
+            ("frames", "0-2"),
+            ("look", "game"),
+        ];
+        let why = gate_card_refused(&s(&card), none).unwrap();
+        assert!(why.contains("add see SENTENCE"), "{why}");
+        let seeing = |words: &str| {
+            let mut v = s(&card);
+            v.push(("see".to_owned(), words.to_owned()));
+            gate_card_refused(&v, none)
+        };
+        for code in [
+            "in rooftop.climb-wall.001 the ladder shows",
+            "Climb::loaded places the ladder",
+            "ladder_layers are read",
+            "the byte at 0x1234 is set",
+            "lib.rs reads it",
+        ] {
+            let why = seeing(code).unwrap_or_else(|| panic!("{code} passed"));
+            assert!(why.contains("see sentence has"), "{why}");
+        }
+        assert!(seeing(see).is_none());
     }
 
     /// A model gate card carries the clip and frames its call names, and
@@ -1122,6 +1233,7 @@ mod tests {
             ("clip", "rooftop.attract.001"),
             ("frames", "761-763"),
             ("look", "game"),
+            ("see", "The roof's edge shows as in the original."),
         ]);
         assert!(gate_card_refused(&full, none).is_none());
         let argv: Vec<String> = Vec::new();
