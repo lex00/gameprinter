@@ -30,11 +30,11 @@ The server gives every agent the plugin's words as MCP prompts, also served as r
 
 The server's instructions say these to every agent, and the gates hold the ones about landing whatever the agent. The Claude Code plugin adds hooks (`gp loop hook`) that hold the rest; elsewhere you keep them yourself.
 
-1. At the start, call `next`, and when the loop's runner is on, run `gp loop health` through `gp_run`: its workers do the rows, and your job is the setup. `gp loop hook session-start < /dev/null` prints the same state.
-2. Never edit a file in a game's folder of the games checkout by hand: a hand edit lands nowhere, and blocks every landing there until it is set aside (`gp loop health` says PROBLEM while it is there). A game changes through `model_edit`, `contract_edit` and `assets_place` on a copy, or a patch made in a worktree of the games repo and landed with `gp model gate GAME --patch FILE -m MSG` through `gp_run`.
+1. At the start, call `next`, and when the loop's runner is on, run `gp loop health` through `gp_run`: its workers do the rows, and your job is the setup. Fix each PROBLEM it lists, a failing GitHub check of main among them. What the person reports goes into the quest log as a row (`gp mechanic queue GAME ROW --status next`, with `--repo tools` for gp's own work), and you tell them in one line what is on their page; never do a row's work or raise a row's card yourself. `gp loop hook session-start < /dev/null` prints the same state.
+2. Never edit a file in a game's folder of the games checkout by hand: a hand edit lands nowhere, and blocks every landing there until it is set aside (`gp loop health` says PROBLEM while it is there, and `gp loop set-aside GAME` puts it in a stash, with the person's yes). A game changes through `model_edit`, `contract_edit` and `assets_place` on a copy, or a patch made in a worktree of the games repo and landed with `gp model gate GAME --patch FILE -m MSG` through `gp_run`.
 3. A change to gameprinter itself lands only with `gp tool gate --patch FILE -m MSG`.
-4. A landing, a publish or a paid call waits for the person's YES on their page. The refusal gives an `ask_id`: wait with `next` (`wait_s`), then call again with it. Don't stop while a yes waits to be used.
+4. A landing, a publish or a paid call waits for the person's YES on their page. The refusal gives an `ask_id`: wait with `next` (`wait_s`), then call again with it. With no page open, a client that shows forms asks them there, and one that shows none needs `confirmed_by_person`, set only after they said yes to that exact action in the conversation. Don't stop while a yes waits to be used.
 5. Ask the person only what they judge by watching, with the clip that shows it.
 6. No ROM bytes, lifted art or built game in a commit, and nothing made from a ROM leaves the machine.
 
-docs/loop.md and docs/workers.md say how the loop and its workers run.
+docs/agents.md is the full brief for the agent watching the loop, and docs/loop.md and docs/workers.md say how the loop and its workers run.
