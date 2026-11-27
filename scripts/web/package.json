@@ -1,4 +1,7 @@
 {
   "private": true,
-  "dependencies": { "playwright-core": "1.64.0" }
+  "dependencies": {
+    "playwright-core": "1.64.0",
+    "posthog-js": "1.447.15"
+  }
 }
