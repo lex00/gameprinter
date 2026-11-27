@@ -429,19 +429,109 @@ const INCREMENTAL_IDLE: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 /// `-working` ones a stopped lane left, a crate folder whose newest
 /// session is older than [`INCREMENTAL_IDLE`], and one a newer build of
 /// the same crate superseded ([`INCREMENTAL_SUPERSEDED`]: gp of an older
-/// version) go. The bytes freed.
+/// version) go. So do the build products in `deps` of the crates that
+/// folder names, superseded the same way ([`prune_deps`]). The bytes freed.
 pub(crate) fn prune_gate_incremental(gate_home: &Path) -> u64 {
     let now = SystemTime::now();
     let mut freed = 0;
     let mut targets = gate_builds(gate_home);
     targets.push(tree_build(gate_home));
     for target in targets {
-        // TARGET/PROFILE/incremental, and TARGET/TRIPLE/PROFILE/incremental.
+        // TARGET/PROFILE, and TARGET/TRIPLE/PROFILE.
         for d in fs::read_dir(&target).into_iter().flatten().flatten() {
             let d = d.path();
-            freed += prune_incremental(&d.join("incremental"), now);
+            freed += prune_profile(&d, now);
             for p in fs::read_dir(&d).into_iter().flatten().flatten() {
-                freed += prune_incremental(&p.path().join("incremental"), now);
+                freed += prune_profile(&p.path(), now);
+            }
+        }
+    }
+    freed
+}
+
+/// One profile folder of a gate's build: its `incremental` pruned, and its
+/// `deps` of the crates `incremental` names (read before the prune).
+fn prune_profile(profile: &Path, now: SystemTime) -> u64 {
+    let inc = profile.join("incremental");
+    let names: BTreeSet<String> = fs::read_dir(&inc)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| e.path().is_dir())
+        .map(|e| crate_name(&e.file_name().to_string_lossy()).to_owned())
+        .filter(|n| n != "build_script_build")
+        .collect();
+    prune_incremental(&inc, now) + prune_deps(&profile.join("deps"), &names)
+}
+
+/// A `deps` entry's crate name and cargo's 16-digit hash:
+/// `libgp_cli-HASH.rlib`, `gp_cli-HASH.d` and the test binary `gp-HASH`
+/// each give theirs; a name not in `names` gives none.
+fn deps_entry<'a>(file: &'a str, names: &BTreeSet<String>) -> Option<(&'a str, &'a str)> {
+    let stem = file.split('.').next()?;
+    let (name, hash) = stem.rsplit_once('-')?;
+    if hash.len() != 16 || !hash.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return None;
+    }
+    if names.contains(name) {
+        return Some((name, hash));
+    }
+    let name = name.strip_prefix("lib")?;
+    names.contains(name).then_some((name, hash))
+}
+
+/// [`prune_gate_incremental`] on one `deps` folder: for each of the
+/// workspace's crates (`names`, which `incremental` holds; no dependency
+/// from crates.io builds there), the files of one hash whose newest is
+/// [`INCREMENTAL_SUPERSEDED`] older than the newest of another hash of the
+/// same name go. Cargo never removes them: each release's new gp-cli
+/// version gives gp, libgp_cli and each of gp-cli's test binaries a new
+/// hash, and the old ones stayed in the gate's two build folders, 15.4 GB
+/// with 17.9 GB free on 2026-11-27, after the incremental prune
+/// (trouble-the-home-s-disk-has-gb-free-under-gb-gp-18851b).
+fn prune_deps(deps: &Path, names: &BTreeSet<String>) -> u64 {
+    if names.is_empty() {
+        return 0;
+    }
+    // (name, hash) -> its newest time and its entries.
+    let mut builds: BTreeMap<(String, String), (Option<SystemTime>, Vec<PathBuf>)> =
+        BTreeMap::new();
+    for e in fs::read_dir(deps).into_iter().flatten().flatten() {
+        let file = e.file_name().to_string_lossy().into_owned();
+        let Some((name, hash)) = deps_entry(&file, names) else {
+            continue;
+        };
+        let at = e.metadata().and_then(|m| m.modified()).ok();
+        let b = builds
+            .entry((name.to_owned(), hash.to_owned()))
+            .or_default();
+        b.0 = b.0.max(at);
+        b.1.push(e.path());
+    }
+    let mut newest: BTreeMap<&str, SystemTime> = BTreeMap::new();
+    for ((name, _), (at, _)) in &builds {
+        if let Some(at) = *at {
+            let e = newest.entry(name.as_str()).or_insert(at);
+            *e = (*e).max(at);
+        }
+    }
+    let mut freed = 0;
+    for ((name, _), (at, paths)) in &builds {
+        let superseded = at.zip(newest.get(name.as_str())).is_some_and(|(at, top)| {
+            top.duration_since(at)
+                .is_ok_and(|d| d >= INCREMENTAL_SUPERSEDED)
+        });
+        if !superseded {
+            continue;
+        }
+        for p in paths {
+            if p.is_dir() {
+                freed += remove(p);
+            } else {
+                let b = size(p);
+                if fs::remove_file(p).is_ok() {
+                    freed += b;
+                }
             }
         }
     }
@@ -1047,6 +1137,92 @@ mod tests {
             );
         }
         assert_eq!(crate_name("gp_sound_bank-0yl8m1fq2a1tb"), "gp_sound_bank");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn the_gate_drops_an_older_versions_build_products_from_deps() {
+        let root = tmp("deps");
+        let g = root.join("gate");
+        let days = Duration::from_secs(2 * 24 * 60 * 60);
+        let minutes = Duration::from_secs(10 * 60);
+        let new = Duration::from_secs(60);
+        let profile = g.join("tool/target-tests/fastdev");
+        let inc = profile.join("incremental");
+        let deps = profile.join("deps");
+        // incremental names the workspace's crates: gp-cli's lib, its bin
+        // and a test, and a build script.
+        for k in [
+            "gp_cli-1abc",
+            "gp-2abc",
+            "author-3abc",
+            "build_script_build-4abc",
+        ] {
+            let s = inc.join(k).join("s-t-r-svh");
+            file_aged(&s.join("query-cache.bin"), 0, new);
+            fs::File::open(&s)
+                .unwrap()
+                .set_modified(SystemTime::now() - new)
+                .unwrap();
+        }
+        let old = "0123456789abcdef";
+        let cur = "fedcba9876543210";
+        let other = "00112233aabbccdd";
+        // gp of an older version, two days before the current one.
+        for f in [
+            format!("libgp_cli-{old}.rlib"),
+            format!("libgp_cli-{old}.rmeta"),
+            format!("gp_cli-{old}.d"),
+            format!("gp-{old}"),
+            format!("author-{old}"),
+        ] {
+            file_aged(&deps.join(f), 100, days);
+        }
+        // An older version's bin with a dSYM folder beside it.
+        file_aged(&deps.join(format!("gp-{old}.dSYM/Contents/x")), 7, days);
+        fs::File::open(deps.join(format!("gp-{old}.dSYM")))
+            .unwrap()
+            .set_modified(SystemTime::now() - days)
+            .unwrap();
+        // The current gp: lib and bin minutes apart, its test.
+        for (f, ago) in [
+            (format!("libgp_cli-{cur}.rlib"), new),
+            (format!("gp_cli-{cur}.d"), new),
+            (format!("gp-{cur}"), minutes),
+            (format!("gp_cli-{other}"), minutes),
+            (format!("author-{cur}"), new),
+        ] {
+            file_aged(&deps.join(f), 10, ago);
+        }
+        // A dependency from crates.io, two builds days apart (two feature
+        // sets): not the workspace's, so both stay; and a file with no hash.
+        file_aged(&deps.join(format!("libserde-{old}.rlib")), 5, days);
+        file_aged(&deps.join(format!("libserde-{cur}.rlib")), 5, new);
+        file_aged(&deps.join("gp_cli.d"), 3, days);
+        assert_eq!(prune_gate_incremental(&g), 5 * 100 + 7);
+        for f in [
+            format!("libgp_cli-{old}.rlib"),
+            format!("libgp_cli-{old}.rmeta"),
+            format!("gp_cli-{old}.d"),
+            format!("gp-{old}"),
+            format!("author-{old}"),
+            format!("gp-{old}.dSYM"),
+        ] {
+            assert!(!deps.join(&f).exists(), "{f}");
+        }
+        for f in [
+            format!("libgp_cli-{cur}.rlib"),
+            format!("gp_cli-{cur}.d"),
+            format!("gp-{cur}"),
+            format!("gp_cli-{other}"),
+            format!("author-{cur}"),
+            format!("libserde-{old}.rlib"),
+            format!("libserde-{cur}.rlib"),
+            "gp_cli.d".to_owned(),
+        ] {
+            assert!(deps.join(&f).exists(), "{f}");
+        }
+        assert_eq!(prune_gate_incremental(&g), 0, "nothing left to prune");
         let _ = fs::remove_dir_all(&root);
     }
 
