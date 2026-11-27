@@ -156,6 +156,96 @@ pub(crate) fn ended_loop_builds(home: &Path, live: &BTreeSet<String>) -> Vec<Pat
     out
 }
 
+/// An ended worker's worktree is kept this long after its worker's last
+/// word, for a look at what it did.
+const TREE_IDLE: Duration = CACHE_AGE;
+
+/// The worktrees (work/loop/trees/ID, crate::serve::runner's worktree) of
+/// workers that ended over [`TREE_IDLE`] ago: their record's state isn't a
+/// live one, their step isn't in `live`, and no card open, holding a yes or
+/// running names their step (a card's patch file is in its worker's tree).
+/// None was ever removed: on 2026-11-26 there were 725 of them, 22 GB, with
+/// the disk at 11.9 GB free (trouble-the-home-s-disk-has-gb-free-under-gb-
+/// gp-8546ab). A tree with no worker record is left alone; its branch stays.
+pub(crate) fn ended_worktrees(home: &Path, live: &BTreeSet<String>) -> Vec<PathBuf> {
+    let now = gp_mcp::asks::now_ms();
+    let idle_ms = TREE_IDLE.as_millis() as u64;
+    let cards: Vec<String> = gp_mcp::asks::all(home)
+        .iter()
+        .filter(|a| {
+            gp_mcp::asks::is_open(a, now)
+                || gp_mcp::asks::is_yes(a, now)
+                || a["state"] == serde_json::json!("running")
+        })
+        .map(|a| a.to_string())
+        .collect();
+    let trees = gp_mcp::steps::loop_dir(home).join("trees");
+    let mut out: Vec<PathBuf> = gp_mcp::steps::workers(home)
+        .iter()
+        .filter(|w| !gp_mcp::steps::LIVE.contains(&w["state"].as_str().unwrap_or("")))
+        .filter(|w| {
+            let last = w["last_ms"]
+                .as_u64()
+                .or(w["started_ms"].as_u64())
+                .unwrap_or(now);
+            now.saturating_sub(last) >= idle_ms
+        })
+        .filter_map(|w| w["step"]["id"].as_str())
+        .filter(|id| step_id_ok(id) && !live.contains(*id))
+        .filter(|id| !cards.iter().any(|c| c.contains(*id)))
+        .map(|id| trees.join(id))
+        .filter(|p| p.is_dir())
+        .collect();
+    out.sort();
+    out.dedup();
+    out
+}
+
+/// The git folder a worktree's `.git` file names, as `gitdir: DIR`.
+fn worktree_gitdir(tree: &Path) -> Option<PathBuf> {
+    let t = fs::read_to_string(tree.join(".git")).ok()?;
+    let d = t.lines().find_map(|l| l.strip_prefix("gitdir:"))?.trim();
+    Some(tree.join(d))
+}
+
+/// Removes worktree `tree` with `git worktree remove --force` in the
+/// checkout it was made from, else removes the folder and prunes the
+/// checkout's record of it; its branch stays. The bytes it held.
+fn remove_tree(tree: &Path) -> u64 {
+    // DIR is CHECKOUT/.git/worktrees/NAME.
+    let common = worktree_gitdir(tree)
+        .and_then(|d| Some(d.parent()?.parent()?.to_owned()))
+        .filter(|c| c.is_dir());
+    let n = size(tree);
+    let git = |c: &Path, args: &[&std::ffi::OsStr]| {
+        let _ = std::process::Command::new("git")
+            .arg("--git-dir")
+            .arg(c)
+            .args(args)
+            .output();
+    };
+    if let Some(c) = &common {
+        git(
+            c,
+            &[
+                "worktree".as_ref(),
+                "remove".as_ref(),
+                "--force".as_ref(),
+                tree.as_os_str(),
+            ],
+        );
+    }
+    if fs::symlink_metadata(tree).is_ok() {
+        if fs::remove_dir_all(tree).is_err() {
+            return 0;
+        }
+        if let Some(c) = &common {
+            git(c, &["worktree".as_ref(), "prune".as_ref()]);
+        }
+    }
+    n
+}
+
 /// The work/regenerate folders: the home's, and the gate's home's when
 /// `gate_cache` names it.
 fn regenerate_roots(home: &Path, gate_cache: Option<&Path>) -> Vec<PathBuf> {
@@ -238,8 +328,9 @@ fn remove_old_cache(dir: &Path) -> u64 {
 
 /// gp serve runner's hourly sweep: every work/regenerate folder still in
 /// use, the home's and the gate's home's, loses its cache files older
-/// than [`CACHE_AGE`], and the module kits no gp used in a day go
-/// ([`idle_module_kits`]). The bytes freed.
+/// than [`CACHE_AGE`], the module kits no gp used in a day go
+/// ([`idle_module_kits`]), and so do the worktrees of workers that ended a
+/// day ago ([`ended_worktrees`]). The bytes freed.
 pub(crate) fn clear_old_caches(home: &Path, gate_cache: Option<&Path>) -> u64 {
     let caches: u64 = regenerate_roots(home, gate_cache)
         .iter()
@@ -250,6 +341,10 @@ pub(crate) fn clear_old_caches(home: &Path, gate_cache: Option<&Path>) -> u64 {
         + idle_module_kits(home)
             .iter()
             .map(|k| remove(k))
+            .sum::<u64>()
+        + ended_worktrees(home, &BTreeSet::new())
+            .iter()
+            .map(|t| remove_tree(t))
             .sum::<u64>()
 }
 
@@ -465,7 +560,8 @@ fn prune_crate(krate: &Path, now: SystemTime) -> u64 {
 }
 
 /// What gp loop clean can clear, each with its bytes, biggest first:
-/// ended workers' builds, module kits no gp used in a day, idle
+/// ended workers' builds, the worktrees of workers that ended a day ago,
+/// module kits no gp used in a day, idle
 /// regenerate folders and the cache files
 /// older than a day of those in use (the home's, and with `gate_cache`
 /// the gate's home's), and with `gate_builds_of` (the gate's home) the
@@ -478,6 +574,7 @@ pub(crate) fn clearable(
 ) -> Vec<Clear> {
     let mut out: Vec<Clear> = ended_loop_builds(home, live)
         .into_iter()
+        .chain(ended_worktrees(home, live))
         .chain(idle_module_kits(home))
         .map(Clear::folder)
         .collect();
@@ -517,13 +614,18 @@ pub(crate) fn clean(
 ) -> (Vec<Clear>, Vec<String>) {
     let mut done = Vec::new();
     let mut skipped = Vec::new();
+    let trees = gp_mcp::steps::loop_dir(home).join("trees");
     for c in clearable(home, live, None, gate_cache) {
         if c.old_files {
             let bytes = remove_old_cache(&c.path);
             done.push(Clear { bytes, ..c });
             continue;
         }
-        let bytes = remove(&c.path);
+        let bytes = if c.path.parent() == Some(trees.as_path()) {
+            remove_tree(&c.path)
+        } else {
+            remove(&c.path)
+        };
         if c.path.exists() {
             skipped.push(format!("{}: couldn't be removed", c.path.display()));
         } else {
@@ -611,7 +713,7 @@ pub(crate) fn disk_line(home: &Path) -> Option<Result<String, String>> {
         .map(|c| c.line())
         .collect();
     Some(Err(format!(
-        "The home's disk has {} free, under {}. gp loop clean clears ended workers' builds, old regenerate folders, and module kits and score cache files older than a day (--gate also the gate's builds){}",
+        "The home's disk has {} free, under {}. gp loop clean clears ended workers' builds, old regenerate folders, and module kits, score cache files and ended workers' worktrees older than a day (--gate also the gate's builds){}",
         gb(free),
         gb(LOW_DISK),
         if top.is_empty() {
@@ -686,6 +788,92 @@ mod tests {
         assert!(!loop_build(&root, live).exists());
         assert_eq!(remove_loop_build(&home, "../main"), 0, "only a step id");
         assert!(root.join("main").exists());
+        let _ = fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn ended_workers_worktrees_clear_a_day_on_unless_a_card_waits() {
+        if std::env::var_os("GP_TARGET_DIR").is_some_and(|v| !v.is_empty()) {
+            return;
+        }
+        let home = tmp("trees");
+        let repo = home.join("repo");
+        fs::create_dir_all(&repo).unwrap();
+        let git = |dir: &Path, args: &[&str]| {
+            let o = std::process::Command::new("git")
+                .arg("-C")
+                .arg(dir)
+                .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(o.status.success(), "{args:?}: {o:?}");
+            String::from_utf8_lossy(&o.stdout).into_owned()
+        };
+        git(&repo, &["init", "-q", "-b", "main"]);
+        fs::write(repo.join("a.txt"), "a").unwrap();
+        git(&repo, &["add", "a.txt"]);
+        git(&repo, &["commit", "-q", "-m", "a"]);
+        let trees = gp_mcp::steps::loop_dir(&home).join("trees");
+        let workers = gp_mcp::steps::workers_dir(&home);
+        fs::create_dir_all(&workers).unwrap();
+        let now = gp_mcp::asks::now_ms();
+        let day = 24 * 60 * 60 * 1000;
+        let old = "s0000000000b1"; // ended two days ago: goes
+        let fresh = "s0000000000b2"; // ended an hour ago: kept
+        let carded = "s0000000000b3"; // its card waits: kept
+        let working = "s0000000000b4"; // still working: kept
+        for (id, state, last) in [
+            (old, "done", now - 2 * day),
+            (fresh, "done", now - 60 * 60 * 1000),
+            (carded, "done", now - 2 * day),
+            (working, "working", now - 2 * day),
+        ] {
+            let t = trees.join(id);
+            git(
+                &repo,
+                &[
+                    "worktree",
+                    "add",
+                    "-q",
+                    "-b",
+                    &format!("loop/{id}"),
+                    &t.to_string_lossy(),
+                    "main",
+                ],
+            );
+            fs::write(t.join("p.patch"), vec![0u8; 500]).unwrap();
+            let w = serde_json::json!({"state": state, "last_ms": last, "step": {"id": id}});
+            fs::write(workers.join(format!("{id}.json")), w.to_string()).unwrap();
+        }
+        // No record: left alone.
+        fs::create_dir_all(trees.join("s0000000000b5")).unwrap();
+        let asks = gp_mcp::asks::dir(&home);
+        fs::create_dir_all(&asks).unwrap();
+        let card = serde_json::json!({"id": "c1", "state": "open", "made_ms": now,
+            "argv": ["tool", "gate", "--patch", trees.join(carded).join("p.patch")]});
+        fs::write(asks.join("c1.json"), card.to_string()).unwrap();
+        assert_eq!(
+            ended_worktrees(&home, &BTreeSet::new()),
+            vec![trees.join(old)]
+        );
+        let (done, skipped) = clean(&home, &BTreeSet::new(), None, None);
+        assert!(skipped.is_empty(), "{skipped:?}");
+        assert_eq!(done.len(), 1, "{done:?}");
+        assert_eq!(done[0].path, trees.join(old));
+        assert!(done[0].bytes >= 500, "{done:?}");
+        assert!(!trees.join(old).exists());
+        for id in [fresh, carded, working, "s0000000000b5"] {
+            assert!(trees.join(id).exists(), "{id} kept");
+        }
+        // The checkout forgot the worktree; its branch stays.
+        let list = git(&repo, &["worktree", "list", "--porcelain"]);
+        assert!(!list.contains(old), "{list}");
+        assert!(list.contains(fresh), "{list}");
+        git(
+            &repo,
+            &["rev-parse", "--verify", &format!("refs/heads/loop/{old}")],
+        );
         let _ = fs::remove_dir_all(&home);
     }
 

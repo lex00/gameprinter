@@ -39,8 +39,11 @@ pub enum LoopCmd {
     /// target ($GP_HOME/work/target/loop-STEP, or under $GP_TARGET_DIR)
     /// and the folders of $GP_HOME/work/regenerate no run touched in six
     /// hours, and of those still in use (the gate's home's too) the score
-    /// cache files older than a day, and print what each freed. A live
-    /// worker's build is kept.
+    /// cache files older than a day, and the worktrees
+    /// ($GP_HOME/work/loop/trees/STEP) of workers that ended a day ago
+    /// with no card open, holding a yes or running on their step (their
+    /// branches stay), and print what each freed. A live worker's build
+    /// and worktree are kept.
     /// gp serve's runner removes a worker's build itself when its step
     /// ends; this is for what is left (gp loop health says PROBLEM under
     /// 20 GB free).
