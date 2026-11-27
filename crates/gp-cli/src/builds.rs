@@ -375,13 +375,18 @@ pub(crate) fn clear_old_caches(home: &Path, gate_cache: Option<&Path>) -> u64 {
             .sum::<u64>()
 }
 
-/// The build folders (`home/work/target`) of the scratch homes of replay
-/// trials (crate::replay, work/loop/replay/runs/ROW/TRIAL/home) whose worker
-/// ended: no worker record there holds its step. A trial kept its worker's
-/// cargo target, 3 to 4 GB, after it ended: on 2026-11-27 30 trials held
-/// 114 GB of the home's 260 GB, with the disk at 15.6 GB free
-/// (trouble-the-home-s-disk-has-gb-free-under-gb-gp-18851b). The trial's
-/// brief, log, patch and scratch home's cards stay.
+/// The build folders (`home/work/target`, and `home/work/module-build`, the
+/// game's and the self-check kit's wasm builds) of the scratch homes of
+/// replay trials (crate::replay, work/loop/replay/runs/ROW/TRIAL/home) that
+/// ended: the trial's tree (TRIAL/tree, which it removes as it ends) is
+/// gone, or no worker record there holds its step. A trial kept its
+/// worker's cargo target, 3 to 4 GB, after it ended: on 2026-11-27 30
+/// trials held 114 GB of the home's 260 GB, with the disk at 15.6 GB free
+/// (trouble-the-home-s-disk-has-gb-free-under-gb-gp-18851b). Its record
+/// alone can't tell: a trial's worker record names the replay process,
+/// which runs every trial of a replay in turn for hours, and a trial of a
+/// gp before it marked its record done as it ended says `working` for
+/// good. The trial's brief, log, patch and scratch home's cards stay.
 pub(crate) fn ended_replay_builds(home: &Path) -> Vec<PathBuf> {
     let runs = crate::replay::dir(home).join("runs");
     let dirs = |p: &Path| -> Vec<PathBuf> {
@@ -396,13 +401,16 @@ pub(crate) fn ended_replay_builds(home: &Path) -> Vec<PathBuf> {
     let mut out: Vec<PathBuf> = dirs(&runs)
         .iter()
         .flat_map(|row| dirs(row))
-        .map(|trial| trial.join("home"))
-        .filter(|scratch| {
-            !gp_mcp::steps::workers(scratch)
-                .iter()
-                .any(gp_mcp::steps::holds)
+        .filter(|trial| {
+            !trial.join("tree").exists()
+                || !gp_mcp::steps::workers(&trial.join("home"))
+                    .iter()
+                    .any(gp_mcp::steps::holds)
         })
-        .map(|scratch| scratch.join("work").join("target"))
+        .flat_map(|trial| {
+            let work = trial.join("home").join("work");
+            [work.join("target"), work.join("module-build")]
+        })
         .filter(|t| t.is_dir())
         .collect();
     out.sort();
@@ -1439,7 +1447,12 @@ mod tests {
         let root = tmp("replay");
         let home = root.join("home");
         let runs = crate::replay::dir(&home).join("runs").join("rooftop-row");
-        let trial = |stamp: &str, pid: u32| {
+        // A trial's record names the replay process; its tree is there
+        // while it runs.
+        let trial = |stamp: &str, pid: u32, tree: bool| {
+            if tree {
+                fs::create_dir_all(runs.join(stamp).join("tree")).unwrap();
+            }
             let scratch = runs.join(stamp).join("home");
             let w = gp_mcp::steps::workers_dir(&scratch);
             fs::create_dir_all(&w).unwrap();
@@ -1459,24 +1472,40 @@ mod tests {
             fs::write(runs.join(stamp).join("1.log"), "log").unwrap();
             t
         };
-        // A trial whose replay process is gone, and one still running (this
-        // test's own process).
-        let ended = trial("1-1", 999_999_999);
-        let running = trial("1-2", std::process::id());
+        // A trial whose replay process is gone, one still running (this
+        // test's own process, its tree there), and one that ended while
+        // the replay runs on (its tree gone, its record still `working`, as
+        // every trial's was on 2026-11-27), with its module build.
+        let ended = trial("1-1", 999_999_999, true);
+        let running = trial("1-2", std::process::id(), true);
+        let left = trial("1-3", std::process::id(), false);
+        let modules = runs.join("1-3").join("home/work/module-build");
+        file_aged(
+            &modules.join("g").join("target").join("g.wasm"),
+            300,
+            Duration::from_secs(60),
+        );
         let none = BTreeSet::new();
-        assert_eq!(ended_replay_builds(&home), vec![ended.clone()]);
+        assert_eq!(
+            ended_replay_builds(&home),
+            vec![ended.clone(), modules.clone(), left.clone()]
+        );
         assert_eq!(
             clearable(&home, &none, None, None),
-            vec![Clear::of(ended.clone(), 800)]
+            vec![
+                Clear::of(ended.clone(), 800),
+                Clear::of(left.clone(), 800),
+                Clear::of(modules.clone(), 300),
+            ]
         );
         let (done, skipped) = clean(&home, &none, None, None);
         assert!(skipped.is_empty(), "{skipped:?}");
-        assert_eq!(done, vec![Clear::of(ended.clone(), 800)]);
-        assert!(!ended.exists());
+        assert_eq!(done.iter().map(|c| c.bytes).sum::<u64>(), 1900);
+        assert!(!ended.exists() && !left.exists() && !modules.exists());
         assert!(running.exists(), "a running trial keeps its build");
         assert!(runs.join("1-1").join("1.log").exists(), "the log stays");
         // The runner's hourly sweep clears one left after its trial ended.
-        let again = trial("2-1", 999_999_999);
+        let again = trial("2-1", 999_999_999, false);
         assert_eq!(clear_old_caches(&home, None), 800);
         assert!(!again.exists());
         assert!(running.exists());

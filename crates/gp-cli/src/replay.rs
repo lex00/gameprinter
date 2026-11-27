@@ -560,12 +560,24 @@ pub(crate) fn trial(rig: &Rig, task: &Value, label: &str, n: u32, stamp: &str) -
         }))
     })();
     // Whatever happened, the trial's tree and branch go, and its worker's
-    // cargo target (3 to 4 GB a trial: crate::builds::ended_replay_builds).
+    // cargo target (3 to 4 GB a trial: crate::builds::ended_replay_builds)
+    // and module builds, and its record no longer holds its step: its pid
+    // is this process, which goes on to the next trial.
     let _ = fs::remove_dir_all(&tree);
     let _ = fs::remove_dir_all(
         crate::builds::target_root(&scratch).join(crate::worker::branch_folder(&branch)),
     );
     let _ = fs::remove_dir_all(scratch.join("work").join("target"));
+    let _ = fs::remove_dir_all(scratch.join("work").join("module-build"));
+    let record = gp_mcp::steps::workers_dir(&scratch).join(format!("{id}.json"));
+    if let Some(mut rec) = fs::read(&record)
+        .ok()
+        .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
+    {
+        rec["state"] = json!("done");
+        rec["ended_ms"] = json!(gp_mcp::asks::now_ms());
+        let _ = fs::write(&record, rec.to_string());
+    }
     let _ = git(repo, &["branch", "-D", &branch]);
     let line = ran?;
     crate::worker_runs::append(&results_file(&rig.home), &line);
@@ -1016,6 +1028,8 @@ mod tests {
                 "echo \"$GP_HOME $GP_STEP $(pwd)\" > {}\n\
                  mkdir -p \"$GP_HOME/work/target/replay-$GP_STEP/fastdev\"\n\
                  echo built > \"$GP_HOME/work/target/replay-$GP_STEP/fastdev/gp\"\n\
+                 mkdir -p \"$GP_HOME/work/module-build/g/target\"\n\
+                 echo built > \"$GP_HOME/work/module-build/g/target/g.wasm\"\n\
                  cat > /dev/null\n",
                 seen.display()
             ),
@@ -1050,6 +1064,19 @@ mod tests {
             !run_dir.join("home").join("work").join("target").exists(),
             "the worker's build is removed"
         );
+        assert!(
+            !run_dir
+                .join("home")
+                .join("work")
+                .join("module-build")
+                .exists(),
+            "its module builds are removed"
+        );
+        // Its record names this process, which runs on: it says done.
+        let recs = gp_mcp::steps::workers(&run_dir.join("home"));
+        assert_eq!(recs.len(), 1);
+        assert_eq!(recs[0]["state"], "done");
+        assert!(!gp_mcp::steps::holds(&recs[0]));
         assert!(run_dir.join("home").join("mechanics").is_dir());
         assert!(run_dir.join("brief.txt").is_file() && run_dir.join("1.log").is_file());
         assert_eq!(
