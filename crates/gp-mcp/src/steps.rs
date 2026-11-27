@@ -67,7 +67,23 @@ pub struct Runner {
     /// the cards were answered in under a minute). A game's change still
     /// waits for its card, since only a person judges a look.
     pub land_tools: bool,
+    /// The most turns one run of a `claude` worker takes (`--max-turns`);
+    /// 0 for no cap. A run past it is cut off and counts as a failed try.
+    pub max_turns: u32,
+    /// The most one run of a `claude` worker spends, in dollars
+    /// (`--max-budget-usd`); 0 for no cap.
+    pub max_spend_usd: f64,
+    /// The runner starts a worker on a quest-log row only when the row
+    /// has a target or says what would measure it (`measure_needed`). On
+    /// by default; off starts every open row, as before 2026-11-26.
+    pub measure_required: bool,
 }
+
+/// The turn cap when loop.toml names none: above the largest run in the
+/// logs up to 2026-11-26 (264 turns).
+pub const WORKER_MAX_TURNS: u32 = 300;
+/// The spend cap of one run, in dollars, when loop.toml names none.
+pub const WORKER_MAX_SPEND_USD: f64 = 30.0;
 
 /// The model a worker runs on when loop.toml names none.
 pub const WORKER_MODEL: &str = "opus";
@@ -83,6 +99,9 @@ impl Default for Runner {
             spending: String::new(),
             model: WORKER_MODEL.into(),
             effort: WORKER_EFFORT.into(),
+            max_turns: WORKER_MAX_TURNS,
+            max_spend_usd: WORKER_MAX_SPEND_USD,
+            measure_required: true,
         }
     }
 }
@@ -545,6 +564,9 @@ mod tests {
                 model: "sonnet".into(),
                 effort: "medium".into(),
                 land_tools: true,
+                max_turns: 120,
+                max_spend_usd: 12.5,
+                measure_required: false,
             },
             games: vec!["rooftop".into()],
             hold: vec!["hilltop".into()],

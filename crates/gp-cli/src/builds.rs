@@ -90,7 +90,7 @@ pub(crate) fn loop_build(root: &Path, id: &str) -> PathBuf {
     root.join(crate::worker::branch_folder(&format!("loop/{id}")))
 }
 
-fn step_id_ok(id: &str) -> bool {
+pub(crate) fn step_id_ok(id: &str) -> bool {
     id.len() == 13 && id.starts_with('s') && id[1..].bytes().all(|b| b.is_ascii_hexdigit())
 }
 

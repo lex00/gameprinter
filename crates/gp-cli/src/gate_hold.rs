@@ -63,6 +63,58 @@ fn steps_line(line: &Value) {
     }
 }
 
+/// The variable that says where a gate's patch came from: gp serve's
+/// runner sets it when it runs a card's yes (`worker loop-STEP` for a card
+/// a worker raised, `card ID` for any other).
+pub(crate) const LANDING_FROM_ENV: &str = "GP_LANDING_FROM";
+
+/// Where this gate's patch came from ([`LANDING_FROM_ENV`]); `hand` for a
+/// gate run with no card, from a terminal.
+pub(crate) fn landing_from() -> String {
+    std::env::var(LANDING_FROM_ENV)
+        .ok()
+        .map(|f| f.trim().to_owned())
+        .filter(|f| !f.is_empty())
+        .unwrap_or_else(|| "hand".to_owned())
+}
+
+/// The gate log's line for a landing: the commit and where each patch of
+/// it came from, so the cost of a landing and the share of landings made
+/// by workers can be counted (issue 50, crate::worker_runs).
+pub(crate) fn landed_line(commit: &str, from: &[String], at_ms: u64) -> Value {
+    json!({
+        "at": crate::open::now_rfc3339(),
+        "at_ms": at_ms,
+        "run": std::process::id(),
+        "landed": commit,
+        "from": from,
+    })
+}
+
+/// Writes [`landed_line`] to the steps file of the gate this process is.
+pub(crate) fn landed(commit: &str, from: &[String]) {
+    steps_line(&landed_line(commit, from, gp_mcp::asks::now_ms()));
+}
+
+/// Where the patches of this gate's batch came from, when it took other
+/// gates' patches in ([`set_batch_from`]).
+static BATCH_FROM: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+/// Says where each patch of this gate's batch came from, its own first.
+pub(crate) fn set_batch_from(from: Vec<String>) {
+    *BATCH_FROM.lock().unwrap_or_else(|e| e.into_inner()) = from;
+}
+
+/// [`landed`] for this gate's batch as [`set_batch_from`] named it; a gate
+/// that named none landed its own patch alone.
+pub(crate) fn landed_batch(commit: &str) {
+    let mut from = BATCH_FROM.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    if from.is_empty() {
+        from.push(landing_from());
+    }
+    landed(commit, &from);
+}
+
 /// Logs a step of the gate this process is: what it was, how long it took
 /// and whether it passed, with numbers of its own (`more`: clips scored,
 /// what was reused). The watch reads the file's time, so a gate that logs

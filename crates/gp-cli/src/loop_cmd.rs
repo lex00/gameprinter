@@ -15,6 +15,8 @@ use serde_json::{Value, json};
 
 use crate::Outcome;
 
+// Parsed once a run: gp loop set's many flags make it far the largest.
+#[allow(clippy::large_enum_variant)]
 #[derive(Subcommand)]
 pub enum LoopCmd {
     /// The open steps of every game and copy in the home (docs/loop.md):
@@ -29,8 +31,10 @@ pub enum LoopCmd {
     /// command, no halt, the yes cards taken and none failing, no row
     /// marked working with no worker on it, the games checkout clean
     /// (local changes block every landing), 20 GB free on the home's disk
-    /// (else the biggest folders gp loop clean clears), and, when nothing runs, what
-    /// the loop waits on. Each problem says how to fix it. Then each game's
+    /// (else the biggest folders gp loop clean clears), the workers' trees and
+    /// branches left, how the last day's workers ended, the open rows with no
+    /// target, whether the installed agent takes the flags the runner gives a
+    /// worker, and, when nothing runs, what the loop waits on. Each problem says how to fix it. Then each game's
     /// scoreboard (GAME/scoreboard.toml's lines: the game state,
     /// background and sprites matched, and how each moved), as gp serve
     /// last measured it. Exits 1 on a problem. Reads only.
@@ -43,7 +47,8 @@ pub enum LoopCmd {
     /// ($GP_HOME/work/loop/trees/STEP) of workers that ended a day ago
     /// with no card open, holding a yes or running on their step (their
     /// branches stay), and print what each freed. A live worker's build
-    /// and worktree are kept.
+    /// and worktree are kept. The branch (loop/STEP) of a worktree that
+    /// is gone is deleted too, unless a card of its step still waits.
     /// gp serve's runner removes a worker's build itself when its step
     /// ends; this is for what is left (gp loop health says PROBLEM under
     /// 20 GB free).
@@ -58,6 +63,57 @@ pub enum LoopCmd {
         /// List what would be cleared, with sizes, and remove nothing.
         #[arg(long)]
         dry_run: bool,
+    },
+    /// What the loop's workers cost and did over the last days: runs,
+    /// landings (by workers and by hand), the cost of a worker's landing,
+    /// the cost of the runs that landed nothing, the cache hit rate,
+    /// refused tool calls and turns a run, and the median time a card
+    /// waited for the person against the median time a worker worked, in
+    /// all and for each day. Read from the runs ledger gp serve's runner
+    /// writes as each worker's try ends ($GP_HOME/work/loop/runs.jsonl,
+    /// from each log's result line), the gates' landed lines and the
+    /// cards. It records each whole day's numbers in the metrics store
+    /// (loop.workers.NAME), so a change to the brief, the tools or the
+    /// model can be compared before and after. Reads only, but for those
+    /// metrics.
+    Stats {
+        /// How many days back from now.
+        #[arg(long, default_value_t = 7)]
+        days: u64,
+    },
+    /// Score the workers by running one again on a finished row
+    /// (docs/worker-evals.md). --pick N makes the replay set: N archived
+    /// rows with a landed commit, spread across tool, page and model
+    /// fixes, each with the commit before its landing as its base. ROW
+    /// (GAME/ROW, or a row's name) runs its trials: a worker with today's
+    /// brief and tools in a fresh worktree of the base, in a scratch home
+    /// of its own, then the gate's dry run on what it made. Nothing lands,
+    /// and the trial's worktree and branch are removed. --report prints
+    /// each label's pass rate, the share of tasks that pass every trial,
+    /// and the mean turns, cost and refusals. With no row it lists the
+    /// set. It starts paid workers: only the person runs it.
+    Replay {
+        /// The task: GAME/ROW, or the row's name when one task has it.
+        row: Option<String>,
+        /// Make the replay set from the archives: this many tasks.
+        #[arg(long, value_name = "N", conflicts_with_all = ["row", "all", "report"])]
+        pick: Option<usize>,
+        /// Run every task of the set.
+        #[arg(long, conflicts_with = "row")]
+        all: bool,
+        /// How many times each task is run.
+        #[arg(long, default_value_t = 2)]
+        trials: u32,
+        /// The name the results are filed under ("before", "three tools"):
+        /// run the set under one label on each side of a change.
+        #[arg(long, default_value = "unnamed")]
+        label: String,
+        /// Print every label's score and run nothing.
+        #[arg(long, conflicts_with_all = ["row", "all"])]
+        report: bool,
+        /// The worker's command (default: $GP_CLIP_AGENT, else claude).
+        #[arg(long)]
+        agent: Option<String>,
     },
     /// Set aside the games checkout's local changes under GAME/ (the files
     /// gp loop health names under its problem), so a landing there can go
@@ -90,7 +146,7 @@ pub enum LoopCmd {
         #[arg(long)]
         max_workers: Option<u32>,
         /// A note on spending the page shows beside the runner ("about 5
-        /// dollars a day"); the runner keeps no count of money yet.
+        /// dollars a day"); gp loop stats counts what the workers cost.
         #[arg(long)]
         spending: Option<String>,
         /// The model every claude worker runs on (default opus); "" leaves
@@ -101,6 +157,21 @@ pub enum LoopCmd {
         /// own.
         #[arg(long, value_parser = ["", "low", "medium", "high", "xhigh", "max"])]
         effort: Option<String>,
+        /// The most turns one run of a claude worker takes (default 300);
+        /// 0 for no cap. A run past it is cut off and is a failed try.
+        #[arg(long)]
+        max_turns: Option<u32>,
+        /// The most one run of a claude worker spends, in dollars (default
+        /// 30); 0 for no cap.
+        #[arg(long, value_name = "DOLLARS")]
+        max_spend: Option<f64>,
+        /// on (the default): the runner starts a worker on a quest-log row
+        /// only when the row has a target or says what would measure it
+        /// (gp mechanic queue GAME ROW --target or --measure-needed); gp
+        /// loop health counts the rows that have neither. off: every open
+        /// row gets a worker.
+        #[arg(long, value_parser = ["on", "off"])]
+        measure_required: Option<String>,
         /// The games whose quest-log items the loop works on, by name,
         /// comma-separated ("rooftop"); "all" for every game's.
         #[arg(long)]
@@ -233,8 +304,28 @@ fn hold_text(s: &gp_mcp::steps::Settings) -> Option<String> {
 
 fn settings_text(s: &gp_mcp::steps::Settings) -> String {
     let w = |b: bool| if b { "on" } else { "off" };
+    let cap = |n: f64, unit: &str| {
+        if n > 0.0 {
+            format!("{n} {unit}")
+        } else {
+            format!("no cap on {unit}")
+        }
+    };
+    let limits = format!(
+        "\na worker's run: {}, {}",
+        cap(f64::from(s.runner.max_turns), "turns"),
+        cap(s.runner.max_spend_usd, "dollars"),
+    );
+    let limits = format!(
+        "{limits}\na row gets a worker {}",
+        if s.runner.measure_required {
+            "only with a target or words for what would measure it"
+        } else {
+            "with or without a measure"
+        }
+    );
     format!(
-        "steps required by gp_run: {}\nquest-log items of: {}{}\nrunner: {}, at most {} workers, model {}, effort {}{}",
+        "steps required by gp_run: {}\nquest-log items of: {}{}\nrunner: {}, at most {} workers, model {}, effort {}{}{limits}",
         w(s.steps_required),
         if s.games.is_empty() {
             "every game".to_owned()
@@ -379,7 +470,32 @@ pub(crate) fn run(cmd: &LoopCmd, paths: &gp_evidence::Paths) -> Result<Outcome> 
             if let Some(repo) = crate::repo::built().filter(|r| r.join(".git").exists()) {
                 crate::github_checks::refresh(&paths.home, &repo);
             }
-            let v = health(paths);
+            let mut v = health(paths);
+            // Read by hand only (it starts the agent's program once): does
+            // the installed agent take the flags the runner gives a worker?
+            // An agent that dropped one fails every worker at its start.
+            let agent = std::env::var("GP_CLIP_AGENT").unwrap_or_else(|_| "claude".to_owned());
+            let agent = agent.split_whitespace().next().unwrap_or("").to_owned();
+            if crate::serve::clip_agent::is_claude(&agent)
+                && let Some(program) = crate::serve::clip_agent::find_program(&agent)
+            {
+                let line = match crate::serve::runner::agent_refuses(&program) {
+                    Some(flag) => {
+                        v["problems"] = json!(v["problems"].as_u64().unwrap_or(0) + 1);
+                        format!(
+                            "PROBLEM  {} doesn't take {flag}, which the runner gives every worker: no worker can start until the runner's flags and the agent agree (serve/runner.rs, claude_args).",
+                            program.display()
+                        )
+                    }
+                    None => format!(
+                        "OK       {} takes the flags the runner gives a worker",
+                        program.display()
+                    ),
+                };
+                if let Some(l) = v["lines"].as_array_mut() {
+                    l.push(json!(line));
+                }
+            }
             let text = v["lines"]
                 .as_array()
                 .into_iter()
@@ -417,7 +533,79 @@ pub(crate) fn run(cmd: &LoopCmd, paths: &gp_evidence::Paths) -> Result<Outcome> 
             } else {
                 crate::builds::clean(home, &none, g, cache.as_deref())
             };
-            Ok(clean_outcome(home, *dry_run, &done, &skipped))
+            let mut o = clean_outcome(home, *dry_run, &done, &skipped);
+            // The branches (loop/STEP) of the worktrees cleared, now or
+            // before: a branch stays while its tree does (crate::trees).
+            let branches = crate::trees::prune_branches(
+                home,
+                &tree_repos(home, None),
+                gp_mcp::asks::now_ms(),
+                *dry_run,
+            );
+            if let Some(l) = crate::trees::words(&branches, *dry_run) {
+                o.text = format!("{}\n{l}", o.text);
+            }
+            o.json["branches"] = json!(branches);
+            Ok(o)
+        }
+        LoopCmd::Replay {
+            row,
+            pick,
+            all,
+            trials,
+            label,
+            report,
+            agent,
+        } => crate::replay::run(
+            &crate::replay::Ask {
+                row: row.as_deref(),
+                pick: *pick,
+                all: *all,
+                trials: *trials,
+                label,
+                report: *report,
+                agent: agent.as_deref(),
+            },
+            paths,
+        ),
+        LoopCmd::Stats { days } => {
+            let home = &paths.home;
+            let runs = crate::worker_runs::lines_of(&crate::worker_runs::ledger(home));
+            // The gates' logs: the model gate's and the tool gate's.
+            let logs: Vec<std::path::PathBuf> = crate::gate::gate_home(None)
+                .ok()
+                .map(|g| {
+                    vec![
+                        crate::gate::steps_file(&g),
+                        g.join("tool").join("steps.jsonl"),
+                    ]
+                })
+                .unwrap_or_default();
+            let landings = crate::worker_runs::landings(&logs);
+            let now = gp_mcp::asks::now_ms();
+            let v =
+                crate::worker_runs::report(&runs, &landings, &gp_mcp::asks::all(home), *days, now);
+            // Each whole day's numbers go in the metrics store; today's
+            // are not whole yet.
+            let today = crate::worker_runs::day_of(now);
+            if let Some(day) = v["per_day"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .rfind(|d| d["day"] != json!(today.as_str()))
+            {
+                for (name, value, unit) in crate::worker_runs::metrics_of(day) {
+                    crate::runrec::metric(name, value, unit);
+                }
+            }
+            let text = v["lines"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+                .collect::<Vec<_>>()
+                .join("\n");
+            Ok(Outcome::ok(v, text))
         }
         LoopCmd::SetAside { game, dry_run } => {
             let games = crate::roms_cmd::games_dir(None)
@@ -439,6 +627,9 @@ pub(crate) fn run(cmd: &LoopCmd, paths: &gp_evidence::Paths) -> Result<Outcome> 
             spending,
             model,
             effort,
+            max_turns,
+            max_spend,
+            measure_required,
             games,
             hold,
             go_on,
@@ -485,6 +676,18 @@ pub(crate) fn run(cmd: &LoopCmd, paths: &gp_evidence::Paths) -> Result<Outcome> 
             if let Some(e) = effort {
                 s.runner.effort = e.clone();
             }
+            if let Some(n) = max_turns {
+                s.runner.max_turns = *n;
+            }
+            if let Some(d) = max_spend {
+                if !d.is_finite() || *d < 0.0 {
+                    anyhow::bail!("--max-spend is dollars, 0 or more (got {d})");
+                }
+                s.runner.max_spend_usd = *d;
+            }
+            if let Some(v) = measure_required {
+                s.runner.measure_required = v == "on";
+            }
             if let Some(g) = games {
                 s.games = if g.trim() == "all" {
                     Vec::new()
@@ -503,7 +706,10 @@ pub(crate) fn run(cmd: &LoopCmd, paths: &gp_evidence::Paths) -> Result<Outcome> 
                 || max_workers.is_some()
                 || spending.is_some()
                 || model.is_some()
-                || effort.is_some();
+                || effort.is_some()
+                || max_turns.is_some()
+                || max_spend.is_some()
+                || measure_required.is_some();
             if changed {
                 gp_mcp::steps::save(home, &s).map_err(anyhow::Error::msg)?;
             }
@@ -547,6 +753,28 @@ pub(crate) fn run(cmd: &LoopCmd, paths: &gp_evidence::Paths) -> Result<Outcome> 
             Ok(Outcome::ok(v, text))
         }
     }
+}
+
+/// The checkouts that hold workers' branches: the games checkout and the
+/// person's gameprinter checkout (the one gp was built from is a worktree
+/// of it).
+fn tree_repos(
+    home: &std::path::Path,
+    games_dir: Option<&std::path::Path>,
+) -> Vec<std::path::PathBuf> {
+    let mut repos = Vec::new();
+    // A test's home in the temp folder has no checkout of its own: the
+    // person's are not counted, or cleaned, for it.
+    if !crate::trouble::live_home(home) {
+        return repos;
+    }
+    if let Some(g) = crate::roms_cmd::games_dir(games_dir) {
+        repos.push(g);
+    }
+    if let Some(r) = crate::repo::built().filter(|r| r.join(".git").exists()) {
+        repos.push(crate::serve::runner::tools_checkout(&r));
+    }
+    repos
 }
 
 /// gp loop clean's outcome: what it cleared (or would), what it skipped
@@ -963,6 +1191,7 @@ fn checks(paths: &gp_evidence::Paths, games_dir: Option<&std::path::Path>) -> Va
         .collect();
     let games = crate::roms_cmd::games_dir(games_dir);
     let mut asking = Vec::new();
+    let (mut no_target, mut no_measure) = (0usize, Vec::<String>::new());
     for g in games
         .as_deref()
         .map(crate::next::games_in)
@@ -993,6 +1222,16 @@ fn checks(paths: &gp_evidence::Paths, games_dir: Option<&std::path::Path>) -> Va
             }
             if r["status"] == json!("asking you") {
                 asking.push(format!("{g}/{row}"));
+            }
+            // Open rows with no target, and of those the ones with no
+            // words for a measure either, which get no worker (issue 55).
+            if r["status"] != json!("done") && !waits {
+                if !r["target"].as_str().is_some_and(|t| !t.trim().is_empty()) {
+                    no_target += 1;
+                }
+                if crate::steps::no_measure(&r) {
+                    no_measure.push(format!("{g}/{row}"));
+                }
             }
         }
         // Every clip at the bars: a game is published only when they all
@@ -1060,6 +1299,9 @@ fn checks(paths: &gp_evidence::Paths, games_dir: Option<&std::path::Path>) -> Va
             }
         }
     }
+    if let Some(l) = measure_line(no_target, &no_measure, s.runner.measure_required) {
+        lines.push(l);
+    }
     // Each game's port run, on the gp it started on (crate::port_run).
     for r in crate::port_run::all(home) {
         ok(&mut lines, crate::port_run::says(home, &r));
@@ -1069,6 +1311,12 @@ fn checks(paths: &gp_evidence::Paths, games_dir: Option<&std::path::Path>) -> Va
         Some(Ok(l)) => ok(&mut lines, l),
         Some(Err(l)) => bad(&mut lines, &mut problems, l),
         None => {}
+    }
+    // The workers' trees and branches left (crate::trees): the runner
+    // removes each once its row closes or its card settles.
+    match crate::trees::health_line(home, &tree_repos(home, games_dir)) {
+        Ok(l) => ok(&mut lines, l),
+        Err(l) => bad(&mut lines, &mut problems, l),
     }
     // The gates' locks (the model gate's and the tool gate's): who holds
     // each, and a holder that logs no step or names no pid
@@ -1092,6 +1340,10 @@ fn checks(paths: &gp_evidence::Paths, games_dir: Option<&std::path::Path>) -> Va
             }
         }
     }
+    // How the workers of the last day ended, each ending its own state.
+    if let Some(l) = ended_line(&workers, now) {
+        lines.push(l);
+    }
     let at_work = workers.iter().filter(|w| gp_mcp::steps::holds(w)).count();
     if at_work > 0 {
         ok(&mut lines, format!("{at_work} worker(s) at work"));
@@ -1101,6 +1353,62 @@ fn checks(paths: &gp_evidence::Paths, games_dir: Option<&std::path::Path>) -> Va
         lines.push("IDLE     No worker at work and nothing waits on the person: the quest log has no open item".into());
     }
     json!({"lines": lines, "problems": problems})
+}
+
+/// gp loop health's count of the open rows with no target (`no_target`),
+/// and of those the rows with no words for what would measure them either
+/// (`no_measure`, by name), which the runner starts no worker on while
+/// `required`; None when every open row has a target.
+fn measure_line(no_target: usize, no_measure: &[String], required: bool) -> Option<String> {
+    if no_target == 0 && no_measure.is_empty() {
+        return None;
+    }
+    let mut l = format!("MEASURE  {no_target} open row(s) have no target");
+    if !no_measure.is_empty() {
+        l.push_str(&format!(
+            "; {} of them don't say what would measure them either{}: {}. Give each a target (gp mechanic queue GAME ROW --target \"LINE sprites at least N of M\") or say what would measure it (--measure-needed WORDS)",
+            no_measure.len(),
+            if required {
+                ", so the runner starts no worker on them"
+            } else {
+                " (the runner starts them all the same: gp loop set --measure-required on holds them)"
+            },
+            no_measure.join(", ")
+        ));
+    }
+    Some(l)
+}
+
+/// gp loop health's line on how the workers that ended in the last day
+/// ended, by state (done, cut off by a cap, errored, no result line in
+/// the log, stopped); None when none ended.
+fn ended_line(workers: &[Value], now: u64) -> Option<String> {
+    let mut by: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
+    for w in workers {
+        let at = w["last_ms"]
+            .as_u64()
+            .or_else(|| w["started_ms"].as_u64())
+            .unwrap_or(0);
+        let state = w["state"].as_str().unwrap_or("");
+        if gp_mcp::steps::LIVE.contains(&state)
+            || state.is_empty()
+            || now.saturating_sub(at) >= 24 * 3_600_000
+        {
+            continue;
+        }
+        *by.entry(state).or_default() += 1;
+    }
+    if by.is_empty() {
+        return None;
+    }
+    let said: Vec<String> = ["done", "cut off", "errored", "no result", "stopped"]
+        .iter()
+        .filter_map(|s| by.get(s).map(|n| format!("{n} {s}")))
+        .collect();
+    Some(format!(
+        "ENDED    Workers that ended in the last day: {}",
+        said.join(", ")
+    ))
 }
 
 /// A yes card the runner hasn't started, for gp loop health: a problem
@@ -1525,6 +1833,52 @@ mod tests {
                 && said.contains("more than words"),
             "{said}"
         );
+    }
+
+    /// Issue 55: gp loop health counts the open rows with no target, and
+    /// names those with no words for a measure either.
+    #[test]
+    fn health_counts_the_open_rows_with_no_target() {
+        assert_eq!(measure_line(0, &[], true), None);
+        assert_eq!(
+            measure_line(3, &[], true).unwrap(),
+            "MEASURE  3 open row(s) have no target"
+        );
+        let l = measure_line(3, &["g/a".into(), "g/b".into()], true).unwrap();
+        assert!(
+            l.starts_with("MEASURE  3 open row(s) have no target; 2 of them"),
+            "{l}"
+        );
+        assert!(
+            l.contains("the runner starts no worker on them: g/a, g/b."),
+            "{l}"
+        );
+        assert!(l.contains("--measure-needed WORDS"), "{l}");
+        let off = measure_line(3, &["g/a".into()], false).unwrap();
+        assert!(off.contains("gp loop set --measure-required on"), "{off}");
+    }
+
+    /// Issue 49: gp loop health says how the last day's workers ended, each
+    /// ending counted as its own state.
+    #[test]
+    fn health_counts_how_the_last_days_workers_ended() {
+        let now = 100 * 3_600_000;
+        let w = |state: &str, hours_ago: u64| json!({"state": state, "last_ms": now - hours_ago * 3_600_000});
+        let workers = [
+            w("done", 1),
+            w("done", 2),
+            w("cut off", 3),
+            w("errored", 4),
+            w("no result", 5),
+            w("stopped", 6),
+            w("done", 30),
+            w("working", 0),
+        ];
+        assert_eq!(
+            ended_line(&workers, now).unwrap(),
+            "ENDED    Workers that ended in the last day: 2 done, 1 cut off, 1 errored, 1 no result, 1 stopped"
+        );
+        assert_eq!(ended_line(&[w("working", 0), w("done", 30)], now), None);
     }
 
     /// --hold adds games (all holds every one), --go-on lifts them, and a

@@ -54,6 +54,96 @@ pub enum WorkerCmd {
         #[arg(long)]
         shell: bool,
     },
+    /// Run python3 or cp confined to the worktree it is started in: the
+    /// program may write only under that worktree and the temp folder, and
+    /// has no network (sandbox-exec on macOS, bwrap on Linux; refused where
+    /// neither is there). A loop worker's shell is not allowed python3 or
+    /// cp themselves, since either writes anywhere the person can; this is
+    /// how it draws a theme's pictures with a script or copies a file into
+    /// its worktree. Give the program and its arguments after `--`:
+    /// `gp worker confined -- python3 draw.py`. Exits with the program's
+    /// exit code.
+    Confined {
+        /// The program (python3 or cp) and its arguments.
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true, required = true)]
+        argv: Vec<String>,
+    },
+}
+
+/// The programs `gp worker confined` runs.
+pub(crate) const CONFINED: &[&str] = &["python3", "cp"];
+
+/// A path as a string of a sandbox profile: quoted, with `\` and `"`
+/// escaped.
+fn profile_quote(p: &Path) -> String {
+    format!(
+        "\"{}\"",
+        p.to_string_lossy()
+            .replace('\\', "\\\\")
+            .replace('"', "\\\"")
+    )
+}
+
+/// The macOS sandbox profile `gp worker confined` runs a program under:
+/// everything a program may do, but no network and no write outside the
+/// folders in `writes` (and the null and terminal devices). The last rule
+/// that matches decides, so the allows come after the deny.
+pub(crate) fn confined_profile(writes: &[PathBuf]) -> String {
+    let mut p = String::from(
+        "(version 1)\n(allow default)\n(deny network*)\n(deny file-write*)\n(allow file-write* (literal \"/dev/null\") (literal \"/dev/tty\") (literal \"/dev/dtracehelper\"))\n",
+    );
+    for w in writes {
+        p.push_str(&format!(
+            "(allow file-write* (subpath {}))\n",
+            profile_quote(w)
+        ));
+    }
+    p
+}
+
+/// The command that runs `argv` confined to `writes`: sandbox-exec with
+/// [`confined_profile`] on macOS, bwrap with the rest of the disk read-only
+/// and no network on Linux. Err with why where neither is there, or when
+/// the program is not one of [`CONFINED`].
+pub(crate) fn confined_command(
+    argv: &[String],
+    writes: &[PathBuf],
+) -> std::result::Result<std::process::Command, String> {
+    let program = argv.first().map(String::as_str).unwrap_or("");
+    if !CONFINED.contains(&program) {
+        return Err(format!(
+            "gp worker confined runs {} only (got {program:?}): any other program runs as your allowed tools say",
+            CONFINED.join(" or ")
+        ));
+    }
+    if cfg!(target_os = "macos") {
+        let sb = Path::new("/usr/bin/sandbox-exec");
+        if !sb.is_file() {
+            return Err(
+                "no /usr/bin/sandbox-exec on this machine, so nothing can be confined".into(),
+            );
+        }
+        let mut c = std::process::Command::new(sb);
+        c.arg("-p").arg(confined_profile(writes)).args(argv);
+        return Ok(c);
+    }
+    if cfg!(target_os = "linux") {
+        let bwrap = std::env::var_os("PATH")
+            .into_iter()
+            .flat_map(|p| std::env::split_paths(&p).collect::<Vec<_>>())
+            .map(|d| d.join("bwrap"))
+            .find(|p| p.is_file())
+            .ok_or("no bwrap on PATH, so nothing can be confined (install bubblewrap)")?;
+        let mut c = std::process::Command::new(bwrap);
+        c.args(["--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc"]);
+        for w in writes {
+            c.arg("--bind").arg(w).arg(w);
+        }
+        c.args(["--unshare-net", "--die-with-parent", "--"])
+            .args(argv);
+        return Ok(c);
+    }
+    Err("gp worker confined needs sandbox-exec (macOS) or bwrap (Linux)".into())
 }
 
 /// The rules every worker keeps (docs/workers.md, "Rules").
@@ -417,6 +507,38 @@ pub(crate) fn run(cmd: &WorkerCmd, paths: &Paths) -> Result<Outcome> {
                 exit: 0,
             })
         }
+        WorkerCmd::Confined { argv } => {
+            // The real paths: the sandbox matches a path with its links
+            // followed.
+            let worktree = current_worktree()?;
+            let worktree = fs::canonicalize(&worktree).unwrap_or(worktree);
+            // A loop worker's is the one the runner made for it, whatever
+            // folder it is started in.
+            if let Some(own) = std::env::var_os("GP_LOOP_WORKTREE") {
+                let own = PathBuf::from(own);
+                let own = fs::canonicalize(&own).unwrap_or(own);
+                if own != worktree {
+                    bail!(
+                        "gp worker confined runs in your own worktree {} (this is {})",
+                        own.display(),
+                        worktree.display()
+                    );
+                }
+            }
+            let tmp = std::env::temp_dir();
+            let tmp = fs::canonicalize(&tmp).unwrap_or(tmp);
+            let mut cmd =
+                confined_command(argv, &[worktree.clone(), tmp]).map_err(anyhow::Error::msg)?;
+            let status = cmd
+                .status()
+                .with_context(|| format!("starting {}", argv[0]))?;
+            let code = u8::try_from(status.code().unwrap_or(1)).unwrap_or(1);
+            Ok(Outcome {
+                json: json!({"ran": argv, "confined_to": worktree, "exit": code}),
+                text: String::new(),
+                exit: code,
+            })
+        }
     }
 }
 
@@ -445,6 +567,36 @@ mod tests {
         assert_eq!(l(4.0, 18).nice(), 10);
         assert_eq!(l(12.0, 18).nice(), 15);
         assert_eq!(l(40.0, 18).nice(), 19);
+    }
+
+    /// Issue 48: python3 and cp run for a loop worker only confined to its
+    /// worktree, with no network, and no other program runs this way.
+    #[test]
+    fn a_confined_program_writes_only_in_the_worktree_and_has_no_network() {
+        let wt = PathBuf::from("/w/tree \"a\"");
+        let p = confined_profile(std::slice::from_ref(&wt));
+        let deny = p.find("(deny file-write*)").expect("writes denied");
+        let allow = p
+            .find("(allow file-write* (subpath \"/w/tree \\\"a\\\"\"))")
+            .expect("the worktree allowed, its quotes escaped");
+        assert!(deny < allow, "the allow comes after the deny:\n{p}");
+        assert!(p.contains("(deny network*)"), "{p}");
+        assert_eq!(p.matches("(subpath").count(), 1, "no other folder:\n{p}");
+        let argv = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        for bad in ["sh", "rm", "git", "curl", "python", ""] {
+            let e = confined_command(&argv(&[bad, "x"]), std::slice::from_ref(&wt));
+            assert!(e.is_err(), "{bad} is not run confined");
+        }
+        if cfg!(target_os = "macos") && Path::new("/usr/bin/sandbox-exec").is_file() {
+            let c =
+                confined_command(&argv(&["python3", "a.py"]), std::slice::from_ref(&wt)).unwrap();
+            let args: Vec<String> = c
+                .get_args()
+                .map(|a| a.to_string_lossy().into_owned())
+                .collect();
+            assert_eq!(args[0], "-p");
+            assert_eq!(&args[2..], ["python3", "a.py"]);
+        }
     }
 
     #[test]

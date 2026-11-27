@@ -1044,6 +1044,67 @@ fn an_agent_replaces_the_player_sprite() {
     assert!(status.success(), "{status}\n{}", c.transcript.join("\n"));
 }
 
+/// A loop worker's server (started with its step, `GP_STEP`) lists only
+/// the three tools a worker may call and gives it a few lines of
+/// instructions in place of the person's agent's, and gp_run refuses it
+/// the two commands of the loop that run a program or start workers.
+#[test]
+fn a_workers_server_lists_three_tools_and_refuses_what_runs_programs() {
+    let d = tempfile::tempdir().unwrap();
+    let (home, work, games) = (
+        d.path().join("home"),
+        d.path().join("work"),
+        d.path().join("games"),
+    );
+    fs::create_dir_all(&games).unwrap();
+    let mut cmd = gp(&home);
+    cmd.env("GP_GAMES_DIR", &games)
+        .env("GP_STEP", "s0000000000aa");
+    let mut c = spawn_mcp(cmd, &work);
+    let init = c.request(
+        "initialize",
+        json!({
+            "protocolVersion": "2025-11-25",
+            "capabilities": {},
+            "clientInfo": { "name": "gp-cli test", "version": "0" },
+        }),
+    );
+    let said = init["result"]["instructions"].as_str().unwrap_or("");
+    assert!(
+        said.starts_with("You are a worker in Game Printer's loop"),
+        "{init}"
+    );
+    assert!(
+        said.len() < 1000,
+        "a worker's instructions are short: {said}"
+    );
+    c.send(&json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }));
+    let tools = c.request("tools/list", json!({}));
+    let mut names: Vec<&str> = tools["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|t| t["name"].as_str())
+        .collect();
+    names.sort_unstable();
+    assert_eq!(names, ["gp_commands", "gp_run", "next"], "{tools}");
+    for (command, args, why) in [
+        ("loop replay", json!({}), "it starts paid workers"),
+        (
+            "worker confined",
+            json!({"argv": ["python3", "x.py"]}),
+            "it runs a program it is given",
+        ),
+    ] {
+        let (v, _) = c.call("gp_run", json!({"command": command, "args": args}));
+        assert!(
+            v["refused"].as_str().is_some_and(|r| r.contains(why)),
+            "gp_run {command}: {v}"
+        );
+    }
+    finish(c);
+}
+
 fn finish(mut c: Client) {
     drop(c.stdin.take());
     let status = c.child.wait().unwrap();

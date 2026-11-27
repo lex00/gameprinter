@@ -45,6 +45,14 @@ pub struct ToolGateArgs {
     /// Say PASS or FAIL and land nothing.
     #[arg(long)]
     pub dry_run: bool,
+    /// A test the patch takes out of the checks on purpose: the name of a
+    /// test it removes or marks ignored, or the file it leaves with fewer
+    /// assertions (repeatable). A patch that does any of these without
+    /// naming it fails, as a model gate patch that removes a clip it
+    /// doesn't name does; one that names it is never landed on the gate's
+    /// own answer, its card waits for the person.
+    #[arg(long = "removes-test", value_name = "NAME")]
+    pub removes_test: Vec<String>,
 }
 
 struct Cx {
@@ -855,6 +863,11 @@ struct Item {
     message: String,
     shown: String,
     ticket: Option<String>,
+    /// Where the patch came from (crate::gate_hold::landing_from), for the
+    /// gate log's landed line.
+    from: String,
+    /// The tests it takes out on purpose (`--removes-test`).
+    removes: Vec<String>,
 }
 
 /// Applies `item` on the tree and commits it: the patch's own checks
@@ -891,6 +904,24 @@ fn apply_one(
             format!("the patch changes {f}, the ROM-blocking hook, which only the person edits"),
             "patch",
         );
+    }
+    // What judges a tool change is guarded as the corpus is (issue 51): a
+    // test the patch removes or ignores, or a file it leaves with fewer
+    // assertions, is named or the gate fails.
+    let diff = fs::read(&item.patch.diff)
+        .map(|b| String::from_utf8_lossy(&b).into_owned())
+        .unwrap_or_default();
+    let weak = crate::tool_guard::weakened(&diff);
+    if let Some(why) = crate::tool_guard::unnamed(&weak, &item.removes) {
+        return fail(why, "tests");
+    }
+    for w in &weak {
+        lines.push(format!("named with --removes-test: the patch {}", w.says()));
+    }
+    if let Some(why) = crate::tool_guard::needs_person(&diff, &item.removes) {
+        lines.push(format!(
+            "its card waits for the person's yes, the gate does not answer it: {why}"
+        ));
     }
     let gate_gp = std::env::current_exe()?;
     if let Err(why) = c
@@ -1199,8 +1230,11 @@ pub(crate) fn run(a: &ToolGateArgs, paths: &Paths) -> Result<Outcome> {
             game: String::new(),
             onto: onto.clone(),
             run: TOOL_RUN.into(),
-            removes: Vec::new(),
+            // The tests the patch takes out on purpose (--removes-test),
+            // for the gate that takes this patch into its batch.
+            removes: a.removes_test.clone(),
             replaces: Vec::new(),
+            from: crate::gate_hold::landing_from(),
         };
         Some(crate::gate_queue::Ticket::enter(
             &lane.queue_home(&home),
@@ -1291,6 +1325,8 @@ pub(crate) fn run(a: &ToolGateArgs, paths: &Paths) -> Result<Outcome> {
         message: own_message(a),
         shown: a.patch.display().to_string(),
         ticket: None,
+        from: crate::gate_hold::landing_from(),
+        removes: a.removes_test.clone(),
     }];
     if let Some(t) = &ticket {
         for (k, (name, r)) in t.claim().into_iter().enumerate() {
@@ -1302,6 +1338,12 @@ pub(crate) fn run(a: &ToolGateArgs, paths: &Paths) -> Result<Outcome> {
                         .unwrap_or_else(|| "A patch, by gp tool gate".into()),
                     shown: r.shown,
                     ticket: Some(name),
+                    removes: r.removes.clone(),
+                    from: if r.from.is_empty() {
+                        "unknown".to_owned()
+                    } else {
+                        r.from
+                    },
                 }),
                 Err(why) => t.answer(
                     &name,
@@ -1406,6 +1448,8 @@ fn tries(c: &Cx, a: &ToolGateArgs, patch: &Patch) -> Result<Outcome> {
         message: own_message(a),
         shown: a.patch.display().to_string(),
         ticket: None,
+        from: "hand".into(),
+        removes: a.removes_test.clone(),
     };
     Ok(tries_of(c, a.dry_run, std::slice::from_ref(&item))?.0)
 }
@@ -1530,6 +1574,15 @@ fn tries_in(
                 match landed {
                     Ok(()) => {
                         lines.push(format!("PASS: landed {commit} on {}", c.onto));
+                        // Where each landed patch came from, in the gate's
+                        // log (issue 50).
+                        let from: Vec<String> = items
+                            .iter()
+                            .enumerate()
+                            .filter(|(k, _)| !dropped.iter().any(|(d, _)| d == k))
+                            .map(|(_, i)| i.from.clone())
+                            .collect();
+                        crate::gate_hold::landed(&commit, &from);
                         // A landing that names an objection to one of the
                         // loop's steps clears it (crate::wrong).
                         lines.extend(crate::wrong::clear_landed(&c.home, &c.repo, &commit));
@@ -1845,9 +1898,43 @@ date +%s > '{times}/just.end'
             message: None,
             onto: Some("main".into()),
             home: None,
+            removes_test: Vec::new(),
             dry_run,
         };
         tries(c, &a, patch).unwrap()
+    }
+
+    /// Issue 51, through the gate: a patch that takes a test out fails in
+    /// the tests phase before anything is built, names the test and the
+    /// flag, and passes once it is named, saying its card waits for the
+    /// person.
+    #[test]
+    fn a_patch_that_removes_a_test_fails_until_it_names_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let c = gate_rig(dir.path());
+        let patch = patch_of(&c, "crates/gp-x/tests/slow.rs", "fn a_slow_one() {}\n");
+        let o = dry_run(&c, &patch);
+        assert_eq!(o.json["phase"], "tests", "{}", o.text);
+        let why = o.json["why"].as_str().unwrap();
+        assert!(why.contains("removes the test a_slow_one"), "{why}");
+        assert!(why.contains("--removes-test a_slow_one"), "{why}");
+        let steps = fs::read_to_string(dir.path().join("steps.jsonl")).unwrap();
+        assert!(!steps.contains(r#""step":"build""#), "{steps}");
+        let named = ToolGateArgs {
+            patch: patch.diff.clone(),
+            message: None,
+            onto: Some("main".into()),
+            home: None,
+            dry_run: true,
+            removes_test: vec!["a_slow_one".into()],
+        };
+        let o = tries(&c, &named, &patch).unwrap();
+        assert_eq!(o.exit, 0, "{}", o.text);
+        assert!(
+            o.text.contains("its card waits for the person's yes"),
+            "{}",
+            o.text
+        );
     }
 
     fn dry_run(c: &Cx, patch: &Patch) -> Outcome {
@@ -2337,6 +2424,8 @@ date +%s > '{times}/just.end'
             message: format!("{name} by the batch"),
             shown: name.into(),
             ticket: None,
+            from: "hand".into(),
+            removes: Vec::new(),
         }
     }
 
@@ -2383,12 +2472,14 @@ date +%s > '{times}/just.end'
             run: TOOL_RUN.into(),
             removes: Vec::new(),
             replaces: Vec::new(),
+            from: String::new(),
         };
         let a = |p: &Item| ToolGateArgs {
             patch: p.patch.diff.clone(),
             message: Some(p.message.clone()),
             onto: Some("main".into()),
             home: None,
+            removes_test: Vec::new(),
             dry_run: false,
         };
         let round = |own: Item, other: Item| {

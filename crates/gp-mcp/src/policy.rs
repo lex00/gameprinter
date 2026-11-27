@@ -256,6 +256,10 @@ const PERSON_DECIDES_SOUND: &str = "only the person decides a proposed sound cha
 const PERSON_DECIDES_SPRITE: &str = crate::sprite_proposal::PERSON_DECIDES;
 /// Only the person changes the loop's rules (docs/loop.md).
 const PERSON_SETS_LOOP: &str = "only the person changes the loop's settings (gp loop set), marks a step wrong (gp loop wrong, or WRONG on their page) or resumes a halted loop (gp loop resume), in their own terminal. Work as the open steps say: next and gp loop steps list them.";
+/// gp loop replay starts paid workers.
+const REPLAY: &str = "it starts paid workers to score them (docs/worker-evals.md), so only the person runs it, in their own terminal: gp loop replay ROW --label NAME, and gp loop replay --report for the scores.";
+/// gp worker confined runs a program, which gp_run never does.
+const CONFINED: &str = "it runs a program it is given (python3 or cp). Run it from your shell, in your worktree: gp worker confined -- python3 SCRIPT ARGS.";
 const SERVE: &str = "it serves a page until stopped. The person starts `gp serve` themselves and opens http://127.0.0.1:7710/; for a local preview use build_publish.";
 
 /// Every gp command, with its road and rule. Sorted by path.
@@ -639,9 +643,13 @@ pub const TABLE: &[Row] = &[
     r("watch point", S, Read),
     r("watch rerun", S, Write),
     r("watch start", S, Write),
+    // It runs a program (python3 or cp) it is given: from a shell only.
+    r("worker confined", D, Rule::Refuse(CONFINED)),
     r("worker env", D, Read),
+    r("loop replay", S, Rule::Refuse(REPLAY)),
     r("loop resume", S, Rule::Refuse(PERSON_SETS_LOOP)),
     r("loop set", S, Rule::Refuse(PERSON_SETS_LOOP)),
+    r("loop stats", S, Read),
     r("loop steps", S, Read),
     r("loop health", S, Read),
     r("loop hook", S, Read),

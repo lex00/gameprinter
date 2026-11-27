@@ -315,6 +315,18 @@ pub(crate) fn clashes(taken: &BTreeSet<String>, t: &str) -> bool {
     false
 }
 
+/// Whether quest-log row `r` has no measurable done: neither a target (a
+/// measure on the scoreboard, which closes it) nor `measure_needed` (why
+/// it has none and what would measure it). A row the loop's own trouble
+/// filed has its measure in the trouble itself: it closes when its
+/// problem is gone (crate::trouble). The runner starts no worker on a row
+/// with no measure, since a worker that picks its own finish line picks a
+/// near one (issue 55).
+pub(crate) fn no_measure(r: &Value) -> bool {
+    let has = |k: &str| r[k].as_str().is_some_and(|v| !v.trim().is_empty());
+    !has("target") && !has("measure_needed") && !r["trouble"].is_object()
+}
+
 /// The quest-log items that wait for work, as steps of the agent's: each
 /// game's rows that are next or being worked on, in the log's order, one
 /// step each, touching `row:GAME/ROW`. A step's id holds while the row's
@@ -457,6 +469,12 @@ pub(crate) fn row_steps(paths: &gp_evidence::Paths, games: Option<&Path>) -> Vec
                 "touches": touches,
                 "how": {"cli": cli},
                 "repo": if tools { "tools" } else { "games" },
+                // The row's measure, for the runner (issue 55): a row with
+                // neither a target nor words for what would measure it
+                // gets no worker ([`no_measure`]).
+                "target": r["target"],
+                "measure_needed": r["measure_needed"],
+                "no_measure": no_measure(&r),
             }));
         }
     }

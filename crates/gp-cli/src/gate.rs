@@ -2261,6 +2261,9 @@ fn gate_batch(c: &Ctx, a: &GateArgs, items: &[Item], rom: &[u8]) -> Result<Vec<O
             }
             _ => {}
         }
+        if landed.is_ok() && !a.dry_run && !end.commits.is_empty() {
+            crate::gate_hold::landed_batch(&end.commit);
+        }
         if landed.is_ok()
             && !a.dry_run
             && end.remeasured
@@ -2554,6 +2557,7 @@ pub(crate) fn run(a: &GateArgs, paths: &Paths) -> Result<Outcome> {
                 run: a.run.clone(),
                 removes: a.removes.clone(),
                 replaces: a.replaces.clone(),
+                from: crate::gate_hold::landing_from(),
             };
             ticket = Some(crate::gate_queue::Ticket::enter(
                 &lane.queue_home(&home),
@@ -2658,6 +2662,18 @@ pub(crate) fn run(a: &GateArgs, paths: &Paths) -> Result<Outcome> {
 
     // The batch: this gate's patch, then the waiting ones it takes in.
     let claimed = ticket.as_ref().map(|t| t.claim()).unwrap_or_default();
+    // Where the batch's patches came from, for the landed line.
+    crate::gate_hold::set_batch_from(
+        std::iter::once(crate::gate_hold::landing_from())
+            .chain(claimed.iter().map(|(_, r)| {
+                if r.from.is_empty() {
+                    "unknown".to_owned()
+                } else {
+                    r.from.clone()
+                }
+            }))
+            .collect(),
+    );
     let mut items = Vec::new();
     let mut asked: Vec<Option<String>> = Vec::new();
     let mut early: Vec<(Option<String>, Outcome)> = Vec::new();

@@ -46,6 +46,11 @@ pub(crate) struct Request {
     /// (`--replaces`).
     #[serde(default)]
     pub replaces: Vec<String>,
+    /// Where the patch came from (crate::gate_hold::landing_from): the
+    /// gate that takes it into its batch names it in its landed line.
+    /// Empty from a gp before this.
+    #[serde(default)]
+    pub from: String,
 }
 
 impl Request {
@@ -396,6 +401,7 @@ mod tests {
             run: run.into(),
             removes: Vec::new(),
             replaces: Vec::new(),
+            from: String::new(),
         }
     }
 
