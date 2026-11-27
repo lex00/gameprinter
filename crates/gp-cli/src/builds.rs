@@ -545,8 +545,14 @@ fn prune_deps(deps: &Path, names: &BTreeSet<String>) -> u64 {
 /// test binaries a new hash: on 2026-11-24 the gate's target-tests held
 /// seven builds of gp (0.1.1 to 0.1.7), 9 GB of its 12 GB incremental,
 /// all newer than [`INCREMENTAL_IDLE`]. A crate's lib, bin and tests
-/// build together, minutes apart.
-const INCREMENTAL_SUPERSEDED: Duration = Duration::from_secs(24 * 60 * 60);
+/// build together in one gate run, minutes apart (a run that logs no step
+/// for 15 minutes stops), so three hours keeps them all. It was a day, but
+/// gp releases several times a day and every version built in the last
+/// day stayed: on 2026-11-27, with the deps prune landed, the two build
+/// folders were still 12.5 GB during a run, with 9.6 GB free
+/// (trouble-the-home-s-disk-has-gb-free-under-gb-gp-18851b). A build that
+/// was current and goes anyway is built again by the next run.
+const INCREMENTAL_SUPERSEDED: Duration = Duration::from_secs(3 * 60 * 60);
 
 /// A crate folder's name, `NAME-HASH`, without its hash.
 fn crate_name(folder: &str) -> &str {
@@ -1114,6 +1120,8 @@ mod tests {
         // gp of an older version, two days older than the current one.
         session("gp-old0version", 40, days);
         session("mcp-old0version", 3, days);
+        // gp of a version released earlier the same day.
+        session("gp-earlier0today", 400, Duration::from_secs(4 * 60 * 60));
         // The current gp: its lib and its bin, minutes apart.
         session("gp-lib0current", 20, new);
         session("gp-bin0current", 20, minutes);
@@ -1121,7 +1129,8 @@ mod tests {
         // Two packages' build scripts, one built long ago: both stay.
         session("build_script_build-0aaa", 5, days);
         session("build_script_build-0bbb", 5, new);
-        assert_eq!(prune_gate_incremental(&g), 40 + 3);
+        assert_eq!(prune_gate_incremental(&g), 40 + 3 + 400);
+        assert!(!inc.join("gp-earlier0today").exists());
         assert!(!inc.join("gp-old0version").exists());
         assert!(!inc.join("mcp-old0version").exists());
         for k in [
@@ -1168,6 +1177,12 @@ mod tests {
         let old = "0123456789abcdef";
         let cur = "fedcba9876543210";
         let other = "00112233aabbccdd";
+        let earlier = "aaaabbbbccccdddd";
+        // gp of a version released earlier the same day, four hours back.
+        let hours = Duration::from_secs(4 * 60 * 60);
+        for f in [format!("libgp_cli-{earlier}.rlib"), format!("gp-{earlier}")] {
+            file_aged(&deps.join(f), 1000, hours);
+        }
         // gp of an older version, two days before the current one.
         for f in [
             format!("libgp_cli-{old}.rlib"),
@@ -1199,8 +1214,10 @@ mod tests {
         file_aged(&deps.join(format!("libserde-{old}.rlib")), 5, days);
         file_aged(&deps.join(format!("libserde-{cur}.rlib")), 5, new);
         file_aged(&deps.join("gp_cli.d"), 3, days);
-        assert_eq!(prune_gate_incremental(&g), 5 * 100 + 7);
+        assert_eq!(prune_gate_incremental(&g), 5 * 100 + 7 + 2 * 1000);
         for f in [
+            format!("libgp_cli-{earlier}.rlib"),
+            format!("gp-{earlier}"),
             format!("libgp_cli-{old}.rlib"),
             format!("libgp_cli-{old}.rmeta"),
             format!("gp_cli-{old}.d"),
