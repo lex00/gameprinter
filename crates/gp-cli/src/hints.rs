@@ -650,6 +650,12 @@ pub const ROWS: &[Row] = &[
         "gp theme look check THEME --game GAME until it reports no problems",
     ),
     r(
+        "theme look cut",
+        &THEME,
+        7,
+        "its pic line in theme/art.txt, then gp theme look check THEME --game GAME",
+    ),
+    r(
         "theme look check",
         &THEME,
         7,

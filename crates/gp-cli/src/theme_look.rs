@@ -166,6 +166,19 @@ pub enum LookCmd {
         #[arg(long, required = true)]
         only: Vec<String>,
     },
+    /// Cut one picture an image model returned out of its backdrop and
+    /// shrink it to a picture's size, as `gp theme fit` does for a cell:
+    /// the backdrop (alpha, magenta, a flood from the edge over its color,
+    /// or every pixel near --key) and its soft rim cleared, the object
+    /// cropped to its outline, optionally mirrored or leant, and shrunk by
+    /// area averaging (a pixel is solid when half its area is the object,
+    /// and takes the mean of the object's pixels only). With --each, each
+    /// object of a sheet in turn. Adds `placed NAME` to the theme's
+    /// theme/made-from.txt.
+    ///
+    /// Example: gp theme look cut returned.png
+    /// ~/my-theme/theme/art/sprite-mug-4d.png --size 32x32
+    Cut(crate::theme_look_cut::CutArgs),
 }
 
 pub(crate) fn run(cmd: &LookCmd, paths: &Paths) -> Result<Outcome> {
@@ -189,6 +202,7 @@ pub(crate) fn run(cmd: &LookCmd, paths: &Paths) -> Result<Outcome> {
             crate::theme_board::sheet(game, rom.as_deref(), out.as_deref(), paths)
         }
         LookCmd::Take { copy, into, only } => crate::theme_take::take(copy, into, only),
+        LookCmd::Cut(a) => crate::theme_look_cut::cut_cmd(a),
     }
 }
 

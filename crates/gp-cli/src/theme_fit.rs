@@ -88,16 +88,7 @@ pub fn clear_background(img: &Rgba) -> Rgba {
         }
         return out;
     }
-    let (w, h) = (img.width, img.height);
-    let mut edge = Vec::new();
-    for x in 0..w {
-        edge.push((x, 0));
-        edge.push((x, h.saturating_sub(1)));
-    }
-    for y in 0..h {
-        edge.push((0, y));
-        edge.push((w.saturating_sub(1), y));
-    }
+    let edge = edge_of(img);
     let keyed = edge.iter().filter(|(x, y)| is_key(img.get(*x, *y))).count();
     if keyed * 2 > edge.len() {
         for p in &mut out.pixels {
@@ -108,24 +99,56 @@ pub fn clear_background(img: &Rgba) -> Rgba {
         return out;
     }
     // The edge's most common color, and a flood over what is near it.
+    let Some(bg) = edge_color(img) else {
+        return out;
+    };
+    flood_from_edges(img, |p| near_color(p, bg, 40))
+}
+
+/// The pixels on a picture's edge.
+fn edge_of(img: &Rgba) -> Vec<(u32, u32)> {
+    let (w, h) = (img.width, img.height);
+    let mut edge = Vec::new();
+    for x in 0..w {
+        edge.push((x, 0));
+        edge.push((x, h.saturating_sub(1)));
+    }
+    for y in 0..h {
+        edge.push((0, y));
+        edge.push((w.saturating_sub(1), y));
+    }
+    edge
+}
+
+/// The most common color of a picture's edge, each channel to 16 levels
+/// and then to the middle of its level.
+pub fn edge_color(img: &Rgba) -> Option<[u8; 3]> {
     let mut count: BTreeMap<[u8; 3], usize> = BTreeMap::new();
-    for (x, y) in &edge {
-        let p = img.get(*x, *y);
+    for (x, y) in edge_of(img) {
+        let p = img.get(x, y);
         *count
             .entry([p[0] & 0xF0, p[1] & 0xF0, p[2] & 0xF0])
             .or_default() += 1;
     }
-    let Some((bg, _)) = count.into_iter().max_by_key(|(_, n)| *n) else {
-        return out;
-    };
-    let near = |p: [u8; 4]| {
-        let d: i32 = (0..3)
-            .map(|k| (i32::from(p[k]) - i32::from(bg[k]) - 8).pow(2))
-            .sum();
-        d < 40 * 40
-    };
+    let (bg, _) = count.into_iter().max_by_key(|(_, n)| *n)?;
+    Some(bg.map(|c| c + 8))
+}
+
+/// Whether a pixel is within `tol` of a color (the distance in RGB).
+pub fn near_color(p: [u8; 4], c: [u8; 3], tol: i32) -> bool {
+    let d: i32 = (0..3)
+        .map(|k| (i32::from(p[k]) - i32::from(c[k])).pow(2))
+        .sum();
+    d < tol * tol
+}
+
+/// The picture with every pixel `near` reaches from its edge, through
+/// pixels `near` holds for, cleared.
+pub fn flood_from_edges(img: &Rgba, near: impl Fn([u8; 4]) -> bool) -> Rgba {
+    let mut out = img.clone();
+    let (w, h) = (img.width, img.height);
     let mut seen = vec![false; (w * h) as usize];
-    let mut stack: Vec<(u32, u32)> = edge
+    let mut stack: Vec<(u32, u32)> = edge_of(img)
         .into_iter()
         .filter(|(x, y)| near(img.get(*x, *y)))
         .collect();

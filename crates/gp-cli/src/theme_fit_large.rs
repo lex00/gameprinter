@@ -96,7 +96,7 @@ pub(crate) fn place(
 /// The mean of a square of a picture `step` pixels wide from (x0, y0),
 /// each source pixel weighted by the area of it the square covers: solid
 /// when half the square is figure, colored by the figure's pixels only.
-fn footprint(src: &Rgba, x0: f64, y0: f64, step: f64) -> Option<[u8; 4]> {
+pub(crate) fn footprint(src: &Rgba, x0: f64, y0: f64, step: f64) -> Option<[u8; 4]> {
     let (x1, y1) = (x0 + step, y0 + step);
     if x1 <= 0.0 || y1 <= 0.0 || x0 >= f64::from(src.width) || y0 >= f64::from(src.height) {
         return None;

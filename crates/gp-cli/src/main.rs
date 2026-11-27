@@ -203,6 +203,7 @@ mod theme_generate;
 mod theme_geometry;
 mod theme_kit;
 mod theme_look;
+mod theme_look_cut;
 mod theme_mirror;
 mod theme_original;
 mod theme_paper;

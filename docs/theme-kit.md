@@ -315,6 +315,21 @@ hand counter-score-0
 
 `gp theme look check` refuses a theme whose `pic` lines aren't all in this record, and, where the sheets.json is on the machine, one whose cell doesn't stand for the game picture it is given (the paired-in-number-order mistake). It also refuses each sprite pose whose bottom stands off the original's by more than `[tolerance]` `feet` and `size` together (5 game pixels), and warns of one off by more than `feet` (1) or wider, taller or off its middle by more than `size` (4) or `edge` (2), since large art draws its own figure (the owner kept Turnips' figures, 2026-11-16); an original bigger than 64 game pixels on a side is a scene and isn't measured; and, for a game drawn by its board, each screen or seen name with no `pic` line (site docs, themes.md, "Check it"; tests `theme_look::tests::each_pic_line_says_which_cell_or_placing_it_came_from`, `a_pose_off_the_originals_bottom_is_refused_and_its_shape_warned`, `a_board_picture_the_game_shows_with_nothing_drawn_is_refused`). A fit again keeps the lines for game pictures it didn't draw this time. Tests: `theme_fit_large::tests` (a made-up figure filling a body at scale 2 with no key color at its edge, the half-area rule, the record's `$GP_HOME`).
 
+### Cutting a returned picture
+
+A picture made for one game picture of a large-art theme (a model's answer to a prompt of your own, not a cell of `gp theme sheet`) is cut with `gp theme look cut IMAGE OUT.png --size WxH`, the same steps for every picture in place of a script each. The code is `crates/gp-cli/src/theme_look_cut.rs`.
+
+| Step | What |
+|---|---|
+| Backdrop | As fit's: alpha, the key color (magenta) wherever it is, or a flood from the edges over the edge's most common color, so a white inside the object stays. `--key COLOR` (RRGGBB, `white`, `magenta`) clears every pixel near that color, inside the object too |
+| Rim | An object pixel beside the cleared backdrop that is a mix of its neighbour's color and the backdrop's is cleared too, up to three pixels deep |
+| Objects | The 8-connected parts left; a part under a fiftieth of the largest is a speck and dropped. `--each` cuts each part of a sheet as an object of its own, in reading order (rows top to bottom, each left to right), into `STEM-N.png` beside OUT, or `NAME.png` when `--for` names each |
+| Mirror, lean | `--flip` mirrors left to right; `--lean K` moves each row K pixels right of the row below it (negative: left), the bottom row kept |
+| Shrink | One scale both ways to fit the size, standing on the bottom, centered, by fit's area averaging: a pixel is solid when half its area is the object and takes the mean of the object's pixels only. Lone pixels are dropped |
+| Record | `placed NAME...` in the theme's `theme/made-from.txt` (the nearest folder above OUT holding art.txt, or `--theme`), NAME the file's stem or `--for`'s; a name on another line is taken off it |
+
+It writes no `pic` line: add the picture's line to `theme/art.txt` at the box it stands in. Tests: `theme_look_cut::tests` (a flat backdrop of white, magenta or a `--key` cut to its size with no rim of it, a sheet's objects in reading order and their record, flip and lean).
+
 ## Sound roles
 
 A model names its game's sound requests as sound roles (core `present.sound_roles`): each a counter holding the request, a mask or a value, whether the request is held (a tune the game keeps set) or taken each frame, and whether it loops. Donkey Kong's are the driver's request bytes $FC to $FF:

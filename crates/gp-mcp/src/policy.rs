@@ -372,6 +372,7 @@ pub const TABLE: &[Row] = &[
     r("theme list", O, Read),
     r("theme look check", J, Read),
     r("theme look cells", J, Read),
+    r("theme look cut", J, Write),
     r("theme look new", J, Write),
     r(
         "theme look play",

@@ -172,6 +172,7 @@ const VERBS: &[(&str, &str, &str)] = &[
     ("check", "Checked", "checking"),
     ("compare", "Compared", "comparing"),
     ("copy", "Copied", "copying"),
+    ("cut", "Cut", "cutting"),
     ("fetch", "Fetched", "fetching"),
     ("find", "Found", "finding"),
     ("fill", "Filled", "filling"),
@@ -261,6 +262,7 @@ const PHRASES: &[(&str, &str, &str)] = &[
     ("theme check", "check", "the theme"),
     ("theme look check", "check", "the theme"),
     ("theme look new", "start", "a new theme"),
+    ("theme look cut", "cut", "a returned picture to size"),
     (
         "theme look take",
         "copy",
