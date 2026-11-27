@@ -13,7 +13,7 @@
 //! | File | What |
 //! |---|---|
 //! | `$GP_HOME/work/loop/replay/set.json` | The set: each task's game, row, repo, kind, landed commit, base commit and the row as a worker first got it |
-//! | `$GP_HOME/work/loop/replay/runs/ROW/STAMP-N/` | One trial: its scratch home, brief, log and patch (its tree is removed) |
+//! | `$GP_HOME/work/loop/replay/runs/ROW/STAMP-N/` | One trial: its scratch home, brief, log and patch (its tree and its worker's build are removed) |
 //! | `$GP_HOME/work/loop/replay/results.jsonl` | One line per trial: the label, the row, pass or why not, turns, cost, refusals |
 //!
 //! A trial's worker has a scratch home, not the person's: its cards go
@@ -559,8 +559,13 @@ pub(crate) fn trial(rig: &Rig, task: &Value, label: &str, n: u32, stamp: &str) -
             "dir": run_dir,
         }))
     })();
-    // Whatever happened, the trial's tree and branch go.
+    // Whatever happened, the trial's tree and branch go, and its worker's
+    // cargo target (3 to 4 GB a trial: crate::builds::ended_replay_builds).
     let _ = fs::remove_dir_all(&tree);
+    let _ = fs::remove_dir_all(
+        crate::builds::target_root(&scratch).join(crate::worker::branch_folder(&branch)),
+    );
+    let _ = fs::remove_dir_all(scratch.join("work").join("target"));
     let _ = git(repo, &["branch", "-D", &branch]);
     let line = ran?;
     crate::worker_runs::append(&results_file(&rig.home), &line);
@@ -1008,7 +1013,10 @@ mod tests {
         fs::write(
             &sh,
             format!(
-                "echo \"$GP_HOME $GP_STEP $(pwd)\" > {}\ncat > /dev/null\n",
+                "echo \"$GP_HOME $GP_STEP $(pwd)\" > {}\n\
+                 mkdir -p \"$GP_HOME/work/target/replay-$GP_STEP/fastdev\"\n\
+                 echo built > \"$GP_HOME/work/target/replay-$GP_STEP/fastdev/gp\"\n\
+                 cat > /dev/null\n",
                 seen.display()
             ),
         )
@@ -1038,6 +1046,11 @@ mod tests {
         );
         assert!(said.trim_end().ends_with("/tree"), "{said}");
         assert!(!run_dir.join("tree").exists(), "the tree is removed");
+        assert!(
+            !run_dir.join("home").join("work").join("target").exists(),
+            "the worker's build is removed"
+        );
+        assert!(run_dir.join("home").join("mechanics").is_dir());
         assert!(run_dir.join("brief.txt").is_file() && run_dir.join("1.log").is_file());
         assert_eq!(
             git(&repo, &["worktree", "list"]).unwrap().lines().count(),

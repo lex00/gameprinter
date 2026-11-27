@@ -34,6 +34,10 @@
 //! ([`compile_cache`]), was never named nor cleared: on 2026-11-27 it held
 //! 7447 entries, with the disk at 7.1 GB free and the gate's builds only
 //! 10.3 GB of what was gone. Its files untouched in a day go the same way.
+//!
+//! A replay trial (crate::replay) kept its worker's cargo target in its
+//! scratch home after it ended: 114 GB of them on 2026-11-27. A trial now
+//! removes it as it ends, and those left go ([`ended_replay_builds`]).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -346,7 +350,8 @@ pub(crate) fn compile_cache(home: &Path) -> PathBuf {
 /// use, the home's and the gate's home's, and the compile cache
 /// ([`compile_cache`]) lose their cache files older than [`CACHE_AGE`],
 /// the module kits no gp used in a day go ([`idle_module_kits`]), and so
-/// do the worktrees of workers that ended a day ago ([`ended_worktrees`]).
+/// do the worktrees of workers that ended a day ago ([`ended_worktrees`])
+/// and the builds of replay trials that ended ([`ended_replay_builds`]).
 /// The bytes freed.
 pub(crate) fn clear_old_caches(home: &Path, gate_cache: Option<&Path>) -> u64 {
     let caches: u64 = regenerate_roots(home, gate_cache)
@@ -364,6 +369,44 @@ pub(crate) fn clear_old_caches(home: &Path, gate_cache: Option<&Path>) -> u64 {
             .iter()
             .map(|t| remove_tree(t))
             .sum::<u64>()
+        + ended_replay_builds(home)
+            .iter()
+            .map(|b| remove(b))
+            .sum::<u64>()
+}
+
+/// The build folders (`home/work/target`) of the scratch homes of replay
+/// trials (crate::replay, work/loop/replay/runs/ROW/TRIAL/home) whose worker
+/// ended: no worker record there holds its step. A trial kept its worker's
+/// cargo target, 3 to 4 GB, after it ended: on 2026-11-27 30 trials held
+/// 114 GB of the home's 260 GB, with the disk at 15.6 GB free
+/// (trouble-the-home-s-disk-has-gb-free-under-gb-gp-18851b). The trial's
+/// brief, log, patch and scratch home's cards stay.
+pub(crate) fn ended_replay_builds(home: &Path) -> Vec<PathBuf> {
+    let runs = crate::replay::dir(home).join("runs");
+    let dirs = |p: &Path| -> Vec<PathBuf> {
+        fs::read_dir(p)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.is_dir())
+            .collect()
+    };
+    let mut out: Vec<PathBuf> = dirs(&runs)
+        .iter()
+        .flat_map(|row| dirs(row))
+        .map(|trial| trial.join("home"))
+        .filter(|scratch| {
+            !gp_mcp::steps::workers(scratch)
+                .iter()
+                .any(gp_mcp::steps::holds)
+        })
+        .map(|scratch| scratch.join("work").join("target"))
+        .filter(|t| t.is_dir())
+        .collect();
+    out.sort();
+    out
 }
 
 /// A module kit (crate::module::own_kit) no gp has used this long belongs
@@ -690,6 +733,7 @@ pub(crate) fn clearable(
         .into_iter()
         .chain(ended_worktrees(home, live))
         .chain(idle_module_kits(home))
+        .chain(ended_replay_builds(home))
         .map(Clear::folder)
         .collect();
     for root in regenerate_roots(home, gate_cache) {
@@ -1384,6 +1428,59 @@ mod tests {
         assert_eq!(clear_old_caches(&home, None), 9);
         assert_eq!(clear_old_caches(&home, None), 0);
         assert!(clearable(&home, &none, None, None).is_empty());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_replay_trials_build_goes_once_its_worker_ended() {
+        if std::env::var_os("GP_TARGET_DIR").is_some_and(|v| !v.is_empty()) {
+            return;
+        }
+        let root = tmp("replay");
+        let home = root.join("home");
+        let runs = crate::replay::dir(&home).join("runs").join("rooftop-row");
+        let trial = |stamp: &str, pid: u32| {
+            let scratch = runs.join(stamp).join("home");
+            let w = gp_mcp::steps::workers_dir(&scratch);
+            fs::create_dir_all(&w).unwrap();
+            fs::write(
+                w.join("s000000000001.json"),
+                serde_json::json!({"step": {"id": "s000000000001"}, "state": "working",
+                    "pid": pid, "started_ms": 1})
+                .to_string(),
+            )
+            .unwrap();
+            let t = scratch.join("work").join("target");
+            file_aged(
+                &t.join("replay-s000000000001").join("debug").join("gp"),
+                800,
+                Duration::from_secs(60),
+            );
+            fs::write(runs.join(stamp).join("1.log"), "log").unwrap();
+            t
+        };
+        // A trial whose replay process is gone, and one still running (this
+        // test's own process).
+        let ended = trial("1-1", 999_999_999);
+        let running = trial("1-2", std::process::id());
+        let none = BTreeSet::new();
+        assert_eq!(ended_replay_builds(&home), vec![ended.clone()]);
+        assert_eq!(
+            clearable(&home, &none, None, None),
+            vec![Clear::of(ended.clone(), 800)]
+        );
+        let (done, skipped) = clean(&home, &none, None, None);
+        assert!(skipped.is_empty(), "{skipped:?}");
+        assert_eq!(done, vec![Clear::of(ended.clone(), 800)]);
+        assert!(!ended.exists());
+        assert!(running.exists(), "a running trial keeps its build");
+        assert!(runs.join("1-1").join("1.log").exists(), "the log stays");
+        // The runner's hourly sweep clears one left after its trial ended.
+        let again = trial("2-1", 999_999_999);
+        assert_eq!(clear_old_caches(&home, None), 800);
+        assert!(!again.exists());
+        assert!(running.exists());
+        assert_eq!(clear_old_caches(&home, None), 0);
         let _ = fs::remove_dir_all(&root);
     }
 

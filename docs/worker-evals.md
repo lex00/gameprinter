@@ -38,7 +38,7 @@ Each trial:
 3. A worker starts there with today's brief, tools, environment and limits, as the runner would start it (`brief`, `claude_args` and `worker_env` of the runner), on the agent command `--agent` names (else `$GP_CLIP_AGENT`, else `claude`), for at most an hour.
 4. Everything in its tree against the base, its own commits and what it left uncommitted, is written as a patch. An empty patch fails the trial.
 5. The gate's dry run judges the patch: `gp tool gate --dry-run` for a tools row, `gp model gate GAME --dry-run` for a game's, onto a branch `replay/STEP` made at the base. This is the real gate, so it waits its turn for the gate's lock behind the loop's own landings.
-6. The worktree and the branch are removed. The brief, the log, the patch and the scratch home stay in the trial's folder.
+6. The worktree, the branch and the worker's cargo target (the scratch home's `work/target`, 3 to 4 GB) are removed. The brief, the log, the patch and the rest of the scratch home stay in the trial's folder. `gp loop clean` and gp serve's hourly sweep remove a target a trial left (an older gp's trials kept theirs: 114 GB on 2026-11-27) once no worker there holds its step.
 
 Nothing lands. One line per trial goes to `$GP_HOME/work/loop/replay/results.jsonl`: the label, the task, pass or why not, how the run ended, and the run's turns, cost and refusals from its log's result line.
 
