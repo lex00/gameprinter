@@ -1591,7 +1591,7 @@ fn tries_in(
                                 "words only: nothing built, so gp isn't published again".into(),
                             );
                             return Ok(Outcome::ok(
-                                json!({"verdict": "PASS", "commit": commit, "tip": tip, "lines": lines}),
+                                json!({"verdict": "PASS", "commit": commit, "landed": commit, "tip": tip, "lines": lines}),
                                 lines.join("\n"),
                             ));
                         }
@@ -1612,8 +1612,12 @@ fn tries_in(
                         )?;
                         c.steps
                             .time("players", || players(c, &mut lines), Result::is_ok)?;
+                        // `landed` names the commit on main, as the model
+                        // gate's does: a card's run reads it to say landed,
+                        // not passed (gp_mcp::asks::outcome), and the row's
+                        // archive keeps it (archive-keeps-a-tools-rows-landed-commit).
                         return Ok(Outcome::ok(
-                            json!({"verdict": "PASS", "commit": commit, "tip": tip, "lines": lines}),
+                            json!({"verdict": "PASS", "commit": commit, "landed": commit, "tip": tip, "lines": lines}),
                             lines.join("\n"),
                         ));
                     }
@@ -2339,6 +2343,41 @@ date +%s > '{times}/just.end'
         // Not stopped, just check would have slept its 30 s and written
         // just.end before the gate ended.
         assert!(stamp(&c, "just.end").is_none(), "just check was stopped");
+    }
+
+    /// archive-keeps-a-tools-rows-landed-commit: a tool gate card that
+    /// landed was kept as passed (its JSON had no `landed`), so its row went
+    /// to the archive with no landed commit. A landing's JSON, read as the
+    /// runner reads a card's run, is landed with the commit on main in its
+    /// lines (crate::mechanic::archive::commit_of); a dry run's is passed
+    /// and names none.
+    #[test]
+    fn a_landing_reads_as_landed_on_its_card_with_its_commit() {
+        let dir = tempfile::tempdir().unwrap();
+        let c = gate_rig(dir.path());
+        let patch = patch_of(&c, "tool.txt", "the tool, said again\n");
+        let card = |o: &Outcome| {
+            gp_mcp::asks::outcome(Some(o.exit == 0), o.json.to_string().as_bytes(), b"")
+        };
+
+        let o = dry_run(&c, &patch);
+        assert_eq!(o.json["verdict"], "PASS", "{}", o.text);
+        assert_eq!(o.json["landed"], Value::Null);
+        let (state, lines) = card(&o);
+        assert_eq!(state, "passed");
+        assert_eq!(crate::mechanic::archive::commit_of(&json!(lines)), None);
+
+        let o = gate(&c, &patch, false);
+        assert_eq!(o.json["verdict"], "PASS", "{}", o.text);
+        let commit = git(&c.repo, &["rev-parse", "main"]).unwrap();
+        assert_eq!(o.json["landed"], json!(commit));
+        let (state, lines) = card(&o);
+        assert_eq!(state, "landed", "{lines:?}");
+        assert_eq!(
+            crate::mechanic::archive::commit_of(&json!(lines)).as_deref(),
+            Some(commit.as_str()),
+            "{lines:?}"
+        );
     }
 
     /// A landing moves the branch to the commit the try made and publishes
