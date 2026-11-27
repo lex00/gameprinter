@@ -443,7 +443,11 @@ while the model builds and starts, the screen page sends such a request
 again every second for up to a minute, saying it waits for the server,
 and asks for the build again if the server came back having lost it
 (neither built nor building); it says the model couldn't start only
-when the server stays away or answers with an error. While it moves, gp
+when the server stays away or answers with an error. The model's own
+frame is loaded again too, every 2 s for up to a minute
+(mechanic/model-load.js), when it loads with no preview running in it
+or sends nothing for 30 s: the preview says its first word only once
+every file it imports has come. While it moves, gp
 serve refuses what comes in with 503, unread: a page's call gets
 `{"error": "gp serve is moving onto a newly published gp; ..."}`, which
 the screen page waits through as above, and the first screen's calls

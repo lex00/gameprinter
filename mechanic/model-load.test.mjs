@@ -13,9 +13,18 @@ function clock() {
   return {
     timer: (f, ms) => { const id = next++; timers.set(id, [now + ms, f]); return id; },
     clear: (id) => timers.delete(id),
+    now: () => now,
+    // Moves to each timer's time in turn, so one a timer sets fires too.
     pass(ms) {
-      now += ms;
-      for (const [id, [at, f]] of [...timers]) if (at <= now) { timers.delete(id); f(); }
+      const to = now + ms;
+      for (;;) {
+        const due = [...timers].filter(([, [at]]) => at <= to).sort((a, b) => a[1][0] - b[1][0])[0];
+        if (!due) break;
+        timers.delete(due[0]);
+        now = due[1][0];
+        due[1][1]();
+      }
+      now = to;
     },
   };
 }
@@ -51,11 +60,65 @@ test("a load that stops says the last step it reached", async () => {
   w.ready();
 });
 
-test("a page whose script never ran says so", async () => {
+test("a page whose script never ran is loaded again, then says so", async () => {
   const c = clock();
-  const w = waitForModel(() => {}, c);
+  let starts = 0;
+  const w = waitForModel(() => { starts++; }, c);
+  c.pass(30000);
+  // Silent for 30 s: started again 2 s on, with 30 s more.
+  c.pass(2000);
+  assert.equal(starts, 2);
   c.pass(30000);
   assert.equal(await outcome(w.done), "the model's page sent nothing for 30 s: its script didn't start");
+  assert.equal(starts, 2);
+});
+
+test("a frame that loads with no preview running is loaded again until it runs", async () => {
+  const c = clock();
+  let starts = 0;
+  const w = waitForModel(() => { starts++; }, c);
+  // gp serve away moving onto a new build: the browser's own error page
+  // loads at once, three times over.
+  for (let i = 0; i < 3; i++) {
+    c.pass(100);
+    w.loaded(false);
+    // A second load event while it waits starts nothing more.
+    w.loaded(false);
+    c.pass(2000);
+  }
+  assert.equal(starts, 4);
+  // Back: the preview runs and tells its steps.
+  w.loaded(true);
+  w.step("script");
+  c.pass(1000);
+  w.ready();
+  assert.equal(await outcome(w.done), "ready");
+  assert.equal(starts, 4);
+});
+
+test("a frame that never runs its preview gives up after a minute", async () => {
+  const c = clock();
+  let starts = 0;
+  const w = waitForModel(() => { starts++; }, c);
+  for (let i = 0; i < 40 && starts < 100; i++) {
+    c.pass(10);
+    w.loaded(false);
+    c.pass(2000);
+  }
+  assert.equal(await outcome(w.done), "the model's page loaded but its script never ran (tried again for 60 s): preview.js or a file it imports didn't load");
+  assert.ok(starts > 20 && starts < 32, `${starts} starts`);
+});
+
+test("a load after the preview spoke is no reason to start again", async () => {
+  const c = clock();
+  let starts = 0;
+  const w = waitForModel(() => { starts++; }, c);
+  w.step("script");
+  w.loaded(false);
+  c.pass(5000);
+  assert.equal(starts, 1);
+  w.ready();
+  assert.equal(await outcome(w.done), "ready");
 });
 
 test("the preview's own failure is passed on at once", async () => {

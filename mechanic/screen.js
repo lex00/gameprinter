@@ -707,11 +707,23 @@ async function loadModel(why) {
     const f = $("model-frame");
     modelLooks = new Set([...modelLooks, ...Object.keys(themeTimes)]);
     // 30 s from the preview's last word, not from the start (model-load.js).
+    // A frame that loads with no preview running in it (gp serve away
+    // moving onto a new build) is loaded again: loaded() says whether the
+    // preview's script ran (its window.__gp), which a page the browser
+    // made for a server it couldn't reach, of no origin, can't show.
+    f.onload = () => {
+      let ran = false;
+      try { ran = Boolean(f.contentWindow?.__gp); } catch (e) { /* not the server's page */ }
+      if (mine === model.token) model.onFrameLoad?.(ran);
+    };
     const w = waitForModel(() => {
+      // A later load has the frame: this one's start again leaves it.
+      if (mine !== model.token) return;
       // files=here: the preview reads the build beside it, not the
       // browser's store of installed games.
       f.src = `${base}index.html?control=1&files=here${lookParam()}${profileParam()}&t=${Date.now()}`;
     });
+    model.onFrameLoad = w.loaded;
     model.onReady = w.ready;
     model.onFailed = w.failed;
     model.onLoading = w.step;

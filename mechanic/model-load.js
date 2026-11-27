@@ -38,15 +38,35 @@ export function stoppedWords(step, ms) {
   return `the model stopped loading: nothing came for ${s} after ${STEPS[step] ?? step}`;
 }
 
+/** What the page says when the frame loaded again and again for `ms` and
+ * the preview's script never ran in it. */
+export function neverRanWords(ms) {
+  return `the model's page loaded but its script never ran (tried again for ${Math.round(ms / 1000)} s): preview.js or a file it imports didn't load`;
+}
+
 /** Waits for the model's preview. `start()` sets the frame going (its
- * src); returns `{ done, ready, failed, step }`: the page's message
- * listener calls ready(), failed(why) and step(name) as the preview's
- * words come, and `done` resolves on ready and rejects on a failure or
- * `within` ms with no word. */
-export function waitForModel(start, { within = 30000, timer = setTimeout, clear = clearTimeout } = {}) {
+ * src); returns `{ done, ready, failed, step, loaded }`: the page's
+ * message listener calls ready(), failed(why) and step(name) as the
+ * preview's words come, the frame's load event calls loaded(ran) with
+ * whether the preview's script ran in it, and `done` resolves on ready and
+ * rejects on a failure or `within` ms with no word.
+ *
+ * A frame that loads before the preview has said anything and holds no
+ * running preview (the browser's page for a server it couldn't reach, the
+ * server's refusal while it moves onto a new build, or a script file that
+ * didn't come) is started again every `again` ms, for `retry` ms from the
+ * first start; so is one that said nothing in `within` ms. The preview
+ * says its first word only once every file it imports has loaded, so
+ * until then the page can't tell a slow server from one that is away.
+ * Before, a frame was loaded once, and one loaded while gp serve moved
+ * onto a new build said "sent nothing for 30 s" (a screen page,
+ * 2026-11-27). */
+export function waitForModel(start, { within = 30000, again = 2000, retry = 60000, timer = setTimeout, clear = clearTimeout, now = Date.now } = {}) {
   let last = null;
   let t = null;
   let over = false;
+  let waiting = false;
+  const first = now();
   let resolve;
   let reject;
   const done = new Promise((y, n) => { resolve = y; reject = n; });
@@ -56,16 +76,35 @@ export function waitForModel(start, { within = 30000, timer = setTimeout, clear 
     clear(t);
     f();
   };
+  const go = () => {
+    try {
+      start();
+    } catch (e) {
+      end(() => reject(e));
+    }
+  };
+  // Starts the frame again after `again` ms, if there is time left.
+  const restart = () => {
+    if (now() + again - first > retry) return false;
+    clear(t);
+    waiting = true;
+    t = timer(() => {
+      waiting = false;
+      if (over || last !== null) return;
+      arm();
+      go();
+    }, again);
+    return true;
+  };
   const arm = () => {
     clear(t);
-    t = timer(() => end(() => reject(new Error(stoppedWords(last, within)))), within);
+    t = timer(() => {
+      if (last === null && restart()) return;
+      end(() => reject(new Error(stoppedWords(last, within))));
+    }, within);
   };
   arm();
-  try {
-    start();
-  } catch (e) {
-    end(() => reject(e));
-  }
+  go();
   return {
     done,
     ready: () => end(resolve),
@@ -73,7 +112,13 @@ export function waitForModel(start, { within = 30000, timer = setTimeout, clear 
     step: (name) => {
       if (over) return;
       last = name;
+      waiting = false;
       arm();
+    },
+    loaded: (ran) => {
+      if (over || ran || last !== null || waiting) return;
+      if (restart()) return;
+      end(() => reject(new Error(neverRanWords(retry))));
     },
   };
 }
