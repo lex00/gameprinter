@@ -29,6 +29,11 @@
 //! worker's dev build of gp left one of 63 MB: 21 GB of them on 2026-11-25
 //! (trouble-the-home-s-disk-has-gb-free-under-gb-gp-7e400a). Those no gp
 //! used in a day go the same way ([`idle_module_kits`]).
+//!
+//! The compile cache every cargo of the loop shares, work/sccache
+//! ([`compile_cache`]), was never named nor cleared: on 2026-11-27 it held
+//! 7447 entries, with the disk at 7.1 GB free and the gate's builds only
+//! 10.3 GB of what was gone. Its files untouched in a day go the same way.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -326,15 +331,28 @@ fn remove_old_cache(dir: &Path) -> u64 {
     n
 }
 
+/// The compile cache the locked cargo (scripts/cargo/locked.py) and the
+/// tool gate's cargo give sccache: $GP_HOME/work/sccache. sccache keeps it
+/// under its cap (SCCACHE_CACHE_SIZE, 10G) by dropping the entries least
+/// lately used, and sets an entry's time each time a build reads it, so a
+/// file untouched in [`CACHE_AGE`] is one no build of the last day used. A
+/// cleared entry is only a miss: sccache compiles that crate again. A
+/// $SCCACHE_DIR elsewhere is the person's own and left alone.
+pub(crate) fn compile_cache(home: &Path) -> PathBuf {
+    home.join("work").join("sccache")
+}
+
 /// gp serve runner's hourly sweep: every work/regenerate folder still in
-/// use, the home's and the gate's home's, loses its cache files older
-/// than [`CACHE_AGE`], the module kits no gp used in a day go
-/// ([`idle_module_kits`]), and so do the worktrees of workers that ended a
-/// day ago ([`ended_worktrees`]). The bytes freed.
+/// use, the home's and the gate's home's, and the compile cache
+/// ([`compile_cache`]) lose their cache files older than [`CACHE_AGE`],
+/// the module kits no gp used in a day go ([`idle_module_kits`]), and so
+/// do the worktrees of workers that ended a day ago ([`ended_worktrees`]).
+/// The bytes freed.
 pub(crate) fn clear_old_caches(home: &Path, gate_cache: Option<&Path>) -> u64 {
     let caches: u64 = regenerate_roots(home, gate_cache)
         .iter()
         .flat_map(|r| regenerate_folders(r).1)
+        .chain([compile_cache(home)])
         .map(|d| remove_old_cache(&d))
         .sum();
     caches
@@ -660,8 +678,8 @@ fn prune_crate(krate: &Path, now: SystemTime) -> u64 {
 /// module kits no gp used in a day, idle
 /// regenerate folders and the cache files
 /// older than a day of those in use (the home's, and with `gate_cache`
-/// the gate's home's), and with `gate_builds_of` (the gate's home) the
-/// gate's build folders.
+/// the gate's home's) and of the compile cache, and with `gate_builds_of`
+/// (the gate's home) the gate's build folders.
 pub(crate) fn clearable(
     home: &Path,
     live: &BTreeSet<String>,
@@ -685,6 +703,15 @@ pub(crate) fn clearable(
                 old_files: true,
             })
         }));
+    }
+    let cc = compile_cache(home);
+    let bytes = old_cache_bytes(&cc);
+    if bytes > 0 {
+        out.push(Clear {
+            path: cc,
+            bytes,
+            old_files: true,
+        });
     }
     if let Some(g) = gate_builds_of {
         out.extend(
@@ -1315,6 +1342,48 @@ mod tests {
         assert_eq!(clear_old_caches(&home, Some(&g)), 9);
         assert_eq!(clear_old_caches(&home, Some(&g)), 0);
         assert!(gate_run.join("new.json").exists());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn the_compile_cache_loses_its_files_no_build_used_in_a_day() {
+        if std::env::var_os("GP_TARGET_DIR").is_some_and(|v| !v.is_empty()) {
+            return;
+        }
+        let root = tmp("sccache");
+        let home = root.join("home");
+        let cc = compile_cache(&home);
+        assert_eq!(cc, home.join("work").join("sccache"));
+        let day = Duration::from_secs(25 * 60 * 60);
+        let new = Duration::from_secs(60);
+        // sccache's entries, two folders deep by their hash's first digits.
+        file_aged(&cc.join("a").join("a").join("aa01"), 600, day);
+        file_aged(&cc.join("b").join("8").join("b802"), 50, day);
+        file_aged(&cc.join("a").join("a").join("aa03"), 7, new);
+        let none = BTreeSet::new();
+        let list = clearable(&home, &none, None, None);
+        assert_eq!(
+            list,
+            vec![Clear {
+                path: cc.clone(),
+                bytes: 650,
+                old_files: true
+            }]
+        );
+        let (done, skipped) = clean(&home, &none, None, None);
+        assert!(skipped.is_empty(), "{skipped:?}");
+        assert_eq!(done.iter().map(|c| c.bytes).sum::<u64>(), 650);
+        assert!(
+            cc.join("a").join("a").join("aa03").exists(),
+            "a used entry stays"
+        );
+        assert!(!cc.join("a").join("a").join("aa01").exists());
+        assert!(!cc.join("b").join("8").join("b802").exists());
+        // The runner's hourly sweep does the same.
+        file_aged(&cc.join("c").join("1").join("c104"), 9, day);
+        assert_eq!(clear_old_caches(&home, None), 9);
+        assert_eq!(clear_old_caches(&home, None), 0);
+        assert!(clearable(&home, &none, None, None).is_empty());
         let _ = fs::remove_dir_all(&root);
     }
 

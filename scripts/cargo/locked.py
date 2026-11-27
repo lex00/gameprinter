@@ -20,9 +20,12 @@ memory and the largest child's peak resident size.
 
 When sccache is on PATH and RUSTC_WRAPPER is unset, every compiling
 command runs rustc through it, with its cache in $GP_HOME/work/sccache
-capped at SCCACHE_CACHE_SIZE (30G by default), so a new worktree's target
-folder takes the dependencies other folders compiled. GP_SCCACHE=0 turns
-it off; an RUSTC_WRAPPER already set, even empty, is kept.
+capped at SCCACHE_CACHE_SIZE (10G by default, sccache's own, which the
+tool gate's cargo gets too: 30G was more than the 20 GB free gp loop
+health asks for, with the disk at 7.1 GB free on 2026-11-27), so a new
+worktree's target folder takes the dependencies other folders compiled.
+gp serve's runner clears its files no build used in a day. GP_SCCACHE=0
+turns it off; an RUSTC_WRAPPER already set, even empty, is kept.
 """
 
 import fcntl
@@ -138,7 +141,7 @@ def compile_cache(env):
         return None
     env["RUSTC_WRAPPER"] = sccache
     env.setdefault("SCCACHE_DIR", os.path.join(home(), "work", "sccache"))
-    env.setdefault("SCCACHE_CACHE_SIZE", "30G")
+    env.setdefault("SCCACHE_CACHE_SIZE", "10G")
     return sccache
 
 
