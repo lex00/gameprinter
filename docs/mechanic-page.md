@@ -2,7 +2,10 @@
 
 `gp serve` hosts the page at `http://127.0.0.1:7710/mechanic/GAME/`, and its
 root opens it (crates/gp-cli/src/serve/pages.rs mounts the page's server,
-crates/gp-cli/src/mechanic/server.rs). `gp mechanic start GAME [MECHANIC]`
+crates/gp-cli/src/mechanic/server.rs). Since 2026-11-26 that address opens
+[the screen](#the-screen) (`mechanic/screen.html`), the one page the owner
+works on; the older page this section describes, with its tabs, is at
+`/mechanic/GAME/index.html` until it is removed. `gp mechanic start GAME [MECHANIC]`
 opens its CLIPS tab, starting `gp serve` when none answers; `--own-server`
 serves the page alone on 127.0.0.1:7712 as before (the first screen at
 `/start/` is gp serve's, so there the logo opens the game's page). The page is `mechanic/`

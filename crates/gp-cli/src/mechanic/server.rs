@@ -1042,7 +1042,11 @@ fn handle(s: &Server, req: &Request) -> Result<Response> {
         return r;
     }
     match (req.method.as_str(), req.path.as_str()) {
-        ("GET" | "HEAD", "/") => page("index.html", "text/html; charset=utf-8"),
+        // The screen page is the one page (the owner, 2026-11-26: "get rid
+        // of the older one"): gp serve's /mechanic/GAME/, and its root,
+        // open it. The older page stays at /index.html until it goes.
+        ("GET" | "HEAD", "/") => page("screen.html", "text/html; charset=utf-8"),
+        ("GET" | "HEAD", "/index.html") => page("index.html", "text/html; charset=utf-8"),
         ("GET" | "HEAD", "/app.js") => page("app.js", "text/javascript; charset=utf-8"),
         ("GET" | "HEAD", "/rebuild-card.js") => {
             page("rebuild-card.js", "text/javascript; charset=utf-8")
@@ -2338,6 +2342,7 @@ mod tests {
         fs::create_dir_all(repo.join("mechanic")).unwrap();
         for f in [
             "index.html",
+            "screen.html",
             "app.js",
             "nesplayer.js",
             "style.css",
@@ -2448,14 +2453,18 @@ mod tests {
     }
 
     /// The page's files, the ROM, and the player's absence said plainly as
-    /// JSON (the page shows the message instead of compiling it).
+    /// JSON (the page shows the message instead of compiling it). The
+    /// root is the screen page; the older page is at /index.html until it
+    /// goes (docs/mechanic-page.md).
     #[test]
     fn the_page_the_rom_and_a_missing_player() {
         let d = tempfile::tempdir().unwrap();
         let srv = server(d.path());
         let (s, kind, body) = call(&srv, "GET", "/", None);
         assert_eq!((s, kind.as_str()), (200, "text/html; charset=utf-8"));
-        assert_eq!(body, "the page's index.html");
+        assert_eq!(body, "the page's screen.html");
+        assert_eq!(get(&srv, "/screen.html").1, "the page's screen.html");
+        assert_eq!(get(&srv, "/index.html").1, "the page's index.html");
         assert_eq!(get(&srv, "/app.js").1, "the page's app.js");
         let (s, kind, _) = call(&srv, "GET", "/rom", None);
         assert_eq!((s, kind.as_str()), (200, "application/octet-stream"));

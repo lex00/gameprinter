@@ -173,6 +173,21 @@ async function gamePageOpen(page) {
   return Boolean(await page.$("#tabs").catch(() => null)) && !(await page.$("#wait").catch(() => true));
 }
 
+/** Whether `page` shows the game's screen page (mechanic/screen.html),
+ * which gp serve's /mechanic/GAME/ and its root open: the view buttons, its
+ * #title naming the game, and not gp serve's waiting page. The older page
+ * this check drives is at /mechanic/GAME/index.html until it goes
+ * (docs/mechanic-page.md). */
+async function screenPageOpen(page) {
+  if (!page.url().includes(`/mechanic/${GAME}/`)) return false;
+  if (!(await text(page, "#title").catch(() => "")).startsWith(GAME)) return false;
+  return Boolean(await page.$("#views").catch(() => null)) && !(await page.$("#wait").catch(() => true));
+}
+
+/** The older page's address for `url`, a /mechanic/GAME/ address the
+ * screen page answers: the same query at index.html. */
+const olderPage = (url) => { const u = new URL(url); if (u.pathname.endsWith("/")) u.pathname += "index.html"; return u.href; };
+
 /** A screenshot of the page into --shots, when given: the whole page, or
  * what the window shows (`fullPage` false), where fixed panels are. */
 async function shot(page, name, fullPage = true) {
@@ -263,7 +278,12 @@ async function main() {
   const page = await browser.newPage();
   const errors = [];
   page.on("pageerror", (e) => errors.push(String(e)));
-  await page.goto(url);
+  // The server's root is the screen page; the older page this drives is
+  // at index.html until it goes.
+  const root = await (await fetch(url)).text();
+  if (!root.includes('id="views"')) fail(`gp mechanic start --own-server's root isn't the screen page: ${root.slice(0, 200)}`);
+  ok("gp mechanic start --own-server's root is the screen page");
+  await page.goto(olderPage(url));
   await until("the page shows the session", async () => (await text(page, "#title")) === `${GAME} / ${MECH}`);
   const f0 = await until("the game plays 60 frames", async () => ((await frame(page)) > 60 ? frame(page) : 0));
   ok(`the page loaded ${GAME} / ${MECH} and plays (frame ${f0})`);
@@ -611,7 +631,7 @@ async function main() {
   const p2 = await browser.newPage();
   const errors2 = [];
   p2.on("pageerror", (e) => errors2.push(String(e)));
-  await p2.goto(bare);
+  await p2.goto(olderPage(bare));
   const why = await until("the page's message with no player", () => p2.evaluate(() => document.body.dataset.failed ?? ""));
   if (!why.includes("isn't built: run scripts/web/build-play.sh")) fail(`with no player the page says: ${why}`);
   if (!(await text(p2, "#busy-text")).includes("isn't built")) fail("the message isn't on the page");
@@ -666,7 +686,7 @@ async function arcade() {
       return src;
     };
   });
-  await page.goto(url);
+  await page.goto(olderPage(url));
   await until("the arcade page shows the session", async () => (await text(page, "#title")) === `${game} / ${mech}`);
   const shape = await page.evaluate(() => ({ p: document.body.dataset.platform, w: document.getElementById("game").width, h: document.getElementById("game").height }));
   if (shape.p !== "arcade" || shape.w !== 512 || shape.h !== 480) fail(`the arcade page: ${JSON.stringify(shape)}`);
@@ -977,11 +997,21 @@ async function oneServer() {
       fail(`${e.message}; the page ${await pageSays(page)}${errors.length ? `; it threw ${errors.join("; ")}` : ""}; gp serve's stderr: ${serveSaid() || "nothing"}`);
     }
   };
+  const screenPage = async (what) => {
+    try {
+      await until(what, () => screenPageOpen(page), 60000);
+    } catch (e) {
+      fail(`${e.message}; the page ${await pageSays(page)}${errors.length ? `; it threw ${errors.join("; ")}` : ""}; gp serve's stderr: ${serveSaid() || "nothing"}`);
+    }
+  };
   await page.click(`#games a:text("${GAME}")`);
-  await gamePage("the game's page");
+  await screenPage("the game's screen page");
   await page.goto(base[0]);
-  await gamePage("gp serve's root opens the last game");
-  ok(`gp serve's root lists the games (${listed.join(", ")}), then opens the last one opened: ${page.url()}`);
+  await screenPage("gp serve's root opens the last game's screen page");
+  ok(`gp serve's root lists the games (${listed.join(", ")}), then opens the last one opened, on the screen page: ${page.url()}`);
+  // The rest drives the older page, at index.html until it goes.
+  await page.goto(olderPage(page.url()));
+  await gamePage("the older page at index.html");
   const logo = await page.evaluate(() => document.getElementById("logo").href);
   const logoAt = await fetch(logo);
   if (logoAt.status !== 200 || new URL(logo).pathname !== "/start/") fail(`the logo on gp serve opens ${logo}: ${logoAt.status}`);
@@ -1064,7 +1094,7 @@ async function romSets() {
   const page = await browser.newPage();
   const errors = [];
   page.on("pageerror", (e) => errors.push(String(e)));
-  await page.goto(url);
+  await page.goto(olderPage(url));
   await until(`${game}'s page`, async () => (await text(page, "#title")) === `${game} / sets`);
   const listed = await until("the set picker", async () => (!(await page.isHidden("#rom-pick")) ? page.evaluate(() => [...document.querySelectorAll("#rom-pick option")].map((o) => o.value)) : null));
   if (!listed.includes(play) || listed.length < 2) fail(`the set picker lists ${listed}`);
@@ -1142,7 +1172,7 @@ async function gpServe(gamesDir) {
  * "Execution context was destroyed". */
 async function openGame(page, base, query) {
   await until("the game's page is made", async () => (await (await fetch(`${base}api/mechanic/${GAME}/ready`)).json()).ready, 240000);
-  await page.goto(`${base}mechanic/${GAME}/${query}`);
+  await page.goto(`${base}mechanic/${GAME}/index.html${query}`);
 }
 
 /** gp mcp on this home, as an agent talks to it: call(tool, args). */
@@ -1186,7 +1216,7 @@ async function agentOnThePage() {
   const page = await browser.newPage({ viewport: { width: 1600, height: 1000 } });
   const errors = [];
   page.on("pageerror", (e) => errors.push(String(e)));
-  await page.goto(`${base}mechanic/${GAME}/?tab=play&log=1`);
+  await page.goto(`${base}mechanic/${GAME}/index.html?tab=play&log=1`);
   await until("the page", () => gamePageOpen(page), 60000);
   ok("gp serve answers /api/mechanic/GAME/ready, and the page opens once the game is ready");
   const agent = mcpClient();
@@ -1676,7 +1706,7 @@ async function pictureProposals() {
   const page = await browser.newPage({ viewport: { width: 1400, height: 1000 } });
   const errors = [];
   page.on("pageerror", (e) => errors.push(String(e)));
-  await page.goto(`${base}mechanic/${GAME}/?tab=themes`);
+  await page.goto(`${base}mechanic/${GAME}/index.html?tab=themes`);
   await until("the page", () => gamePageOpen(page), 60000);
   const agent = mcpClient();
   const propose = (png, why) => agent.call("gp_run", { command: "theme picture propose", args: { dir: theme, game: GAME, picture: "art/hero.png", png, why } });
@@ -1781,7 +1811,7 @@ async function soundProposals() {
   const page = await browser.newPage({ viewport: { width: 1400, height: 1000 } });
   const errors = [];
   page.on("pageerror", (e) => errors.push(String(e)));
-  await page.goto(`${base}mechanic/${GAME}/?tab=clips`);
+  await page.goto(`${base}mechanic/${GAME}/index.html?tab=clips`);
   await until("the page", () => gamePageOpen(page), 60000);
   const lower = [{ op: "transpose", song: "theme", semitones: -12 }];
   const direct = await agent.call("sound_edit", { copy: "check_tune", ops: lower, write: true, confirmed_by_person: true });
@@ -1891,7 +1921,7 @@ async function roleSoundProposals() {
   const page = await browser.newPage({ viewport: { width: 1400, height: 1000 } });
   const errors = [];
   page.on("pageerror", (e) => errors.push(String(e)));
-  await page.goto(`${base}mechanic/${GAME}/?tab=themes`);
+  await page.goto(`${base}mechanic/${GAME}/index.html?tab=themes`);
   await until("the page", () => gamePageOpen(page), 60000);
   const agent = mcpClient();
   const propose = (take, wav, why) => agent.call("gp_run", { command: "theme sound propose", args: { copy: theme, game: GAME, role: "hop", take, wav: join(work, wav), why } });
@@ -2334,7 +2364,11 @@ async function copyTabs() {
 
   // A port: the four tabs, as before.
   await page.selectOption("#copy-pick", `port:${GAME}`);
-  await until("the picker opens the port", async () => page.url().includes(`/mechanic/${GAME}/`) && (await gamePageOpen(page)), 240000);
+  await until("the picker opens the port's screen page", () => screenPageOpen(page), 240000);
+  ok(`the picker opens the port on its screen page: ${page.url()}`);
+  // The older page's tabs, at index.html until it goes.
+  await page.goto(olderPage(page.url()));
+  await until("the port's older page", () => gamePageOpen(page), 240000);
   const portTabs = await until("the port's tabs", async () => { const t = await shown().catch(() => ""); return t.split(" ").length === 4 ? t : null; });
   if (portTabs !== "CLIPS* REFINE PLAY THEMES") fail(`the port's tabs: ${portTabs}`);
   const picks = await until("the port's picker lists the copies", async () => {
@@ -2434,7 +2468,7 @@ async function narrow() {
   const page = await browser.newPage({ viewport: { width: 360, height: 780 } });
   const errors = [];
   page.on("pageerror", (e) => errors.push(String(e)));
-  await page.goto(`${base}mechanic/${GAME}/?tab=clips`);
+  await page.goto(`${base}mechanic/${GAME}/index.html?tab=clips`);
   await until("the page at 360 px", () => gamePageOpen(page), 60000);
   const fits = () => page.evaluate(() => {
     const W = innerWidth;
