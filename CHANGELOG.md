@@ -2,6 +2,26 @@
 
 Each release of gp has a section here, `## gp VERSION` (a date may follow), and its GitHub release's notes are that section. A release is refused before it is cut when its section is missing ([docs/release.md](docs/release.md)). Add the next one in a commit to main before `just release`.
 
+## gp 0.1.8
+
+Themes can do more. A room piece can change as the game plays (`room_react`), drift or slide across the screen and come round again (`room_react_drift`, `room_scroll`), and be staggered by placement or by row. A piece can be drawn under an entity's bodies (`under`), a `pic`, `timed` or `also` line can hold on named screens only (`on SCREEN`), an `also` picture can be limited to a span of frames, and a counter can be left off the screen (`counter_off`). `room_mask` lays a piece larger than a cell, a room rule ending `pick=NAME` picks the same place across rooms, and a mirrored body's `also` picture is mirrored with it. `gp theme look take` brings pictures from a theme copy into a games checkout, and `gp serve`'s screen offers the game's own themes.
+
+The public page is drawn as an arcade, and the docs site wears the same look. The player has a full screen mode (F, or the Full screen button), a link back to the list of games, and a What is this? button that first says what the page is. Its controls are read by one module, `gp_controls.wasm`, which the screen and mechanic pages use too, and the lever holds the button for as long as the stick is pulled. A game module that stops shows its own words for why. The rewind ring holds at most 32 MB. The page counts visits with PostHog.
+
+`gp serve` has one page. Its root and `/mechanic/GAME/` open the screen page. The model on that page plays its sound, and the board's sound no longer buzzes. The page waits while the server moves onto a new build in place of showing an error, and it follows a game's module as its hook code changes.
+
+Cards say less and mean what they say. A gate card says at most 150 words: what you will see change, what to expect and how many files. Its middle button reads DON'T LAND IT YET. A card's LOOK AT IT is checked before the card is shown, and plays from the games checkout's commit with local changes left out. A card whose change is on main already closes as landed. A yes on `gp corpus import --write` runs in the gate's own tree.
+
+A loop worker runs inside a wall. Its reads are limited to a few named folders, its environment is cleared, and scripts go through `gp worker confined`, which allows writes only in the worktree and no network. A run has a turn cap and a spend cap (`gp loop set --max-turns`, `--max-spend`), and the runner stops a worker that stalls, repeats itself or keeps being refused. Each run's cost, turns and refusals are recorded, and `gp loop stats` counts what a landing cost. The runner starts no worker on a row that has neither a target nor words for what would measure it. A patch that removes a test or takes assertions out fails the tool gate unless it names the test (`--removes-test`), and a change to what steers workers waits for you. `gp loop replay` scores workers by running archived rows again ([docs/worker-evals.md](docs/worker-evals.md)).
+
+The home's disk stays clear. `gp loop clean` and the hourly sweep remove the worktrees of workers that ended a day ago, their branches, module kits and compile cache files nothing used in a day, and a replay trial's builds. The tool gate prunes an older version's builds at its start.
+
+`gp loop health` reads GitHub's checks of main, says when a game can't be published, names the games checkout's local changes, and counts the trees and branches workers left. `gp loop set-aside GAME` puts those local changes away on your yes.
+
+Also: a level can drop the bodies removed during play (`drop_removed`); a corpus clip whose presses name NES buttons plays on an arcade game's page; `gp registry publish` refuses a package scored against a path outside it; scripts record and cut a demo video from the screen page ([docs/demo-video.md](docs/demo-video.md)).
+
+Windows builds are still to come.
+
 ## gp 0.1.7
 
 The model gate stops scoring a tree it has just scored. It keeps the score of each commit it lands, and of each dry run that passes, so the next run reads the tip's score in place of measuring every clip again. On a game with 86 clips that step took about eight and a half minutes after every landing; now it takes none. The newest 32 scores are kept.
