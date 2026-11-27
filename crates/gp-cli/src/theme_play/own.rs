@@ -18,8 +18,8 @@ use gp_evidence::Paths;
 use serde_json::Value;
 
 use super::{
-    Built, GameFacts, Pictured, Play, PlayArgs, Served, Serving, ShotDef, Side, bind, checkout,
-    frames_of, moments_for, serve_on, serve_sides, theme_files,
+    Built, GameFacts, Pictured, Play, PlayArgs, Served, Serving, ShotDef, Side, Strip, bind,
+    checkout, frames_of, moments_wanted, serve_on, serve_sides, theme_files,
 };
 use crate::Outcome;
 
@@ -215,7 +215,7 @@ pub(super) fn run(
     // Pictures.
     if let Some(shots_out) = &a.shots {
         let roms = vec![(facts.id.clone(), String::new())];
-        let (moments, from) = moments_for(a.moments.as_deref(), game_dir, &roms)?;
+        let (moments, from) = moments_wanted(a, game_dir, &roms)?;
         let _ = writeln!(text, "The moments: {from}");
         fs::create_dir_all(out.join("runs"))?;
         for r in &moments.run {
@@ -250,6 +250,8 @@ pub(super) fn run(
             origins: &origins,
             work: work.path(),
             moments: &from,
+            strip: Strip::of(a)?,
+            find: None,
         };
         let r = pictured.take(paths, a.browser.as_deref(), shots_out, &plays, text);
         if let Ok(o) = &r

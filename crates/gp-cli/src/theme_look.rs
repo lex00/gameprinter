@@ -113,7 +113,11 @@ pub enum LookCmd {
     ///
     /// Example: gp theme look play ~/my-theme --game rooftop --shots
     /// ~/theme-shots --against friend/night@0.9.2
-    Play(crate::theme_play::PlayArgs),
+    ///
+    /// Example: gp theme look play ~/my-theme --game rooftop --shots
+    /// ~/theme-shots --frames 600-900/30 --strip ~/strip.png --box
+    /// 0,96,256,160 --find hero
+    Play(Box<crate::theme_play::PlayArgs>),
     /// For an arcade game drawn by its board's art: the names a theme may
     /// give the board's pictures that the game shows, and a contact sheet
     /// of each entity's sprite codes, from your own romset and the game's

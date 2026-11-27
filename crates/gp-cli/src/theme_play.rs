@@ -101,6 +101,33 @@ pub struct PlayArgs {
     /// in its page-check.toml and page-pictures.txt). Example: --moments shots.toml
     #[arg(long)]
     pub moments: Option<PathBuf>,
+    /// With --shots: a shot at each of these frames of one run of the
+    /// moments in place of the moments' own shots, a comma list of N, A-B
+    /// (every frame) and A-B/STEP (a shot every STEP frames). Example:
+    /// --frames 1200-1500/30
+    #[arg(long, value_name = "A-B/STEP,N")]
+    pub frames: Option<String>,
+    /// The run of the moments --frames is on (default: the moments' only
+    /// run). Example: --run serve
+    #[arg(long, requires = "frames")]
+    pub run: Option<String>,
+    /// With --shots: one picture of all the shots side by side in frame
+    /// order, a row for each theme pictured, written to this file (with
+    /// several ROMs, FILE-ROM.png for each). Example: --strip ~/strip.png
+    #[arg(long, value_name = "FILE")]
+    pub strip: Option<PathBuf>,
+    /// The part of each shot --strip shows: X0,Y0,X1,Y1 in your theme's
+    /// shot's pixels (the right and bottom edges not taken), scaled for a
+    /// theme drawn at another size. Example: --box 0,96,256,160
+    #[arg(long = "box", value_name = "X0,Y0,X1,Y1", requires = "strip")]
+    pub crop: Option<String>,
+    /// With --shots: for each shot, whether and where each of these
+    /// pictures of your theme is drawn (a file of its look, with or without
+    /// .png, or its file name alone; up to 8). A copy of the theme with
+    /// each painted a loud colour is pictured beside it. Example: --find
+    /// sprites/hero --find door
+    #[arg(long, value_name = "PICTURE")]
+    pub find: Vec<String>,
     /// The built page to serve, a folder holding index.html and page.json
     /// (default: one built from the gameprinter checkout as it is now,
     /// else the newest that passed the release check in
@@ -1115,6 +1142,27 @@ fn pictures_moments(text: &str) -> Vec<Picture> {
     out
 }
 
+/// The moments `--shots` pictures: [`moments_for`]'s, or with `--frames`
+/// a shot at each of its frames of one run of them.
+fn moments_wanted(
+    a: &PlayArgs,
+    game_dir: &Path,
+    roms: &[(String, String)],
+) -> Result<(Moments, String)> {
+    let (m, from) = moments_for(a.moments.as_deref(), game_dir, roms)?;
+    let Some(spec) = &a.frames else {
+        return Ok((m, from));
+    };
+    let frames = at::parse_frames(spec)?;
+    let m = at::at_frames(&m, a.run.as_deref(), &frames)?;
+    let from = format!(
+        "{} shots on run {} of {from} (--frames {spec})",
+        m.shot.len(),
+        m.run[0].name
+    );
+    Ok((m, from))
+}
+
 /// The moments to picture and where they came from.
 fn moments_for(
     given: Option<&Path>,
@@ -1869,6 +1917,9 @@ pub(crate) fn run(a: &PlayArgs, paths: &Paths) -> Result<Outcome> {
     if a.shots.is_some() && a.background {
         bail!("--shots runs to the end by itself: leave out --background");
     }
+    if a.shots.is_none() && (a.frames.is_some() || a.strip.is_some() || !a.find.is_empty()) {
+        bail!("--frames, --strip and --find are for the pictures: give --shots DIR too");
+    }
     let game_dir = crate::theme_kit::template_dir(&a.game)?;
     let game_dir = game_dir.canonicalize().unwrap_or(game_dir);
     let facts = game_facts(&game_dir)?;
@@ -1938,10 +1989,39 @@ pub(crate) fn run(a: &PlayArgs, paths: &Paths) -> Result<Outcome> {
         .prefix("gp-theme-play-")
         .tempdir()
         .context("making a scratch folder")?;
+    // --find: the copy with its pictures painted, pictured last.
+    let find = if a.find.is_empty() {
+        None
+    } else {
+        if facts.road == Road::Own {
+            bail!(
+                "--find works on a game played from a ROM: {} plays from its own files",
+                facts.title
+            );
+        }
+        let (p, sought) = at::painted_copy(&theme, &a.find, &work.path().join("find-theme"))?;
+        let _ = writeln!(
+            text,
+            "--find: a copy of your theme with {} painted is pictured beside it",
+            sought
+                .iter()
+                .map(|s| format!("{} ({:?})", s.file, s.colour))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+        sides.push(Side::Folder(p));
+        Some(Find {
+            side: sides.len() - 1,
+            sought,
+        })
+    };
     let tags: Vec<String> = {
         let mut t: Vec<String> = sides.iter().map(Side::tag).collect();
-        if t.len() == 2 && t[0] == t[1] {
+        if t.len() >= 2 && t[0] == t[1] {
             t[1].push_str("-against");
+        }
+        if let Some(f) = &find {
+            t[f.side] = format!("{}-find", t[0]);
         }
         t
     };
@@ -2041,6 +2121,7 @@ pub(crate) fn run(a: &PlayArgs, paths: &Paths) -> Result<Outcome> {
             &tags,
             work.path(),
             out,
+            find,
             text,
         );
         // A theme copy's journey: pictured in the game.
@@ -2300,6 +2381,7 @@ fn shots(
     tags: &[String],
     work: &Path,
     out: &Path,
+    find: Option<Find>,
     mut text: String,
 ) -> Result<Outcome> {
     // The ROMs: the one given, else each the game takes that is here.
@@ -2329,7 +2411,7 @@ fn shots(
             paths.roms.display()
         );
     }
-    let (moments, from) = moments_for(a.moments.as_deref(), game_dir, &roms)?;
+    let (moments, from) = moments_wanted(a, game_dir, &roms)?;
     let _ = writeln!(text, "The moments: {from}");
     let mut runs = BTreeMap::new();
     for r in &moments.run {
@@ -2387,8 +2469,33 @@ fn shots(
         origins: &origins,
         work,
         moments: &from,
+        strip: Strip::of(a)?,
+        find,
     };
     pictured.take(paths, a.browser.as_deref(), out, &plays, text)
+}
+
+/// `--strip` and its `--box`.
+struct Strip {
+    out: PathBuf,
+    crop: Option<[u32; 4]>,
+}
+
+impl Strip {
+    fn of(a: &PlayArgs) -> Result<Option<Self>> {
+        let Some(out) = &a.strip else { return Ok(None) };
+        Ok(Some(Strip {
+            out: out.clone(),
+            crop: a.crop.as_deref().map(at::parse_box).transpose()?,
+        }))
+    }
+}
+
+/// `--find`: the side that is the painted copy (the last) and the pictures
+/// painted in it.
+struct Find {
+    side: usize,
+    sought: Vec<at::Sought>,
 }
 
 /// One play of the game for pictures: on a ROM (its entry id), or, for a
@@ -2407,6 +2514,10 @@ struct Pictured<'a> {
     work: &'a Path,
     /// Where the moments came from.
     moments: &'a str,
+    /// `--strip`, `--box`.
+    strip: Option<Strip>,
+    /// `--find`.
+    find: Option<Find>,
 }
 
 impl Pictured<'_> {
@@ -2432,6 +2543,8 @@ impl Pictured<'_> {
         let mut paired = Vec::new();
         let mut shot_count = 0;
         let mut refused = Vec::new();
+        let mut strips = Vec::new();
+        let mut found = Vec::new();
         'plays: for play in plays {
             let list = &play.shots;
             let mut files: Vec<BTreeMap<String, PathBuf>> = Vec::new();
@@ -2513,7 +2626,104 @@ impl Pictured<'_> {
                 }));
                 files.push(got);
             }
-            if files.len() == 2 {
+            // The sides compared (the painted copy of --find left out).
+            let compared = self.find.as_ref().map_or(sides.len(), |f| f.side);
+            if let Some(st) = &self.strip {
+                let load = |f: Option<&PathBuf>| f.and_then(|f| Rgba::load(f).ok());
+                let rows: Vec<Vec<Option<Rgba>>> = files
+                    .iter()
+                    .take(compared)
+                    .map(|got| list.iter().map(|s| load(got.get(&s.name))).collect())
+                    .collect();
+                let f = at::strip_file(&st.out, &play.id, plays.len());
+                if let Some(d) = f.parent().filter(|d| !d.as_os_str().is_empty()) {
+                    fs::create_dir_all(d)?;
+                }
+                fs::write(&f, at::strip(&rows, st.crop).png())
+                    .with_context(|| format!("writing {}", f.display()))?;
+                let _ = writeln!(
+                    text,
+                    "The strip of {} on {}: {} ({} shots in frame order, a row for each of {})",
+                    if st.crop.is_some() {
+                        "the box"
+                    } else {
+                        "the shots"
+                    },
+                    play.id,
+                    f.display(),
+                    list.len(),
+                    tags[..rows.len()].join(", ")
+                );
+                strips.push(json!({ "rom": play.id, "file": f, "shots": list.len() }));
+            }
+            if let Some(fd) = &self.find
+                && files.len() > fd.side
+            {
+                let mut seen: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+                for s in list {
+                    let (Some(own), Some(painted)) =
+                        (files[0].get(&s.name), files[fd.side].get(&s.name))
+                    else {
+                        continue;
+                    };
+                    let own = Rgba::load(own).map_err(|e| anyhow!(e))?;
+                    let painted = Rgba::load(painted).map_err(|e| anyhow!(e))?;
+                    let mut at_shot = serde_json::Map::new();
+                    let mut words = Vec::new();
+                    for p in &fd.sought {
+                        match at::find_in(&own, &painted, p.colour) {
+                            Some(g) => {
+                                seen.entry(&p.name).or_default().push(&s.name);
+                                let [x0, y0, x1, y1] = g.bbox;
+                                words.push(format!(
+                                    "{} at {x0},{y0},{x1},{y1} ({} pixels)",
+                                    p.name, g.pixels
+                                ));
+                                at_shot.insert(
+                                    p.name.clone(),
+                                    json!({ "pixels": g.pixels, "box": g.bbox }),
+                                );
+                            }
+                            None => {
+                                at_shot.insert(p.name.clone(), Value::Null);
+                            }
+                        }
+                    }
+                    let _ = writeln!(
+                        text,
+                        "  {}-{} (frame {}): {}",
+                        play.id,
+                        s.name,
+                        s.frame,
+                        if words.is_empty() {
+                            "none drawn".to_owned()
+                        } else {
+                            words.join("; ")
+                        }
+                    );
+                    found.push(json!({
+                        "rom": play.id, "moment": s.name, "frame": s.frame,
+                        "pictures": at_shot,
+                    }));
+                }
+                for p in &fd.sought {
+                    let shots = seen.get(p.name.as_str()).map_or(&[][..], Vec::as_slice);
+                    let _ = writeln!(
+                        text,
+                        "{} on {}: drawn in {} of {} shots{}",
+                        p.name,
+                        play.id,
+                        shots.len(),
+                        list.len(),
+                        if shots.is_empty() {
+                            String::new()
+                        } else {
+                            format!(" ({})", shots.join(", "))
+                        }
+                    );
+                }
+            }
+            if files.len() >= 2 && compared == 2 {
                 for s in list {
                     let (Some(l), Some(r)) = (files[0].get(&s.name), files[1].get(&s.name)) else {
                         continue;
@@ -2571,12 +2781,15 @@ impl Pictured<'_> {
                 "sides": sides.iter().map(Side::words).collect::<Vec<_>>(),
                 "pictures": shot_count,
                 "refused": refused,
+                "strips": strips,
+                "found": found,
             }),
             text,
         ))
     }
 }
 
+mod at;
 mod own;
 
 #[cfg(test)]
