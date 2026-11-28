@@ -3216,4 +3216,72 @@ mod tests {
         assert_eq!(mechanic_to_open(&p, "mosshop", None).unwrap(), "jump");
         assert_eq!(mechanic_to_open(&p, "mosshop", Some("hop")).unwrap(), "hop");
     }
+
+    /// One page, the screen page only (docs/mechanic-page.md; the owner,
+    /// 2026-11-26: "get rid of the older one"): the older page,
+    /// mechanic/index.html and mechanic/app.js, is gone, the server serves
+    /// no route for it, scripts/web/check-mechanic.mjs drives only the
+    /// screen page, and no doc names the older page's files. Ignored until
+    /// the patch that removes the page, which takes the ignore off:
+    /// `cargo test -p gp-cli --bin gp older_mechanic_page_is_gone -- --ignored`
+    /// lists what is left of the older page, and passes once none is.
+    #[test]
+    #[ignore = "passes once the older mechanic page is gone; its removal takes this off"]
+    fn older_mechanic_page_is_gone() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let mut left = Vec::new();
+        for f in ["mechanic/index.html", "mechanic/app.js"] {
+            if root.join(f).exists() {
+                left.push(format!("{f} is still in the repo"));
+            }
+        }
+        let server = fs::read_to_string(root.join("crates/gp-cli/src/mechanic/server.rs")).unwrap();
+        for route in ["page(\"index.html\"", "page(\"app.js\""] {
+            if server.contains(route) {
+                left.push(format!("server.rs still serves {route})"));
+            }
+        }
+        let check = fs::read_to_string(root.join("scripts/web/check-mechanic.mjs")).unwrap();
+        for older in ["olderPage(", "mechanic/${GAME}/index.html"] {
+            if check.contains(older) {
+                left.push(format!(
+                    "check-mechanic.mjs still drives the older page ({older})"
+                ));
+            }
+        }
+        fn docs(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
+            let Ok(rd) = fs::read_dir(dir) else { return };
+            for e in rd.flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    docs(&p, out);
+                } else if p.extension().is_some_and(|x| x == "md") {
+                    out.push(p);
+                }
+            }
+        }
+        let mut files = vec![root.join("README.md")];
+        docs(&root.join("docs"), &mut files);
+        for f in files {
+            let Ok(text) = fs::read_to_string(&f) else {
+                continue;
+            };
+            for name in [
+                "mechanic/index.html",
+                "mechanic/app.js",
+                "mechanic/GAME/index.html",
+                "`app.js`",
+            ] {
+                if text.contains(name) {
+                    let at = f.strip_prefix(&root).unwrap_or(&f).display().to_string();
+                    left.push(format!("{at} names {name}"));
+                }
+            }
+        }
+        assert!(
+            left.is_empty(),
+            "the older page isn't gone:\n{}",
+            left.join("\n")
+        );
+    }
 }
