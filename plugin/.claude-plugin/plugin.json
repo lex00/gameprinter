@@ -1,6 +1,6 @@
 {
   "name": "gp",
-  "version": "0.1.8",
+  "version": "0.1.9",
   "description": "Game Printer's agent setup for porting a ROM you own: the gp MCP server, the skills, a porter subagent, /gp:port and the loop's hooks. Released with gp; the versions match.",
   "author": {
     "name": "lex00"
