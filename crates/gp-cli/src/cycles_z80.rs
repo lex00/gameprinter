@@ -664,3 +664,35 @@ pub(crate) fn idle_passes(
     })?;
     Ok(out)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// On a made-up game's zip (gp_arcade::testrom::made_up_game, whose
+    /// interrupt handler calls its frame counter at 0325): the routine is
+    /// called every frame, each call's cost run alone matches the board's,
+    /// and split finds one handler a frame.
+    #[test]
+    fn calls_on_the_board_cost_what_they_cost_alone() {
+        let bytes = gp_arcade::testrom::known_made_up_game("madeupcycles");
+        let log = InputLog {
+            controllers: 1,
+            frames: vec![Default::default(); 200],
+            arcade: None,
+        };
+        let set = romset(&bytes).unwrap();
+        let found = calls(&set, &log, (150, 200), &[0x0325], true).unwrap();
+        assert!(found.len() >= 50, "{}", found.len());
+        assert!(found.iter().all(|c| c.3 == Some(c.1)));
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("split.ndjson");
+        split(&bytes, &log, (150, 160), &out, None, None).unwrap();
+        let text = fs::read_to_string(&out).unwrap();
+        assert_eq!(text.lines().count(), 11);
+        assert!(
+            text.lines().all(|l| !l.contains("\"handler\":0,")),
+            "{text}"
+        );
+    }
+}

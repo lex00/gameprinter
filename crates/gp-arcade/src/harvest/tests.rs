@@ -203,6 +203,40 @@ fn the_same_program_gives_the_same_harvest() {
     assert_eq!(a, b);
 }
 
+/// A set's interrupt handlers as the harvest finds them, on a made-up
+/// game's zip (crate::testrom::made_up_game): its main program from the
+/// zip, IM 2 through the CTC's vector at 0080, channel 3's handler at 0200,
+/// and the handler's activations dumped.
+#[test]
+fn a_sets_interrupt_handlers_are_found_from_its_zip() {
+    let zip = crate::testrom::known_made_up_game("madeupharvest");
+    let set = crate::Romset::from_zip(&zip).unwrap();
+    let b = Board::mcr_main(&set.maincpu);
+    let h = harvest(&b);
+    assert_eq!(fact(&h, "hardware.interrupt_mode"), Some(&Value::Int(2)));
+    let irqs: Vec<u16> = h
+        .facts
+        .iter()
+        .filter(|f| f.path.starts_with("hardware.interrupts."))
+        .filter_map(|f| match &f.value {
+            Value::Str(s) => u16::from_str_radix(s.strip_prefix("irq_")?, 16).ok(),
+            _ => None,
+        })
+        .collect();
+    assert!(irqs.contains(&0x0200), "{irqs:04X?}");
+    let text = dump(&b, &irqs);
+    assert!(
+        text.starts_with("im {2} i {0} vectors {80} handlers [(0200, 0003)]"),
+        "{text}"
+    );
+    // The handler's calls, and play's four enemies of 8 bytes walked by IX.
+    assert!(text.contains("act 1 0325"), "{text}");
+    assert!(
+        text.contains("reg: Ix, base: 57856, stride: 8, count: Some(4)"),
+        "{text}"
+    );
+}
+
 #[test]
 #[ignore = "prints"]
 fn dump_program() {

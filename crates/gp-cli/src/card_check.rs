@@ -208,9 +208,10 @@ pub(crate) fn run(a: &crate::gate::GateArgs, paths: &Paths) -> Result<Outcome> {
 mod tests {
     use super::*;
 
-    /// A card's look is refused naming which check failed: an arcade log
-    /// on the NES (clip), frames past the clip's end (frames); and each
-    /// passes when it fits.
+    /// A card's look is refused naming which check failed: a log of
+    /// another set or an NES log on an arcade board (a made-up game's zip),
+    /// an arcade log on the NES (clip), frames past the clip's end
+    /// (frames); and each passes when it fits.
     #[test]
     fn a_cards_look_is_checked_before_it_is_shown() {
         // The frames: 600-640 of a 467 frame clip is outside it.
@@ -222,8 +223,8 @@ mod tests {
         assert!(frames_outside("9-4", 20).is_some());
         assert!(frames_outside("x", 20).is_some());
         assert!(frames_outside("0", 0).is_some());
-        // The clip's log against the board: an NES log plays on the NES,
-        // an arcade log doesn't.
+        // The clip's log against the board: an NES log plays on the NES
+        // and not on an arcade board, an arcade log only on its own set.
         let nes_rom = {
             let mut r = b"NES\x1a\x01\x01\x00\x00".to_vec();
             r.resize(16 + 0x4000 + 0x2000, 0);
@@ -237,6 +238,14 @@ mod tests {
                 .unwrap()
                 .contains("can't play on the NES")
         );
+        let set = "madeupcard";
+        let zip = gp_arcade::testrom::known_made_up_game(set);
+        let why = wont_play(&zip, "g", &nes).unwrap();
+        assert!(why.contains("NES input log"), "{why}");
+        let why = wont_play(&zip, "g", &other).unwrap();
+        assert!(why.contains("hilltopb") && why.contains(set), "{why}");
+        let own = InputLog::new_arcade(set, "CSRLDUT");
+        assert_eq!(wont_play(&zip, "g", &own), None);
     }
 
     /// A bare clip number names no row here, and a row clip that isn't

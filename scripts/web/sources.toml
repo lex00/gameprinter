@@ -9,6 +9,13 @@ name = "gp-local"
 url = "."
 root = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEoXL5YfJ6rWdggoGhTubKRNnHfvNOByMUTPuIJshfGH root@gp-staging"
 
+# A registry in a folder with no signatures, served with the page: the
+# page check's own registry in just check-web (scripts/web/check-page-no-roms.sh),
+# made with `gp registry init DIR --name gp-folder`. Hashes are still checked.
+[folder]
+name = "gp-folder"
+url = "."
+
 # The public repo lex00/gp-registry. It has no root key, so the page doesn't
 # look at signatures or expiries for it. Signing is opt-in: give a source a
 # root and the page requires them. See docs/registry-backends.md.

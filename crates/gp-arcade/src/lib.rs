@@ -51,9 +51,9 @@
 //! wrapper is [`ArcadeRuntime`] ([`protocol`], with its selectors).
 //!
 //! examples/compare.rs plays an oracle capture's input log and checks
-//! every frame against MAME; tests/oracle_mcr.rs does the same in
-//! `cargo test` for the game $GP_GAME_DIR names, when its romset and
-//! captures are on the machine.
+//! every frame against MAME; [`checks`] holds that and the other checks of
+//! a game against its own ROM, which `gp oracle board` runs from the
+//! game's folder.
 //!
 //! # The crate's name
 //!
@@ -63,6 +63,7 @@
 
 pub mod attotime;
 pub mod canonical;
+pub mod checks;
 pub mod cpm;
 pub mod ctc;
 pub mod dasm;

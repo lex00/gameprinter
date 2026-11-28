@@ -1842,6 +1842,31 @@ mod tests {
         assert_eq!(z80_hex(z80_va(1, 0x0276)), "sound:0276");
     }
 
+    /// A made-up game's zip (gp_arcade::testrom::made_up_game), idle for
+    /// 200 frames: one stretch on one stage, the main CPU's reset routine
+    /// run, and branches read both ways.
+    #[test]
+    fn a_romset_run_is_counted_by_z80_routine() {
+        let zip = gp_arcade::testrom::known_made_up_game("madeupreduce");
+        let set = gp_arcade::Romset::from_zip(&zip).unwrap();
+        let clip = crate::reach::ClipInput {
+            set: String::new(),
+            id: "idle".into(),
+            power_on: gp_evidence::manifest::PowerOn::default(),
+            inputs: vec![gp_evidence::input_log::InputFrame::default(); 200],
+        };
+        let runs = vec![(String::new(), 101, 200, 0)];
+        let (by_run, all) = count_arcade(&set, &[clip], &runs, None, false).expect("counted");
+        assert_eq!(by_run.len(), 1);
+        assert_eq!(by_run[0].len(), 1);
+        assert_eq!(by_run[0][0].levels.watched, 100);
+        let r = Reader::arcade(&set, &all);
+        let stats = arcade_stats(&by_run[0][0].levels);
+        assert!(r.routines().iter().any(|x| x.name == "main:0000"));
+        assert!(stats.keys().any(|v| r.is_branch(*v)));
+        assert!(stats.keys().all(|v| r.routine_of(*v).is_some()));
+    }
+
     /// A made-up program's compare log: port 1 (tap held reads $EF, else
     /// $FF) compared with a byte through (hl) holding $F0 and then with
     /// $EF, each followed by a jump. Tap held on every other frame flips

@@ -44,9 +44,9 @@ pub(crate) struct Captures {
     pub schema: u32,
     #[serde(default, rename = "capture")]
     pub captures: Vec<Entry>,
-    /// The captures the arcade tests replay against the board
-    /// (gp_arcade::romset::test_replays): each by its folder's name and
-    /// its input log. Made once and kept on this machine, with no hash.
+    /// The captures `gp oracle board` replays against the board
+    /// (crate::oracle_board): each by its folder's name and its input
+    /// log. Made once and kept on this machine, with no hash.
     #[serde(default, rename = "replay")]
     pub replays: Vec<Replay>,
     /// Where the file is: input paths are from its game's folder.

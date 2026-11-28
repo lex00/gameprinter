@@ -555,4 +555,47 @@ mod tests {
         assert_eq!(all, vec![0x0009], "{c:?}");
         assert_eq!(c.keys().next().map(|k| k.0), Some(0));
     }
+
+    /// On a made-up game's zip (gp_arcade::testrom::made_up_game, in
+    /// attract mode for its first 100 frames and in play after): an idle
+    /// run's later frames, by routine, hold the interrupt handler and the
+    /// sound CPU's routines, and against its first frames the diff names
+    /// what only one side ran.
+    #[test]
+    fn a_window_reads_by_routine_of_both_cpus() {
+        use crate::reach::ClipInput;
+        let zip = gp_arcade::testrom::known_made_up_game("madeupwindow");
+        let set = Romset::from_zip(&zip).unwrap();
+        let clip = ClipInput {
+            set: "t".into(),
+            id: "idle".into(),
+            power_on: Default::default(),
+            inputs: vec![Default::default(); 240],
+        };
+        let late =
+            crate::code_z80::run_clips(&set, std::slice::from_ref(&clip), (200, 240)).unwrap();
+        let early = crate::code_z80::run_clips(&set, &[clip], (1, 20)).unwrap();
+        assert_eq!(late.watched, 41);
+        let side = |l: &Levels| Side {
+            label: String::new(),
+            frames: l.watched,
+            ran: ran_of(l),
+        };
+        let maps = Maps::of(&set, &[&late, &early]);
+        let (rows, outside) = rows(&maps, &side(&late).ran);
+        assert!(outside.is_empty());
+        assert!(rows.values().any(|(_, why)| *why == "interrupt handler"));
+        assert!(
+            rows.keys().any(|(c, _)| *c == 1),
+            "the sound CPU's routines"
+        );
+        let (text, doc) = diff_report(&maps, &side(&late), &side(&early), None);
+        assert!(text.starts_with("A: "), "{text}");
+        assert!(
+            !doc["a_not_b"]["routines_only"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+    }
 }

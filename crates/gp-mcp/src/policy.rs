@@ -573,6 +573,7 @@ pub const TABLE: &[Row] = &[
     r("movie hashes", D, Read),
     r("movie import", J, Write),
     r("noop", D, Read),
+    r("oracle board", D, Read),
     r("oracle check", D, Read),
     r("oracle diff", D, Read),
     r("oracle golden", D, Write),

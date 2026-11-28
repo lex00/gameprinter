@@ -151,8 +151,8 @@ check: _hook-enabled build mosshop
     @echo "just check: passed"
 
 # The browser-heavy checks, left out of `just check` so a change lands in
-# minutes: the editor, web parity, the player in a browser and the mechanic
-# page. CI runs them after `just check`; run them by hand when you change
+# minutes: the editor, web parity, the player in a browser, the mechanic
+# page and the public page's sections that need no ROM. CI runs them after `just check`; run them by hand when you change
 # scripts/web, editor, mechanic or the play and web crates. No ROM, no games
 # checkout: Moss Hop only.
 check-web: build mosshop
@@ -161,6 +161,7 @@ check-web: build mosshop
     scripts/check/step.sh play-web just --no-deps play-web
     scripts/check/step.sh mechanic-page just --no-deps mechanic-page
     scripts/check/step.sh test-pages scripts/web/test-pages.sh {{quote(target / "test-pages")}}
+    scripts/check/step.sh page-no-roms just --no-deps page-no-roms
     scripts/check/step.sh test-parallel scripts/check/test-parallel.sh {{quote(target / "test-parallel")}}
     scripts/check/step.sh check-vendor just --no-deps check-vendor
     @echo "just check-web: passed"
@@ -379,6 +380,22 @@ mechanic-page: build mosshop
     node scripts/web/check-mechanic.mjs --gp {{quote(gp)}} --rom {{quote(mosshop_rom)}} \
         --wasm {{quote(target / "play-web-mech" / "gp_play.wasm")}} --browser "$browser" \
         --shots {{quote(gp_home / "work" / "mechanic-page")}}
+
+# The public page with no ROM and no games checkout: built by
+# scripts/web/build-page.sh for Own Hop, a Moss Hop copy that plays from its
+# own pictures, from a registry folder of its own, and the sections of
+# scripts/web/public/check-page.mjs that need no ROM run on it in a headless
+# browser (scripts/web/check-page-no-roms.sh), with an empty games folder
+# and an empty ROM folder in a GP_HOME made for the run. The sections that
+# play a ROM are the games repo's release check's.
+page-no-roms: build mosshop
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ -z "${PLAYWRIGHT_FROM:-}" ] && [ ! -d scripts/web/node_modules/playwright-core ]; then
+        npm ci --prefix scripts/web --silent --no-audit --no-fund
+    fi
+    browser=$(scripts/inspector/fetch-browser.sh {{quote(gp_home)}})
+    GP={{quote(gp)}} bash scripts/web/check-page-no-roms.sh {{quote(target / "page-no-roms")}} "$browser" {{quote(mosshop_rom)}}
 
 _interp-mosshop:
     #!/usr/bin/env bash

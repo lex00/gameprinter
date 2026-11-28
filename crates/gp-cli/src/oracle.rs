@@ -157,6 +157,37 @@ pub enum OracleCmd {
         #[arg(long)]
         triage: Option<PathBuf>,
     },
+    /// The checks of an arcade game against its own ROM, from its folder
+    /// in the games checkout (docs/oracle-mame.md, "Checks of a game
+    /// against its ROM"): the board against each MAME capture its
+    /// oracle/mame-captures.toml lists as `[[replay]]`, with snapshots and
+    /// the watchdog (--board); the sound board alone against the whole
+    /// machine (--sound); the disassembler's lengths and flow against a
+    /// trace (--dasm); the static harvest against its harvest.toml
+    /// (--harvest). None chosen runs all. The set is found in $GP_ROM_DIR
+    /// by its identity, the captures under $GP_HOME/work/oracle/; a check
+    /// without them is skipped with why. Exits 1 when a check fails, 2
+    /// when every one was skipped.
+    Board {
+        /// The arcade game's folder (default: the current folder).
+        #[arg(default_value = ".")]
+        game: PathBuf,
+        /// The board against the captures, snapshots and the frame event.
+        #[arg(long)]
+        board: bool,
+        /// The sound board alone against the whole machine.
+        #[arg(long)]
+        sound: bool,
+        /// The disassembler's lengths and flow against a trace.
+        #[arg(long)]
+        dasm: bool,
+        /// The static harvest against the game's harvest.toml.
+        #[arg(long)]
+        harvest: bool,
+        /// The set's zip, when it isn't in $GP_ROM_DIR.
+        #[arg(long)]
+        rom: Option<PathBuf>,
+    },
 }
 
 pub fn run(cmd: &OracleCmd, paths: &Paths) -> Result<Outcome> {
@@ -209,6 +240,24 @@ pub fn run(cmd: &OracleCmd, paths: &Paths) -> Result<Outcome> {
             platforms,
             triage,
         } => check(baselines, platforms, triage.as_deref(), paths),
+        OracleCmd::Board {
+            game,
+            board,
+            sound,
+            dasm,
+            harvest,
+            rom,
+        } => crate::oracle_board::run(
+            game,
+            crate::oracle_board::Which {
+                board: *board,
+                sound: *sound,
+                dasm: *dasm,
+                harvest: *harvest,
+            },
+            rom.as_deref(),
+            paths,
+        ),
     }
 }
 

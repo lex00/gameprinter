@@ -831,6 +831,92 @@ fn count(notes: &[LoadNote], how: gp_runtime::LoadHow) -> usize {
 
 #[cfg(test)]
 mod arcade_tests {
+    use std::fs;
+
+    /// The seam end to end, on a made-up game's zip
+    /// (gp_arcade::testrom::made_up_game): the skeleton `gp game new`
+    /// writes for it (an arcade mapping with no fields yet) in lockstep
+    /// with the set on gp-arcade, a coin and a start on the way. The model
+    /// is a placeholder, so this shows only that the lockstep runs on an
+    /// arcade original and lines its frames up; scoring waits for a model.
+    #[test]
+    fn a_lockstep_runs_on_an_arcade_original() {
+        let set_name = "madeuplock";
+        let zip = gp_arcade::testrom::known_made_up_game(set_name);
+        let d = tempfile::tempdir().unwrap();
+        let home = d.path().join("home");
+        let paths = gp_evidence::Paths {
+            home: home.clone(),
+            store: home.join("store"),
+            roms: home.join("roms"),
+        };
+        fs::create_dir_all(paths.roms.join("arcade")).unwrap();
+        let rom_path = paths.roms.join(format!("arcade/{set_name}.zip"));
+        fs::write(&rom_path, &zip).unwrap();
+        let games = d.path().join("games");
+        fs::create_dir_all(&games).unwrap();
+        crate::game_new::run(
+            &crate::game_new::New {
+                game: "made-up",
+                rom: &rom_path,
+                genre: "other",
+                title: None,
+                namespace: Some("someone"),
+                games: Some(&games),
+                source: None,
+                date: "2026-11-11",
+                draws: true,
+            },
+            &paths,
+        )
+        .unwrap();
+        let dir = games.join("made-up");
+        // No arcade assets are lifted yet: an empty lift, as a map with
+        // no assets would give.
+        let assets = d.path().join("assets");
+        fs::create_dir_all(&assets).unwrap();
+        fs::write(
+            assets.join(gp_assets::MAP_FILE),
+            format!(
+                "schema = 1\nsource = \"made-up\"\nsha256 = \"{}\"\nasset = []\n",
+                gp_arcade::romset::set(set_name).unwrap().identity()
+            ),
+        )
+        .unwrap();
+        let (source, _) =
+            crate::hosted::Source::open_dir(&dir, Some(&assets), &paths, None).unwrap();
+        let mapping =
+            super::Mapping::parse(&fs::read_to_string(dir.join("mapping.toml")).unwrap()).unwrap();
+        let rom = crate::clip_score::rom_of(&paths, &dir, None).unwrap();
+        let inputs: Vec<gp_runtime::InputFrame> = (0..400u32)
+            .map(|i| gp_runtime::InputFrame {
+                buttons: match i {
+                    100..106 => 1,
+                    160..166 => 2,
+                    _ => 0,
+                },
+                ..Default::default()
+            })
+            .collect();
+        let (ls, _, lines) = super::run_resumed(
+            &source,
+            &dir,
+            &mapping,
+            &rom,
+            &inputs,
+            super::Mode::Free,
+            None,
+            false,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        assert!(ls.original_frames > 0, "{lines:?}");
+        assert!(!ls.frames.is_empty(), "{lines:?}");
+    }
+
     /// A made-up generator routine at 0010 returns its number in A; the
     /// draw site is its call at 0003. Each draw is A at 0006, where the
     /// call comes back, and a site that reads memory draws the byte read.

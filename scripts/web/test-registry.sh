@@ -204,34 +204,10 @@ done
 # The game with its own pictures, made from Moss Hop's template and the
 # pictures lifted from the ROM its source builds.
 if [ -f "$home/work/assets/mosshop/assets.toml" ]; then
+  # The Moss Hop copy with its own package and its own large-art theme
+  # (scripts/web/own-hop.sh, which just check-web's page check uses too).
   own="$stage/own-hop"
-  cp -R "$real/templates/mosshop" "$own"
-  cat > "$own/package.toml" <<'TOML'
-[package]
-name = "test/own-hop"
-version = "0.1.0"
-kind = "game"
-title = "Own Hop"
-
-[page]
-made_by = "the page check"
-about = "Own Hop is made up for the page check: a copy of the Moss Hop template, with its pictures and no ROM."
-TOML
-  # A person's own large-art theme of it, as gp game share puts one in
-  # (themes/ID/ beside the model, where gp-web-prep offers a finished
-  # look): one made-up picture for the hero, in made-up colours.
-  python3 -I - "$own/themes/hopglow" <<'PY'
-import os, struct, sys, zlib
-d = sys.argv[1]
-os.makedirs(f"{d}/art", exist_ok=True)
-def png(path, w, h, rgba):
-    raw = b"".join(b"\x00" + bytes(rgba) * w for _ in range(h))
-    chunk = lambda t, b: struct.pack(">I", len(b)) + t + b + struct.pack(">I", zlib.crc32(t + b) & 0xFFFFFFFF)
-    open(path, "wb").write(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 6, 0, 0, 0)) + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
-png(f"{d}/art/glow.png", 32, 32, [40, 220, 120, 255])
-open(f"{d}/look.txt", "w").write("gp-look 1\nid hopglow\ntitle Hop Glow\nart art.txt\n")
-open(f"{d}/art.txt", "w").write("gp-art 1\nscale 2\nlimit off\npic frame-1-0.png art/glow.png 16 16 0 0\n")
-PY
+  bash "$real/scripts/web/own-hop.sh" "$own"
   if ! GP="$gp" GP_PAGE_SOURCE=local "$real/scripts/web/build-page.sh" "$own" "$stage/own-page" > "$stage/own-page.log" 2>&1; then
     tail -5 "$stage/own-page.log" >&2
     echo "test-registry.sh: build-page.sh couldn't build test/own-hop (its log: $stage/own-page.log)" >&2

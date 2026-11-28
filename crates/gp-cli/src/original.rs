@@ -201,4 +201,21 @@ mod tests {
         let e = OriginalRuntime::load(Platform::Arcade, &rom).err().unwrap();
         assert!(e.to_string().contains("romset zip"), "{e}");
     }
+
+    /// On a made-up game's zip (gp_arcade::testrom::made_up_game): the
+    /// arcade original steps, reads `ram[...]` and the sound RAM, and a
+    /// start saved for the cache restores to the same state.
+    #[test]
+    fn an_arcade_original_steps_and_restores_from_a_start() {
+        let rom = gp_arcade::testrom::known_made_up_game("madeuporig");
+        let mut o = OriginalRuntime::of_rom(&rom).unwrap();
+        assert_eq!(o.platform(), Platform::Arcade);
+        o.step(&vec![InputFrame::default(); 30]).unwrap();
+        assert_eq!(o.query("ram[0xe000..0xe010]").unwrap().len(), 16);
+        assert_eq!(o.query("sound_ram[0..4]").unwrap().len(), 4);
+        let saved = o.saved().unwrap();
+        let back = OriginalRuntime::from_saved(&rom, &saved).unwrap();
+        assert_eq!(back.state_hex().unwrap(), o.state_hex().unwrap());
+        assert_eq!(back.frame(), 30);
+    }
 }

@@ -1726,4 +1726,45 @@ mod tests {
         let e = run(&["draw bar 1"]).err().unwrap();
         assert!(e.to_string().contains("the sites are pick"), "{e}");
     }
+
+    /// On a made-up game's zip (gp_arcade::testrom::made_up_game): a
+    /// made-up probe plays presses on gp-arcade from power-on and reads its
+    /// RAM by Z80 address (the game's state byte at E002, play after the
+    /// coin).
+    #[test]
+    fn a_probe_runs_on_an_arcade_board() {
+        let set_name = "madeupprobe";
+        let rom = gp_arcade::testrom::known_made_up_game(set_name);
+        let board = Board::of_rom(&rom).unwrap();
+        assert_eq!(board.arcade.as_ref().unwrap().system, set_name);
+        let f: File = toml::from_str(
+            r#"
+[watch]
+w = 0xe002
+
+[[probe]]
+id = "coin"
+steps = [". 30", "C 4", ". 30", "mark", "S 4", ". 20"]
+check = [{ measure = "min w" }, { measure = "value w at +0" }]
+"#,
+        )
+        .unwrap();
+        let names = names_of(&board, &f);
+        let p = &f.probe[0];
+        let ms: Vec<String> = p.check.iter().map(|c| c.measure.clone()).collect();
+        let layout = layout_of(&board, &names, &ms).unwrap();
+        let o = OriginalRuntime::of_rom(&rom).unwrap();
+        let start = peek(&o, 0xe002).unwrap();
+        let played = play(o, &board, &names, &layout, &[], &[], &p.steps, None).unwrap();
+        assert_eq!(played.inputs.len(), 88);
+        assert_eq!(played.mark, 64);
+        assert_eq!(played.inputs[30].pads[0], 0x01);
+        assert_eq!(played.ram.len(), 89);
+        assert_eq!(layout.get(&played.ram[0], 0xe002), start);
+        assert_eq!(layout.get(&played.ram[played.mark], 0xe002), 1, "the coin");
+        for m in &ms {
+            let v = measure(&names, &layout, m, played.mark, &played.ram[played.mark..]).unwrap();
+            assert!(v.is_u64(), "{m}: {v}");
+        }
+    }
 }

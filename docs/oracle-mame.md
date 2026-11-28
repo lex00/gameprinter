@@ -138,7 +138,7 @@ A capture is derived from the ROM, so it is never in a repo. Each game's `oracle
 | `frames` | How many frames it runs |
 | `sha256` | The capture's hash: the SHA-256 of the digest lines (`HASH  ./FILE`, as `shasum -a 256` prints them) of `ay.tsv`, `capture.txt`, `frames.tsv` and `ram.bin`, those it has, in that order. For a capture made with no pictures and no WAV, it is the SHA-256 of its `SHA256SUMS` |
 
-The same file's `[[replay]]` rows, each a `name` and an `input`, are the captures gp-arcade's own tests replay against the board (`crates/gp-arcade/tests/oracle_mcr.rs` and `ssio_alone.rs`, with `$GP_GAME_DIR` naming the game's folder): captures made once by hand and kept on this machine, with no hash, each skipped where it isn't there. Every frame must match; with `ay.tsv` the AY writes too, with `sound.wav` the speakers, and a log whose watchdog runs out must reset the board and come back.
+The same file's `[[replay]]` rows, each a `name` and an `input`, are the captures `gp oracle board` replays against the board (below, "Checks of a game against its ROM"): captures made once by hand and kept on this machine, with no hash, each skipped where it isn't there.
 
 To make one: `just mame-build` once, then `just mame-record $GP_ROM_DIR/arcade/SYSTEM.zip INPUT NAME 0`. The `0` asks for no pictures, which would change `frames.tsv` and `capture.txt`. A gp that finds a capture missing prints that command with the romset's path, and one that finds a capture whose hash isn't the file's refuses it and says the same.
 
@@ -148,6 +148,17 @@ To make one: `just mame-build` once, then `just mame-record $GP_ROM_DIR/arcade/S
 | `gp oracle check GAME/oracle/mame-captures.toml` | Each capture's input on gp-arcade against the capture, every frame, with no store. A capture whose romset or folder isn't on this machine is skipped, the folder's with the command that makes it; a wrong hash, a changed input or a frame that differs fails it (exit 1). NES baselines given with it are checked as before |
 
 `gp oracle check` takes a TOML file with `[[capture]]` tables as a captures file and any other as a baseline.
+
+## Checks of a game against its ROM
+
+`gp oracle board GAME` runs, from an arcade game's folder in the games checkout, the checks that need the game's own ROM. The tool's tests never run them: they play only made-up sets (gp_arcade::testrom), and the same checks are tested there on those (gp_arcade::checks). Each set is found in `$GP_ROM_DIR` by its identity (or `--rom ZIP`), each capture under `$GP_HOME/work/oracle/NAME`; a check without its set, capture or file is skipped with why. It exits 1 when a check fails and 2 when every one was skipped. A flag picks checks; none runs them all.
+
+| Flag | Check |
+|---|---|
+| `--board` | Each `[[replay]]` capture's input log played on the board from power-on matches MAME on every frame (RAM, ports, picture, and the AY writes with `ay.tsv`); with `sound.wav`, the speakers' samples are as many, none more than one step apart and fewer than 1 in 100000 apart; a 4-way log's filter changes some frame; a log whose watchdog runs out resets the board, snapshots over the next 20 frames restore exactly, and the game reads its inputs on over 300 frames after. On the game's first set here: a snapshot at frame 320 put back into a machine that ran on, and a fresh run, end alike at frame 410 (a coin at 300); and over 300 idle frames from power-on the runtime's frame event says the game read its inputs on over half |
+| `--sound` | The first `[[replay]]` log, up to 1500 frames, on the whole board, and the latch writes that reached its sound board fed to a sound board of its own: the same AY writes and samples every frame, with some latch writes, AY writes and loud samples |
+| `--dasm` | On the game's first set here, 900 frames (a coin at 600, Start at 666), traced every 30th frame and the last 30: every instruction either CPU runs is followed by the one its decoded length and flow say, unless an interrupt comes between; over 100000 pairs |
+| `--harvest` | The game's `harvest.toml`: `set`, then `[[fact]]` (`path`, `value` when given), `[[list]]` (`path`, `starts_with`), `[[dispatch]]` (`at`, `subject`, `cases`) and `[[machine]]` (`byte`, `transitions` as `[from, to, routine]`). The static harvest of that set's main CPU must find each; it lists every one it missed |
 
 ## Holding gp-arcade to it
 

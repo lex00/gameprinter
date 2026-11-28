@@ -32,8 +32,8 @@ on:
       - ".github/workflows/check-web.yml"
 jobs:
   check-web:
-    # Hosted, so it holds no ROM: Moss Hop in the editor, the player and the
-    # mechanic page.
+    # Hosted, so it holds no ROM: Moss Hop in the editor, the player, the
+    # mechanic page and the public page (just page-no-roms).
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:

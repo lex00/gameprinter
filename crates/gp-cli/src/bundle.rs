@@ -272,4 +272,121 @@ mod tests {
             left.join("\n")
         );
     }
+
+    /// The row page-check-without-roms-in-check-web: just check-web has a
+    /// step that builds the public page with scripts/web/build-page.sh for
+    /// a game that plays from its own pictures and runs
+    /// scripts/web/public/check-page.mjs on it with an empty games folder
+    /// (--games), an empty ROM folder (GP_ROM_DIR) and a home of its own, so
+    /// it reads no ROM of the person's and no games checkout. A step is
+    /// read with what it runs: a `just --no-deps RECIPE`'s body, and each
+    /// script of the repo it names, one level down. A failure says what is
+    /// missing.
+    #[test]
+    fn check_web_checks_the_page_without_roms() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let justfile = fs::read_to_string(root.join("justfile")).unwrap();
+        let body = |name: &str| -> Vec<String> {
+            let mut lines = justfile.lines().skip_while(|l| {
+                !(l.starts_with(&format!("{name}:")) || l.starts_with(&format!("{name} ")))
+            });
+            lines.next();
+            lines
+                .take_while(|l| l.is_empty() || l.starts_with(char::is_whitespace))
+                .map(str::to_owned)
+                .collect()
+        };
+        // The text of what a line runs: the line, and each repo script it
+        // names (scripts/...), read whole.
+        let with_scripts = |line: &str| -> String {
+            let mut text = line.to_owned();
+            for w in line.split_whitespace() {
+                let w = w.trim_matches(|c| c == '"' || c == '\'');
+                if w.starts_with("scripts/") && root.join(w).is_file() {
+                    text.push('\n');
+                    text.push_str(&fs::read_to_string(root.join(w)).unwrap_or_default());
+                }
+            }
+            text
+        };
+        let steps = body("check-web");
+        assert!(!steps.is_empty(), "the justfile has no check-web recipe");
+        let mut read = Vec::new();
+        for line in steps.iter().filter(|l| l.contains("scripts/check/step.sh")) {
+            let words: Vec<&str> = line.split_whitespace().collect();
+            let name = words
+                .iter()
+                .position(|w| *w == "scripts/check/step.sh")
+                .and_then(|i| words.get(i + 1))
+                .copied()
+                .unwrap_or_default();
+            let mut text = with_scripts(line);
+            if let Some(r) = words
+                .iter()
+                .position(|w| *w == "--no-deps")
+                .and_then(|j| words.get(j + 1))
+            {
+                for l in body(r) {
+                    text.push('\n');
+                    text.push_str(&with_scripts(&l));
+                }
+            }
+            read.push((name.to_owned(), text));
+        }
+        let page: Vec<&(String, String)> = read
+            .iter()
+            .filter(|(_, t)| t.contains("check-page.mjs"))
+            .collect();
+        assert!(
+            !page.is_empty(),
+            "no step of just check-web runs scripts/web/public/check-page.mjs (its steps: {})",
+            read.iter()
+                .map(|(n, _)| n.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+        let missing: Vec<Vec<String>> = page
+            .iter()
+            .map(|(name, text)| {
+                [
+                    (
+                        "build-page.sh",
+                        "builds no page with scripts/web/build-page.sh",
+                    ),
+                    (
+                        "own-hop.sh",
+                        "builds it for no own-pictures copy of Moss Hop (scripts/web/own-hop.sh)",
+                    ),
+                    ("GP_ROM_DIR=", "sets no ROM folder of its own (GP_ROM_DIR)"),
+                    ("GP_HOME=", "sets no home of its own (GP_HOME)"),
+                    (
+                        "--games",
+                        "gives check-page.mjs no games folder of its own (--games)",
+                    ),
+                    (
+                        "--registry-folder",
+                        "gives check-page.mjs no registry folder (--registry-folder)",
+                    ),
+                    ("own-game", "runs no own-game section"),
+                ]
+                .into_iter()
+                .filter(|(word, _)| !text.contains(word))
+                .map(|(_, what)| format!("{name} {what}"))
+                .collect()
+            })
+            .collect();
+        assert!(missing.iter().any(Vec::is_empty), "{missing:?}");
+        // The folder source the page installs from is in sources.toml, with
+        // no root key: the run signs nothing.
+        let sources: toml::Table = fs::read_to_string(root.join("scripts/web/sources.toml"))
+            .unwrap()
+            .parse()
+            .unwrap();
+        let folder = sources.get("folder").and_then(toml::Value::as_table);
+        assert!(
+            folder.is_some_and(|f| f.get("url").and_then(toml::Value::as_str) == Some(".")
+                && !f.contains_key("root")),
+            "scripts/web/sources.toml has no [folder] source at \".\" with no root key: {folder:?}"
+        );
+    }
 }

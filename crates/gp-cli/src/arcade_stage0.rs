@@ -417,6 +417,49 @@ pub(crate) fn dataset_routines(d: Option<&Dataset>) -> BTreeSet<u16> {
 mod tests {
     use super::*;
 
+    /// On a made-up game's zip (gp_arcade::testrom::made_up_game): the
+    /// idle and Start runs give a dataset with the board's row, routines
+    /// that ran, branches both ways and work RAM rows, written without a
+    /// byte of the set.
+    #[test]
+    fn an_arcade_dataset_reads_the_main_z80() {
+        let set_name = "madeupstage";
+        let zip = gp_arcade::testrom::known_made_up_game(set_name);
+        let set = Romset::from_zip(&zip).unwrap();
+        let mut d = extract(&set, 0, 1).unwrap();
+        d.sort();
+        let rom = &d.rows("rom")[0];
+        assert_eq!(
+            rom["board"],
+            crate::rom_dataset::Cell::S(Some(format!("midway-mcr ({set_name})")))
+        );
+        assert_eq!(d.rows("runs").len(), 2);
+        let ran = d
+            .rows("routines")
+            .iter()
+            .filter(|r| r["ran"] == crate::rom_dataset::Cell::B(true))
+            .count();
+        assert!(ran > 20, "{ran}");
+        assert!(!d.rows("branches").is_empty());
+        assert!(d.rows("ram").iter().all(
+            |r| matches!(r["addr"], crate::rom_dataset::Cell::I(a) if (0xe000..0xe800).contains(&a))
+        ));
+        let dir = tempfile::tempdir().unwrap();
+        crate::rom_dataset::write(
+            dir.path(),
+            &d,
+            &set.identity,
+            "t",
+            Some(&rom_bytes(&set)),
+            "arcade romset",
+        )
+        .unwrap();
+        // A frame's entries: the reset routine's first, then what it calls.
+        let mut t = gp_arcade::Mcr::power_on(&set);
+        let trace = crate::covered::frame_trace(&mut t, gp_arcade::Controls::default());
+        assert!(!entries(&trace, &dataset_routines(Some(&d))).is_empty());
+    }
+
     /// The made-up records program (gp_arcade::testrom::RECORDS) read
     /// through the NES's rows of a harvest: its record tables are elements
     /// of slots, the state byte of the 32-byte records a machine with its

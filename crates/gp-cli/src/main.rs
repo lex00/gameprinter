@@ -124,6 +124,7 @@ mod observe;
 mod odds;
 mod open;
 mod oracle;
+mod oracle_board;
 mod oracle_captures;
 mod oracle_mame;
 mod original;
