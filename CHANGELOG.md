@@ -2,6 +2,22 @@
 
 Each release of gp has a section here, `## gp VERSION` (a date may follow), and its GitHub release's notes are that section. A release is refused before it is cut when its section is missing ([docs/release.md](docs/release.md)). Add the next one in a commit to main before `just release`.
 
+## gp 0.1.10
+
+Checks for what had only been tested by hand after 0.1.9.
+
+`gp loop health` reads the games repo's checks on GitHub as well as the tool's, each line saying which repo. A run that has sat queued for more than an hour is a PROBLEM that names the waiting job, and when the job waits on a self-hosted runner it says the runner is likely off and how to start it.
+
+`gp loop train` is mended and checks more. It stacks on the tip of the branch the gate lands on: a published gp stacked on its own checkout's HEAD, so after a first failed gate every retry handed the gate an empty patch and sent every row back. A stack that changes nothing now calls no gate and keeps its rows in line, a lock keeps two trains off the same scratch tree, and the last lines say why the first gate failed. When a handed-in patch touches the page's files, the train runs `just check-web` on the stack before it lands (`--no-check-web` skips it with a line).
+
+`gp package scan --game-roms` compares a theme's package with the ROMs of the game it is for, and says which sets it looked for. Without the flag a theme scans as before and one line says the game's ROMs were not compared. `--need-roms` fails a scan that compared with no ROM, for a machine that holds them.
+
+`gp bench clips` ends in a set time. It scores at most 20 mutants, spread over the kinds; `--mutants N` or `[bench] mutants = N` in the game's bench file changes the cap, and the report says how many were made and how many scored. Before, a large model made millions and the run never ended. Its home also holds every ROM set the game's clips play.
+
+On the screen page, a click on a sprite run keeps the clip at that frame until you move it; it used to play on after a few seconds.
+
+`scripts/web/publish-game.sh` ends by naming the two checks to run next: `gp registry check` on the registry's address, and `just page-live` in the games checkout, which runs the page check on the live address.
+
 ## gp 0.1.9
 
 The loop gates workers' patches together. A worker on a row marked for the train builds the whole of its work, tests it, and ends with `gp loop hand-in`. `gp loop train` then stacks the handed-in patches on the tip, drops one that does not apply, runs one tool gate and one model gate a game, and on a failure finds the patch at fault by halves and lands the rest. `gp loop train --dry-run` shows the order and gates nothing.
