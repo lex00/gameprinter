@@ -53,19 +53,29 @@ struct LineSpec {
     level: String,
     #[serde(default)]
     own_draws: bool,
+    #[serde(default = "yes")]
+    confirm: bool,
+}
+
+fn yes() -> bool {
+    true
 }
 
 /// One line of the board: its name, the clip it is measured on and that
 /// clip's level in the corpus. An `own_draws` line measures the model on
 /// its own random generator instead of the pictures: the clip's frames
 /// together straight through with none of the original's draws handed
-/// over (`gp clip score --own-draws`).
+/// over (`gp clip score --own-draws`). A line with `confirm = false` is a
+/// test line (a clip the loop made, not a part of the game a person judges
+/// by eye): it is measured and the gate holds its scores, but the finder
+/// never asks the owner to look at it ([`ask_looks`]).
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct Line {
     pub name: String,
     pub clip: String,
     pub level: String,
     pub own_draws: bool,
+    pub confirm: bool,
 }
 
 impl Line {
@@ -134,6 +144,7 @@ pub(crate) fn lines(game_dir: &Path) -> Option<Result<Vec<Line>, String>> {
                 clip: field(c, "id").to_owned(),
                 level: field(c, "level").to_owned(),
                 own_draws: l.own_draws,
+                confirm: l.confirm,
             });
         }
         Ok(out)
@@ -527,6 +538,7 @@ pub(crate) fn board(home: &Path, games: &Path, game: &str) -> Option<Value> {
                 "clip": l.clip,
                 "level": l.level,
                 "own_draws": l.own_draws,
+                "confirm": l.confirm,
                 "state": state,
                 "background": background,
                 "sprites": sprites,
@@ -1556,8 +1568,9 @@ pub(crate) fn confirm_row(line: &str) -> String {
 /// clip over all its frames in the game's own pictures, so LOOK AT IT sets
 /// it up beside the original. A row the quest log has already by that
 /// name, or any row with the line's clip in the game's own pictures,
-/// whatever its status, is left as it is and no row is added. Returns the
-/// rows it added.
+/// whatever its status, is left as it is and no row is added. A test line
+/// (`confirm = false`) is never asked about: nothing waits on the owner for
+/// a clip the loop made (the owner, 2026-11-27). Returns the rows it added.
 pub(crate) fn ask_looks(home: &Path, games: &Path, game: &str) -> Vec<String> {
     let Some(b) = board(home, games, game) else {
         return Vec::new();
@@ -1568,6 +1581,7 @@ pub(crate) fn ask_looks(home: &Path, games: &Path, game: &str) -> Vec<String> {
     let mut added = Vec::new();
     for l in b["lines"].as_array().into_iter().flatten() {
         if l["own_draws"] == json!(true)
+            || l["confirm"] == json!(false)
             || l["stale"] == json!(true)
             || l["measuring"] == json!(true)
             || !l["error"].is_null()
@@ -1731,12 +1745,14 @@ level = "field"
                     clip: "hop.title.001".into(),
                     level: "title".into(),
                     own_draws: false,
+                    confirm: true,
                 },
                 Line {
                     name: "level 2".into(),
                     clip: "hop.l2.001".into(),
                     level: "field".into(),
                     own_draws: false,
+                    confirm: true,
                 },
             ]
         );
@@ -1940,6 +1956,60 @@ level = "field"
             confirm_row("The first bonus round"),
             "confirm-first-bonus-round"
         );
+    }
+
+    /// A line marked as a test line (`confirm = false`: a loop-made clip,
+    /// not a part of the game a person judges by eye) asks the owner
+    /// nothing however near full it measures; a line not marked still asks
+    /// (the owner, 2026-11-27: nothing waits on them). The measure of
+    /// row confirm-rows-not-for-loop-made-clips.
+    #[test]
+    fn a_test_line_asks_the_owner_nothing() {
+        let d = games();
+        let home = tempfile::tempdir().unwrap();
+        let h = home.path();
+        board_file(
+            d.path(),
+            "[[line]]\nname = \"level 1\"\nclip = \"hop.l1.001\"\n\n[[line]]\nname = \"fast pours\"\nclip = \"hop.l2.001\"\nconfirm = false\n",
+        );
+        put(
+            &h.join("work/refine/hop/status.json"),
+            r#"{"model": {"hash": "test-line-1"}, "clips": []}"#,
+        );
+        let gp = h.join("bin/gp");
+        put(&gp, "a gp");
+        refresh(h, d.path(), &gp, |_, l| {
+            Ok(match l.clip.as_str() {
+                "hop.l1.001" => Numbers {
+                    background: [200, 200],
+                    sprites: [200, 200],
+                    ..Numbers::default()
+                },
+                _ => Numbers {
+                    background: [300, 300],
+                    sprites: [300, 300],
+                    ..Numbers::default()
+                },
+            })
+        });
+        let b = board(h, d.path(), "hop").unwrap();
+        assert!(b["error"].is_null(), "{}", b["error"]);
+        assert_eq!(b["lines"].as_array().map(Vec::len), Some(2), "{b}");
+        assert_eq!(b["lines"][0]["confirm"], json!(true), "unmarked asks");
+        assert_eq!(b["lines"][1]["confirm"], json!(false), "the test line");
+        assert_eq!(
+            ask_looks(h, d.path(), "hop"),
+            vec!["confirm-level-1"],
+            "the plain line asks and the test line doesn't"
+        );
+        let q = crate::mechanic::session::read_queue(&h.join("mechanics/hop/queue.json"));
+        assert!(
+            q.iter()
+                .all(|r| r["mechanic"] != "confirm-fast-pours"
+                    && r["clip"]["id"] != json!("hop.l2.001")),
+            "no row for the test line: {q:?}"
+        );
+        assert!(ask_looks(h, d.path(), "hop").is_empty(), "nor later");
     }
 
     #[test]

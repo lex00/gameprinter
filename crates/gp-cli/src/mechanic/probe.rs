@@ -1440,7 +1440,7 @@ pub(crate) fn run(paths: &Paths, a: &Args) -> Result<Outcome> {
                 } else if a.save && !keeps {
                     text.push_str(&format!("  {label}not saved: {NOT_KEPT}\n"));
                 } else if a.save {
-                    let n = saving.save(s, &base, &played.inputs, Some(n), &p.note)?;
+                    let n = saving.save(s, &base, &played.inputs, Some(n), &p.id, &p.note)?;
                     text.push_str(&format!("  {label}saved as {s} clip {n}\n"));
                     clip_json = json!({"session": s, "clip": n, "saved": true});
                 }
@@ -1450,7 +1450,7 @@ pub(crate) fn run(paths: &Paths, a: &Args) -> Result<Outcome> {
                 && let Some(s) = &p.session
             {
                 let note = format!("probe {}: {label}{}", p.id, p.note);
-                let n = saving.save(s, &base, &played.inputs, None, &note)?;
+                let n = saving.save(s, &base, &played.inputs, None, &p.id, &note)?;
                 text.push_str(&format!("  {label}saved as {s} clip {n}\n"));
                 clip_json = json!({"session": s, "clip": n, "saved": true});
             }
@@ -1488,13 +1488,15 @@ struct Saving<'a> {
 impl Saving<'_> {
     /// Saves a cell as a clip of a session, as the mechanic page saves
     /// one: the base stored as a path, the cell's inputs as the clip, and
-    /// the state's hash at its start.
+    /// the state's hash at its start. The clip names the probe that saved
+    /// it (`probe = "ID"`), so `gp corpus import` takes it as generated.
     fn save(
         &self,
         session: &str,
         base: &[InputFrame],
         inputs: &[InputFrame],
         as_clip: Option<u64>,
+        probe: &str,
         note: &str,
     ) -> Result<u64> {
         if inputs.is_empty() {
@@ -1514,6 +1516,7 @@ impl Saving<'_> {
         let mut own = self.board.log(two(inputs));
         own.frames = inputs.to_vec();
         let (mut t, log) = clip_fields(&sha, base.len(), &own);
+        t.insert("probe".into(), probe.into());
         t.insert(
             "state".into(),
             original_at(home, self.rom, &sha, base.len())?

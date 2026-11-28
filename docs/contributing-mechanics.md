@@ -145,7 +145,7 @@ gp mechanic probe donkey-kong --import jump:3       # a saved clip, printed as a
 | `check` | Measures read from RAM (`first state == 255`, `values x at changes y`, `intervals y while state == 2`), each with the value it must have |
 | `clips` | The session's clips it reproduces: compared input for input from power-on |
 
-`--save` writes each cell with no clip yet into its session, as a clip in the snapshot format. The tool knows no game: the RAM names are the file's `[watch]` table.
+`--save` writes each cell with no clip yet into its session, as a clip in the snapshot format, with `probe = "ID"` naming the probe that saved it: `gp corpus import` takes such a clip as `generated`, with the probe in its why, where a clip recorded on the page is `played` (formats/scoring-corpus.md, "Import"). The tool knows no game: the RAM names are the file's `[watch]` table.
 
 ## What the agent does, and what it doesn't
 

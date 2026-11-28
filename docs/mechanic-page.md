@@ -629,7 +629,8 @@ its measure, as a lock's does). A yes on a look already saved locks nothing:
 the row goes done saying `Already saved as right, so your yes changes
 nothing`. The scoreboard asks for no new `confirm-LINE` row on a line whose
 clip has a look saved over all its frames, so a confirmed row that left for
-the archive doesn't come back asking.
+the archive doesn't come back asking, and none on a test line
+(`confirm = false` in scoreboard.toml: a clip the loop made, docs/loop.md).
 
 A card is one line; a click on its question opens what it does. The yeses the runner lands in turn say which
 runs now and which wait (RUNNING NOW, 1 OF 3; WAITS, 2 OF 3), and one it

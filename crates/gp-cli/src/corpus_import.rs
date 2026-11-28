@@ -3,7 +3,9 @@
 //! (docs/formats/scoring-corpus.md, "Import"). Each clip of a session is
 //! written as a recipe: its presses from power-on to its start in
 //! `inputs/ID.start.presses`, and its own presses in `inputs/ID.presses`.
-//! The version is recorded by the corpus's rules.
+//! The version is recorded by the corpus's rules. A clip a person recorded
+//! is `played`; one `gp mechanic probe --save` saved names its probe
+//! (`probe = "ID"`) and is `generated`, with the probe in its name and why.
 //!
 //! | Left out | How it is known |
 //! |---|---|
@@ -236,8 +238,12 @@ struct Taken {
     lead: Spans,
     /// The clip's own frames and spans.
     body: Spans,
-    /// `played`, or `scripted` when its presses are `[import.script]`'s.
+    /// `played`, `generated` for a clip a probe saved, or `scripted` when
+    /// its presses are `[import.script]`'s.
     source: &'static str,
+    /// The probe that saved it (`probe` in the clip's `.toml`, written by
+    /// `gp mechanic probe --save`); none for a person's clip.
+    probe: Option<String>,
     /// The arcade layout both its presses files carry: the session log's,
     /// or a script's.
     arcade: Layout,
@@ -245,12 +251,16 @@ struct Taken {
 
 impl Taken {
     /// The clip with its own presses from the script: its start stays the
-    /// person's.
+    /// person's. A probe's clip keeps its own presses: the script is for
+    /// people who press differently, and a probe presses as its block says.
     fn scripted(
         mut self,
         s: &Script,
         arcade: Option<&gp_evidence::input_log::ArcadeLayout>,
     ) -> Self {
+        if self.probe.is_some() {
+            return self;
+        }
         self.body = s.presses(&self.session, self.n);
         self.source = "scripted";
         self.arcade = arcade.cloned();
@@ -480,6 +490,14 @@ fn take(
                 });
                 continue;
             };
+            // A clip `gp mechanic probe --save` saved names its probe; a
+            // clip recorded on the page has none.
+            let probe = meta
+                .get("probe")
+                .and_then(toml::Value::as_str)
+                .map(str::trim)
+                .filter(|p| !p.is_empty())
+                .map(str::to_owned);
             taken.push(Taken {
                 id: format!("{prefix}.{s}.{n:03}"),
                 session: s.clone(),
@@ -491,7 +509,12 @@ fn take(
                     .to_owned(),
                 lead: (start as u64, lead),
                 body: (frames as u64, body),
-                source: "played",
+                source: if probe.is_some() {
+                    "generated"
+                } else {
+                    "played"
+                },
+                probe,
                 arcade: log.arcade.clone(),
             });
         }
@@ -523,12 +546,12 @@ fn in_plan_set(t: &Taken, was: Option<&(Spans, Spans, Layout)>) -> Option<Taken>
     let (Some(plan), Some(log)) = (was.and_then(|w| w.2.as_ref()), t.arcade.as_ref()) else {
         return None;
     };
-    (t.source == "played" && plan.system != log.system && plan.columns == log.columns).then(|| {
-        Taken {
+    (t.source != "scripted" && plan.system != log.system && plan.columns == log.columns).then(
+        || Taken {
             arcade: Some(plan.clone()),
             ..t.clone()
-        }
-    })
+        },
+    )
 }
 
 /// Whether two clips' own presses hold the same buttons on every frame,
@@ -720,18 +743,33 @@ fn merge(
         } else {
             t.note.trim()
         };
-        let name: String = format!("{} {:03}: {note}", t.session, t.n)
-            .chars()
-            .take(160)
-            .collect();
+        // A probe's clip is named and explained by its probe, not as a
+        // person's recording of the session.
+        let (name, why) = match &t.probe {
+            Some(p) => (
+                if note.starts_with(&format!("probe {p}")) {
+                    note.to_owned()
+                } else {
+                    format!("probe {p}: {note}")
+                },
+                format!(
+                    "made by gp mechanic probe {p} --save into the {} session",
+                    t.session
+                ),
+            ),
+            None => (
+                format!("{} {:03}: {note}", t.session, t.n),
+                why.replace("{session}", &t.session),
+            ),
+        };
         PlanClip {
             id: t.id.clone(),
-            name,
+            name: name.chars().take(160).collect(),
             source: t.source.into(),
             start: lead,
             presses,
             frames: t.body.0,
-            why: why.replace("{session}", &t.session),
+            why,
         }
     };
     let mut done = BTreeSet::new();
@@ -743,8 +781,12 @@ fn merge(
         }
         m.order.push(r.id.clone());
         // Another session's clip, when the import names its sessions, is
-        // none of its business.
-        if !owned(r, prefix)
+        // none of its business. A generated clip with a session clip's ID
+        // (a probe's, or one relabelled generated by hand) is the import's
+        // too, so it is kept or held, never added a second time.
+        let mine =
+            owned(r, prefix) || (r.source == "generated" && by_id.contains_key(r.id.as_str()));
+        if !mine
             || (!only.is_empty()
                 && !session_of(&r.id, prefix).is_some_and(|s| only.iter().any(|o| o == s)))
         {
@@ -1428,6 +1470,66 @@ mod tests {
             m.contains("removed = [\"g.jump.001\", \"g.jump.002\"]"),
             "{m}"
         );
+    }
+
+    /// The row import-says-who-made-a-clip (2026-11-27): a clip
+    /// `gp mechanic probe --save` saved is the probe's, not a person's. Its
+    /// `.toml` says so (`by = "agent"` and `probe = "ID"`, the probe's
+    /// block), and the import carries that into the plan as source
+    /// `generated` with the probe's name in its why; a clip recorded on the
+    /// page (`by = "player"`) stays `played` with the plan's why. A second
+    /// import keeps both as they are, and so does one after a played clip
+    /// was relabelled generated by hand in the plan.
+    #[test]
+    fn a_probes_clip_is_imported_as_generated_and_a_played_clip_as_played() {
+        let d = tempfile::tempdir().unwrap();
+        let home = d.path().join("home");
+        let tpl = d.path().join("tpl");
+        clip(&home, "tunnel", 1, 10, &["right@0-19"], 30);
+        clip(&home, "tunnel", 2, 12, &["a@2-5"], 20);
+        // Clip 2 as probe --save writes it.
+        fs::write(
+            home.join("mechanics/g/tunnel/clips/002.toml"),
+            "by = \"agent\"\nprobe = \"tunnel-cells\"\nstart = 12\nframes = 20\nnote = \"probe tunnel-cells: a=3 the mug in the tunnel\"\n",
+        )
+        .unwrap();
+        plan(&tpl, "[import]\nprefix = \"g\"\n\n");
+        let p = paths(&home);
+        let o = run(&args(&tpl, &home, true), &p).unwrap();
+        assert_eq!(o.json["added"], json!(["g.tunnel.001", "g.tunnel.002"]));
+        let loaded = crate::plan::load(&tpl).unwrap().unwrap();
+        assert_eq!(loaded.hash, loaded.manifest.corpus.hash);
+        let by_id = |id: &str| {
+            loaded
+                .set
+                .clips
+                .iter()
+                .find(|c| c.id == id)
+                .unwrap()
+                .clone()
+        };
+        let played = by_id("g.tunnel.001");
+        assert_eq!(played.source, "played", "{played:?}");
+        assert!(!played.why.contains("probe"), "{played:?}");
+        let probed = by_id("g.tunnel.002");
+        assert_eq!(probed.source, "generated", "{probed:?}");
+        assert!(probed.why.contains("tunnel-cells"), "{probed:?}");
+        assert!(probed.why.contains("probe"), "{probed:?}");
+        assert!(probed.name.starts_with("probe tunnel-cells"), "{probed:?}");
+        let after = fs::read_to_string(tpl.join(FILE)).unwrap();
+        let o = run(&args(&tpl, &home, true), &p).unwrap();
+        assert_eq!(o.json["step"], "none", "{}", o.json);
+        assert_eq!(o.json["kept"], 2, "{}", o.json);
+        assert_eq!(fs::read_to_string(tpl.join(FILE)).unwrap(), after);
+        // Clip 1 relabelled generated in the plan; its session still says
+        // a person played it.
+        let relabelled = after.replacen("source = \"played\"", "source = \"generated\"", 1);
+        assert_ne!(relabelled, after);
+        fs::write(tpl.join(FILE), &relabelled).unwrap();
+        let o = run(&args(&tpl, &home, true), &p).unwrap();
+        assert_eq!(o.json["step"], "none", "{}", o.json);
+        assert_eq!(o.json["kept"], 2, "{}", o.json);
+        assert_eq!(fs::read_to_string(tpl.join(FILE)).unwrap(), relabelled);
     }
 
     /// With `[import.script]`, two people who pressed differently on a row

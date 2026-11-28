@@ -474,6 +474,9 @@ pub(crate) fn row_steps(paths: &gp_evidence::Paths, games: Option<&Path>) -> Vec
                 // gets no worker ([`no_measure`]).
                 "target": r["target"],
                 "measure_needed": r["measure_needed"],
+                // Its measure, landed as ignored tests: the work is what
+                // takes their ignore off.
+                "measure_tests": r["measure_tests"],
                 "no_measure": no_measure(&r),
             }));
         }

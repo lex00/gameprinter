@@ -1316,6 +1316,49 @@ fn settle_row_by_card(
         (_, Some(w)) => format!("{note} Beside your YES you wrote: \"{w}\"."),
         (_, None) => note,
     };
+    // A row with no target closes on a landing only when that landing is
+    // its work: one that only adds ignored tests landed the row's measure,
+    // and the row closes on the landing that takes their ignore off
+    // (row-stays-open-when-only-its-measure-lands, 2026-11-27).
+    let mut measure_tests: Option<Vec<String>> = None;
+    let (status, note) = if kind == "landed" && r["target"].as_str().is_none() {
+        let patch = card_patch(home, game, a)
+            .map(|p| String::from_utf8_lossy(&p).into_owned())
+            .unwrap_or_default();
+        let tests = PatchTests::read(&patch);
+        let waiting: Vec<String> = r["measure_tests"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .filter(|t| !tests.unignored.iter().any(|u| u == t))
+            .map(str::to_owned)
+            .collect();
+        if !waiting.is_empty() {
+            measure_tests = Some(waiting.clone());
+            (
+                "next",
+                format!(
+                    "{note} Its measure, the test {}, is still ignored: the row stays open, and closes on the landing that takes the ignore off.",
+                    waiting.join(", ")
+                ),
+            )
+        } else if tests.only_adds_ignored() {
+            measure_tests = Some(tests.ignored.clone());
+            (
+                "next",
+                format!(
+                    "{note} That was only the row's measure, the test {}, ignored until the work lands: the row stays open, and closes on the landing that takes the ignore off.",
+                    tests.ignored.join(", ")
+                ),
+            )
+        } else {
+            measure_tests = Some(Vec::new());
+            (status, note)
+        }
+    } else {
+        (status, note)
+    };
     // A row with a target closes on its measure, not on the landing: it
     // waits in line until the scoreboard measures it again
     // (crate::scoreboard::close_rows).
@@ -1377,6 +1420,15 @@ fn settle_row_by_card(
     if o.get("by") == Some(&json!("person")) && !o.contains_key("asked") {
         let said = o.get("note").cloned().unwrap_or(json!(""));
         o.insert("asked".into(), said);
+    }
+    match measure_tests {
+        Some(t) if !t.is_empty() => {
+            o.insert("measure_tests".into(), json!(t));
+        }
+        Some(_) => {
+            o.remove("measure_tests");
+        }
+        None => {}
     }
     o.insert("status".into(), json!(status));
     o.insert("note".into(), json!(note));
@@ -2659,6 +2711,83 @@ fn card_patch(home: &Path, game: &str, a: &Value) -> Result<Vec<u8>, String> {
         .map_err(|e| format!("its patch {p} can't be read: {e}"))
 }
 
+/// The tests a patch marks ignored and takes the ignore off, read from its
+/// `#[ignore` lines and the `fn NAME` a few lines after each.
+#[derive(Debug, Default, PartialEq)]
+struct PatchTests {
+    /// Tests the patch adds an `#[ignore` to.
+    ignored: Vec<String>,
+    /// Tests the patch takes an `#[ignore` off.
+    unignored: Vec<String>,
+    /// Lines the patch takes out.
+    removed: usize,
+    /// Files it changes, and those of them it adds an ignored test to.
+    files: usize,
+    files_with_ignored: usize,
+}
+
+impl PatchTests {
+    fn read(patch: &str) -> PatchTests {
+        let lines: Vec<&str> = patch.lines().collect();
+        let mut t = PatchTests::default();
+        let mut file_has_ignored = false;
+        // The test an attribute at line i belongs to: the first fn among
+        // the next few lines of the same side (or context).
+        let fn_after = |i: usize, side: char| -> Option<String> {
+            lines[i + 1..].iter().take(6).find_map(|l| {
+                let (c, body) = (l.chars().next()?, l.get(1..)?);
+                if c != side && c != ' ' {
+                    return None;
+                }
+                let at = body.find("fn ")?;
+                let name: String = body[at + 3..]
+                    .chars()
+                    .take_while(|c| c.is_alphanumeric() || *c == '_')
+                    .collect();
+                (!name.is_empty()).then_some(name)
+            })
+        };
+        for (i, l) in lines.iter().enumerate() {
+            if l.starts_with("diff --git ") {
+                if t.files > 0 && file_has_ignored {
+                    t.files_with_ignored += 1;
+                }
+                t.files += 1;
+                file_has_ignored = false;
+            } else if l.starts_with("+++ ") || l.starts_with("--- ") {
+                continue;
+            } else if let Some(body) = l.strip_prefix('+') {
+                if body.trim_start().starts_with("#[ignore")
+                    && let Some(name) = fn_after(i, '+')
+                {
+                    t.ignored.push(name);
+                    file_has_ignored = true;
+                }
+            } else if let Some(body) = l.strip_prefix('-') {
+                t.removed += 1;
+                if body.trim_start().starts_with("#[ignore")
+                    && let Some(name) = fn_after(i, '-')
+                {
+                    t.unignored.push(name);
+                }
+            }
+        }
+        if file_has_ignored {
+            t.files_with_ignored += 1;
+        }
+        // An ignore swapped for another (its reason reworded) stays one.
+        let ignored = t.ignored.clone();
+        t.unignored.retain(|u| !ignored.contains(u));
+        t
+    }
+
+    /// The patch only adds tests that are ignored: it takes nothing out,
+    /// and each file it changes gets an ignored test.
+    fn only_adds_ignored(&self) -> bool {
+        !self.ignored.is_empty() && self.removed == 0 && self.files_with_ignored == self.files
+    }
+}
+
 /// `git` in `dir` with the loop's own name on its commits, Err with git's
 /// words.
 fn git_in(dir: &Path, args: &[&str]) -> anyhow::Result<String> {
@@ -2947,13 +3076,30 @@ pub(crate) fn brief(setup: &Setup, step: &Value, wt: &Path, branch: &str, run: &
     // A row with no target yet, only words for what would measure it: the
     // measure comes before the work, so the worker doesn't pick its own
     // finish line as it nears it.
-    if let Some((game, row)) = row_of(step)
+    let landed_tests: Vec<&str> = step["measure_tests"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .collect();
+    if row_of(step).is_some()
+        && step.get("target").is_none_or(Value::is_null)
+        && !landed_tests.is_empty()
+    {
+        // Its measure landed already, ignored (settle_row_by_card): the
+        // work is what's left.
+        b.push(String::new());
+        b.push(format!(
+            "This row's measure has landed: the test {}, ignored until the work lands. Don't make another measure: do the row's work, take the ignore off that test in the same patch, run it (cargo test -p CRATE NAME), and gate the patch. The row closes on the landing that takes the ignore off; a landing that leaves it ignored keeps the row open.",
+            landed_tests.join(", ")
+        ));
+    } else if let Some((game, row)) = row_of(step)
         && step.get("target").is_none_or(Value::is_null)
         && let Some(needed) = step["measure_needed"].as_str()
     {
         b.push(String::new());
         b.push(format!(
-            "This row has no target yet, only what would measure it (in the row record, as written on the row). Your first job, before any other change, is its measure: find the line of {game}/scoreboard.toml or the test that reads done when the row is done and not before, and set it with gp_run mechanic queue with game {game}, mechanic {row} and target \"LINE sprites at least N of M\". When nothing can measure it yet, this run's work is what makes the measure (the scoreboard line or the test), landed through its gate, and nothing else of the row. Say in your result's measures what you set. The words for what would measure it were: {}",
+            "This row has no target yet, only what would measure it (in the row record, as written on the row). Your first job, before any other change, is its measure: find the line of {game}/scoreboard.toml or the test that reads done when the row is done and not before, and set it with gp_run mechanic queue with game {game}, mechanic {row} and target \"LINE sprites at least N of M\". When nothing can measure it yet, make the measure first (the scoreboard line, or a test that fails today, ignored until the work lands) and gate it: a landing that only adds an ignored test leaves the row open, and the row closes on the landing that takes the ignore off. When the gate refuses it (the row is iterating, or no gate can run), don't stop there: go on to the row's work in the same tree, take the test's ignore off, and leave one patch of both. Say in your result's measures what you set. The words for what would measure it were: {}",
             crate::next::cut(&as_record(needed), 300)
         ));
     }
@@ -5732,6 +5878,23 @@ mod tests {
             b.contains("Your first job, before any other change, is its measure"),
             "{b}"
         );
+        // A worker whose gate refuses the measure goes on to the work.
+        assert!(
+            b.contains("don't stop there: go on to the row's work"),
+            "{b}"
+        );
+        // Its measure landed as an ignored test: the work is what's left.
+        st["measure_tests"] = json!(["older_mechanic_page_is_gone"]);
+        let b = brief(&setup, &st, &wt, "loop/s0000000000h5", &Run::default());
+        assert!(
+            b.contains("This row's measure has landed: the test older_mechanic_page_is_gone"),
+            "{b}"
+        );
+        assert!(
+            !b.contains("Your first job, before any other change"),
+            "{b}"
+        );
+        st["measure_tests"] = Value::Null;
         st["target"] = json!("walk sprites at least 3 of 4");
         let b = brief(&setup, &st, &wt, "loop/s0000000000h5", &Run::default());
         assert!(
@@ -6786,5 +6949,144 @@ mod tests {
             )
         );
         assert_eq!(row("b")["status"], "asking you");
+    }
+
+    /// Row row-stays-open-when-only-its-measure-lands: on 2026-11-27
+    /// row older-mechanic-page-removed closed as done when its card landed
+    /// gameprinter 065bb5a0, which held only the row's measure (an ignored
+    /// test), with the page still in the repo. A landing whose patch only
+    /// adds an ignored test leaves its row (one with no scoreboard target)
+    /// at next with the test named; the later landing that takes the ignore
+    /// off closes it. Any other landing closes its row as before.
+    #[test]
+    fn a_landing_of_only_its_measure_leaves_the_row_open() {
+        let t = tempfile::tempdir().unwrap();
+        let home = t.path();
+        let f = home.join("mechanics/g/queue.json");
+        let needed = "a test in just check: a landed card whose patch only adds an ignored test leaves its row next";
+        let row_of = |m: &str| {
+            json!({"mechanic": m, "status": "asking you", "measure_needed": needed,
+            "note": "Its card is on your page: press YES"})
+        };
+        crate::mechanic::session::write_queue(&f, &[row_of("page-gone"), row_of("plain-fix")])
+            .unwrap();
+        // The measure alone: one test, ignored until the work lands.
+        let measure = t.path().join("measure.patch");
+        fs::write(
+            &measure,
+            "diff --git a/crates/gp-cli/src/mechanic/server.rs b/crates/gp-cli/src/mechanic/server.rs
+--- a/crates/gp-cli/src/mechanic/server.rs
++++ b/crates/gp-cli/src/mechanic/server.rs
+@@ -900,3 +900,12 @@ mod tests {
+         assert!(served);
+     }
++
++    /// The older page is gone from the repo.
++    #[test]
++    #[ignore = \"the row's measure: passes once the older page is removed\"]
++    fn older_mechanic_page_is_gone() {
++        let left = older_page_left();
++        assert!(left.is_empty(), \"{left:?}\");
++    }
+ }
+",
+        )
+        .unwrap();
+        // Work with no ignored test in it.
+        let plain = t.path().join("plain.patch");
+        fs::write(
+            &plain,
+            "diff --git a/README.md b/README.md
+--- a/README.md
++++ b/README.md
+@@ -1,2 +1,2 @@
+ # Game Printer
+-The page is mechanic/index.html.
++The page is the screen page.
+",
+        )
+        .unwrap();
+        let now = gp_mcp::asks::now_ms();
+        let landed = |p: &Path, done: u64| {
+            json!({"state": "used", "ran": {"state": "landed", "done_ms": done},
+                "argv": ["--patch", p.to_string_lossy(), "-m", "The older page goes. Expect: x"]})
+        };
+        test_card(home, 1, now - 2000, "g", "page-gone", landed(&measure, now));
+        test_card(home, 2, now - 2000, "g", "plain-fix", landed(&plain, now));
+        settle_card_rows(home);
+        let row = |m: &str| -> Value {
+            crate::mechanic::session::read_queue(&f)
+                .into_iter()
+                .find(|r| r["mechanic"] == json!(m))
+                .unwrap()
+        };
+        // Only its measure landed: the row stays open, naming the test.
+        let r = row("page-gone");
+        assert_eq!(r["status"], "next", "{r}");
+        let note = r["note"].as_str().unwrap();
+        assert!(note.contains("older_mechanic_page_is_gone"), "{note}");
+        assert_eq!(r["measure_tests"], json!(["older_mechanic_page_is_gone"]));
+        // An ignore with its reason reworded is still one.
+        let reworded = PatchTests::read(
+            "diff --git a/x.rs b/x.rs
+--- a/x.rs
++++ b/x.rs
+@@ -1,3 +1,3 @@
+     #[test]
+-    #[ignore = \"old words\"]
++    #[ignore = \"new words\"]
+     fn older_mechanic_page_is_gone() {
+",
+        );
+        assert!(reworded.unignored.is_empty(), "{reworded:?}");
+        assert!(!reworded.only_adds_ignored());
+        // Work landed: closed as before.
+        assert_eq!(row("plain-fix")["status"], "done");
+        let ask_again = || {
+            let mut q = crate::mechanic::session::read_queue(&f);
+            q[0]["status"] = json!("asking you");
+            q[0]["note"] = json!("Its card is on your page: press YES");
+            crate::mechanic::session::write_queue(&f, &q).unwrap();
+        };
+        // A landing that leaves the measure ignored keeps the row open.
+        ask_again();
+        let later = gp_mcp::asks::now_ms() + 1000;
+        test_card(home, 3, later, "g", "page-gone", landed(&plain, later));
+        settle_card_rows(home);
+        let r = row("page-gone");
+        assert_eq!(r["status"], "next", "{r}");
+        assert!(
+            r["note"].as_str().unwrap().contains("is still ignored"),
+            "{r}"
+        );
+        // The worker gates the work; its card lands and takes the ignore off.
+        ask_again();
+        let work = t.path().join("work.patch");
+        fs::write(
+            &work,
+            "diff --git a/crates/gp-cli/src/mechanic/server.rs b/crates/gp-cli/src/mechanic/server.rs
+--- a/crates/gp-cli/src/mechanic/server.rs
++++ b/crates/gp-cli/src/mechanic/server.rs
+@@ -903,7 +903,6 @@ mod tests {
+     /// The older page is gone from the repo.
+     #[test]
+-    #[ignore = \"the row's measure: passes once the older page is removed\"]
+     fn older_mechanic_page_is_gone() {
+         let left = older_page_left();
+         assert!(left.is_empty(), \"{left:?}\");
+diff --git a/mechanic/index.html b/mechanic/index.html
+deleted file mode 100644
+--- a/mechanic/index.html
++++ /dev/null
+@@ -1 +0,0 @@
+-<html></html>
+",
+        )
+        .unwrap();
+        let later = gp_mcp::asks::now_ms() + 2000;
+        test_card(home, 4, later, "g", "page-gone", landed(&work, later));
+        settle_card_rows(home);
+        assert_eq!(row("page-gone")["status"], "done", "{}", row("page-gone"));
+        assert!(row("page-gone").get("measure_tests").is_none());
     }
 }
