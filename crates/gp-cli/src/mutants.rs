@@ -15,9 +15,11 @@
 //! counters) and the systems' order are changed, never pictures or
 //! documentation. Each mutant's name is its kind and its number in the
 //! kind (`constant-007`), in the order of kind, path and change, and its
-//! `says` is `PATH: CHANGE`.
+//! `says` is `PATH: CHANGE`. `spread` keeps a few of them, spread over the
+//! kinds, with the same names, and makes only those: a model with large
+//! tables has a mutant for every number in them.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
 
@@ -182,33 +184,62 @@ fn bumped(v: &Toml) -> Option<Toml> {
     }
 }
 
+fn at<'a>(v: &'a Toml, path: &[Step]) -> Option<&'a Toml> {
+    let mut v = v;
+    for p in path {
+        v = match p {
+            Step::Key(k) => v.get(k.as_str())?,
+            Step::At(i) => v.as_array()?.get(*i)?,
+        };
+    }
+    Some(v)
+}
+
+type Edit = Box<dyn Fn(&mut Toml)>;
+
 /// One proposed mutant: its kind, the part it changes and how, and the
-/// changed document.
+/// edit at that part. The changed document is made only for a mutant
+/// that is kept, so a model with large tables doesn't hold a copy of
+/// itself for each of its many mutants (bench-mutants-have-a-cap).
 struct Proposed {
     kind: &'static str,
+    at: Vec<Step>,
     path: String,
     what: String,
-    doc: Toml,
+    edit: Edit,
+}
+
+impl Proposed {
+    fn doc(&self, real: &Toml) -> Toml {
+        let mut doc = real.clone();
+        if let Some(v) = at_mut(&mut doc, &self.at) {
+            (self.edit)(v);
+        }
+        doc
+    }
 }
 
 fn propose(real: &Toml) -> Vec<Proposed> {
     let mut out = Vec::new();
-    let mut edit = |kind: &'static str, path: &[Step], what: String, f: &dyn Fn(&mut Toml)| {
-        let mut doc = real.clone();
-        if let Some(v) = at_mut(&mut doc, path) {
-            f(v);
-            if &doc != real {
+    let mut edit = |kind: &'static str, path: &[Step], what: String, f: Edit| {
+        // Kept only when it changes the part: tried on a copy of the part
+        // alone.
+        if let Some(v) = at(real, path) {
+            let mut x = v.clone();
+            f(&mut x);
+            if &x != v {
                 out.push(Proposed {
                     kind,
+                    at: path.to_vec(),
                     path: show(path),
                     what,
-                    doc,
+                    edit: f,
                 });
             }
         }
     };
     // Walk the behaviour sections.
-    fn walk(v: &Toml, path: &mut Vec<Step>, seen: &mut dyn FnMut(&[Step], &Toml)) {
+    fn walk<'a>(v: &'a Toml, path: &mut Vec<Step>, seen: &mut dyn FnMut(&[Step], &'a Toml)) {
         seen(path, v);
         match v {
             Toml::Table(t) => {
@@ -231,16 +262,15 @@ fn propose(real: &Toml) -> Vec<Proposed> {
             _ => {}
         }
     }
-    let mut found: Vec<(Vec<Step>, Toml)> = Vec::new();
+    let mut found: Vec<(Vec<Step>, &Toml)> = Vec::new();
     for sec in SECTIONS {
         if let Some(v) = real.get(*sec) {
             let mut path = vec![Step::Key((*sec).to_owned())];
-            walk(v, &mut path, &mut |p, x| {
-                found.push((p.to_vec(), x.clone()))
-            });
+            walk(v, &mut path, &mut |p, x| found.push((p.to_vec(), x)));
         }
     }
-    for (path, v) in &found {
+    for (path, v) in found {
+        let path = path.as_slice();
         let key = path.iter().rev().find_map(|p| match p {
             Step::Key(k) => Some(k.as_str()),
             Step::At(_) => None,
@@ -251,11 +281,16 @@ fn propose(real: &Toml) -> Vec<Proposed> {
             (Some("transition"), Toml::Array(a)) => {
                 for i in 0..a.len() {
                     let what = format!("transition {i} deleted");
-                    edit("transition", path, what, &move |x: &mut Toml| {
-                        if let Some(a) = x.as_array_mut() {
-                            a.remove(i);
-                        }
-                    });
+                    edit(
+                        "transition",
+                        path,
+                        what,
+                        Box::new(move |x: &mut Toml| {
+                            if let Some(a) = x.as_array_mut() {
+                                a.remove(i);
+                            }
+                        }),
+                    );
                 }
             }
             (Some("if"), Toml::Table(_)) if last_is_key => {
@@ -263,32 +298,42 @@ fn propose(real: &Toml) -> Vec<Proposed> {
                     "input",
                     parent,
                     "its condition dropped".into(),
-                    &|x: &mut Toml| {
+                    Box::new(|x: &mut Toml| {
                         if let Some(t) = x.as_table_mut() {
                             t.remove("if");
                         }
-                    },
+                    }),
                 );
             }
             (Some(k), Toml::Array(a)) if INPUT_LISTS.contains(&k) => {
                 for (i, item) in a.iter().enumerate() {
                     let what = format!("{} dropped", item.as_str().unwrap_or("?"));
-                    edit("input", path, what, &move |x: &mut Toml| {
-                        if let Some(a) = x.as_array_mut() {
-                            a.remove(i);
-                        }
-                    });
+                    edit(
+                        "input",
+                        path,
+                        what,
+                        Box::new(move |x: &mut Toml| {
+                            if let Some(a) = x.as_array_mut() {
+                                a.remove(i);
+                            }
+                        }),
+                    );
                 }
             }
             (Some("tile_kinds"), Toml::Table(t)) => {
                 for k in t.keys() {
                     let k = k.clone();
                     let what = format!("tile kind {k} dropped");
-                    edit("input", path, what, &move |x: &mut Toml| {
-                        if let Some(t) = x.as_table_mut() {
-                            t.remove(&k);
-                        }
-                    });
+                    edit(
+                        "input",
+                        path,
+                        what,
+                        Box::new(move |x: &mut Toml| {
+                            if let Some(t) = x.as_table_mut() {
+                                t.remove(&k);
+                            }
+                        }),
+                    );
                 }
             }
             (Some(k), x) if last_is_key && bumped(x).is_some() => {
@@ -299,7 +344,12 @@ fn propose(real: &Toml) -> Vec<Proposed> {
                 };
                 let b = bumped(x).expect("bumped");
                 let what = format!("{} for {}", show_value(&b), show_value(x));
-                edit(kind, path, what, &move |y: &mut Toml| *y = b.clone());
+                edit(
+                    kind,
+                    path,
+                    what,
+                    Box::new(move |y: &mut Toml| *y = b.clone()),
+                );
             }
             (Some(_), Toml::Array(a))
                 if last_is_key
@@ -309,11 +359,16 @@ fn propose(real: &Toml) -> Vec<Proposed> {
                 for i in 0..a.len() {
                     let b = bumped(&a[i]).expect("a number");
                     let what = format!("element {i} {} for {}", show_value(&b), show_value(&a[i]));
-                    edit("constant", path, what, &move |y: &mut Toml| {
-                        if let Some(a) = y.as_array_mut() {
-                            a[i] = b.clone();
-                        }
-                    });
+                    edit(
+                        "constant",
+                        path,
+                        what,
+                        Box::new(move |y: &mut Toml| {
+                            if let Some(a) = y.as_array_mut() {
+                                a[i] = b.clone();
+                            }
+                        }),
+                    );
                 }
             }
             _ => {}
@@ -332,11 +387,16 @@ fn propose(real: &Toml) -> Vec<Proposed> {
                 sys[i].as_str().unwrap_or("?"),
                 sys[i + 1].as_str().unwrap_or("?")
             );
-            edit("order", &path, what, &move |x: &mut Toml| {
-                if let Some(a) = x.as_array_mut() {
-                    a.swap(i, i + 1);
-                }
-            });
+            edit(
+                "order",
+                &path,
+                what,
+                Box::new(move |x: &mut Toml| {
+                    if let Some(a) = x.as_array_mut() {
+                        a.swap(i, i + 1);
+                    }
+                }),
+            );
         }
     }
     out
@@ -400,30 +460,91 @@ pub(crate) struct Made {
 
 /// Every mutant of `real`, named and in order: by kind, path and change.
 pub(crate) fn make(real: &Toml) -> Vec<Made> {
+    let named = named(real);
+    named
+        .into_iter()
+        .map(|(name, p)| made(real, name, p))
+        .collect()
+}
+
+/// At most `cap` of `real`'s mutants, spread over the kinds and over each
+/// kind's list (so the first ones aren't all one entity's constants), with
+/// the names `make` gives them, in name order; and how many there are in
+/// all. Only the ones kept are made.
+pub(crate) fn spread(real: &Toml, cap: usize) -> (usize, Vec<Made>) {
+    let named = named(real);
+    let all = named.len();
+    let kinds: Vec<&str> = named.iter().map(|(_, p)| p.kind).collect();
+    let keep = spread_of(&kinds, cap);
+    let out = named
+        .into_iter()
+        .enumerate()
+        .filter(|(i, _)| keep.contains(i))
+        .map(|(_, (name, p))| made(real, name, p))
+        .collect();
+    (all, out)
+}
+
+/// Which of a list (by kind, in name order) to keep, at most `cap`: the
+/// kinds take one turn each until the cap or the list runs out, and each
+/// kind's turns are spread evenly over its own part of the list.
+fn spread_of(kinds: &[&str], cap: usize) -> BTreeSet<usize> {
+    let mut by_kind: BTreeMap<&str, Vec<usize>> = BTreeMap::new();
+    for (i, k) in kinds.iter().enumerate() {
+        by_kind.entry(k).or_default().push(i);
+    }
+    let mut quota: BTreeMap<&str, usize> = by_kind.keys().map(|k| (*k, 0)).collect();
+    let mut left = cap.min(kinds.len());
+    while left > 0 {
+        for (k, list) in &by_kind {
+            let q = quota.get_mut(k).expect("every kind has a quota");
+            if left > 0 && *q < list.len() {
+                *q += 1;
+                left -= 1;
+            }
+        }
+    }
+    let mut keep = BTreeSet::new();
+    for (k, list) in &by_kind {
+        let q = quota[k];
+        for j in 0..q {
+            keep.insert(list[j * list.len() / q]);
+        }
+    }
+    keep
+}
+
+/// The mutants, sorted by kind, path and change and named by their number
+/// in their kind, with their edits still to make.
+fn named(real: &Toml) -> Vec<(String, Proposed)> {
     let mut proposed = propose(real);
     proposed.sort_by(|x, y| (x.kind, &x.path, &x.what).cmp(&(y.kind, &y.path, &y.what)));
     let mut counter: BTreeMap<&str, usize> = BTreeMap::new();
-    let mut out = Vec::new();
-    for p in proposed {
-        let n = counter.entry(p.kind).or_default();
-        *n += 1;
-        let name = format!("{}-{:03}", p.kind, n);
-        let (mut remove, mut set) = (Vec::new(), BTreeMap::new());
-        ops(real, &p.doc, "", &mut remove, &mut set);
-        out.push(Made {
-            kind: p.kind,
-            mutant: Mutant {
-                name,
-                says: format!("{}: {}", p.path, p.what),
-                remove,
-                set,
-                ..Mutant::default()
-            },
-            path: p.path,
-            what: p.what,
-        });
+    proposed
+        .into_iter()
+        .map(|p| {
+            let n = counter.entry(p.kind).or_default();
+            *n += 1;
+            (format!("{}-{:03}", p.kind, n), p)
+        })
+        .collect()
+}
+
+fn made(real: &Toml, name: String, p: Proposed) -> Made {
+    let (mut remove, mut set) = (Vec::new(), BTreeMap::new());
+    ops(real, &p.doc(real), "", &mut remove, &mut set);
+    Made {
+        kind: p.kind,
+        mutant: Mutant {
+            name,
+            says: format!("{}: {}", p.path, p.what),
+            remove,
+            set,
+            ..Mutant::default()
+        },
+        path: p.path,
+        what: p.what,
     }
-    out
 }
 
 /// The text of a mutants file (`[[mutant]]`), as `gp capture prune
@@ -540,8 +661,9 @@ after = 90
             .iter()
             .find(|p| p.kind == "period" && p.path.ends_with("[1].after"))
             .unwrap();
+        let doc = p.doc(&real);
         let (mut remove, mut set) = (Vec::new(), BTreeMap::new());
-        ops(&real, &p.doc, "", &mut remove, &mut set);
+        ops(&real, &doc, "", &mut remove, &mut set);
         assert!(remove.is_empty());
         assert_eq!(
             set.keys().collect::<Vec<_>>(),
@@ -555,7 +677,7 @@ after = 90
         };
         let text = mutate(&toml::to_string(&real).unwrap(), &m).unwrap();
         let back: Toml = toml::from_str(&text).unwrap();
-        assert_eq!(back, p.doc);
+        assert_eq!(back, doc);
     }
 
     #[test]

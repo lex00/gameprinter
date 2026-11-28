@@ -46,7 +46,9 @@ These grade the ROM-only tools on a game whose answer key is known. game-printer
 | The code matrix: `gp clips matrix --labels rom`, once per seed | `gp corpus reduce` (the untaken branch ways, the clips any cover needs) and `gp capture dense --seed S` for each of the bench file's seeds |
 | The grid: `gp capture grid --code` and `--drive N` | The dense clips of each seed |
 | A wrong model | The corpus scored on the model with the bench file's `[wrong_model]` change, `--reuse` of the real score |
-| Mutants: `gp capture prune --mutants` | `gp model mutants`' mutants, each scored on the corpus with `gp corpus score --model M --reuse` (a clip the real model played exactly stops at its first split). `--mutants N` scores only the first N |
+| Mutants: `gp capture prune --mutants` | `gp model mutants`' mutants, each scored on the corpus with `gp corpus score --model M --reuse` (a clip the real model played exactly stops at its first split). At most 20 are scored, spread over the kinds and over each kind's list; the bench file's `[bench] mutants = N` sets another cap, and `--mutants N` wins over both. Only the ones scored are made and written to the work folder's mutants.toml, and the report says how many the model has (`made`), how many were scored (`chosen`) and where the cap came from |
+
+The cap is there because a model with large tables has a mutant for every number in them, each scored on the whole corpus: a 40,000-line model once made millions and wrote a mutants file of 3.4 GB. Each scored mutant takes a minute or more on a large model, so the default of 20 ends within the hour.
 
 A mutant is caught when a clip scores worse on it than on the real model: exact before and not now, a higher score, fewer frames together per thousand, or a clip that can't be made. The measures table keeps game-printer's rows. Elements found, unreachable directions told apart and inputs found need a ground truth written from the game's source, which Donkey Kong and Tapper don't have, so those rows say so.
 

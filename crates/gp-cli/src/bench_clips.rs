@@ -37,7 +37,7 @@ use crate::bench_grade::{Grader, jaccard, round3};
 use crate::mutants::Mutant;
 
 /// The JSON shape of `gp bench clips`. A change to it bumps this.
-pub const CLIPS_SCHEMA: &str = "gp bench clips 3";
+pub const CLIPS_SCHEMA: &str = "gp bench clips 4";
 
 #[derive(Subcommand)]
 pub enum BenchCmd {
@@ -95,8 +95,9 @@ pub struct ClipsArgs {
     /// $GP_HOME/work/bench/GAME). A folder that isn't a bench's is refused.
     #[arg(long)]
     pub work: Option<PathBuf>,
-    /// Run only the first N mutants (by name), for a quick look; the
-    /// report says so.
+    /// Score at most N mutants, spread over the kinds; it wins over the
+    /// bench file's `[bench] mutants`, and with neither the bench scores
+    /// 20. The report says how many were made and how many scored.
     #[arg(long)]
     pub mutants: Option<usize>,
 }
@@ -181,6 +182,10 @@ pub(crate) struct Head {
     /// `gp capture dense`'s clips to choose.
     #[serde(default = "dense_keep")]
     pub(crate) dense_keep: u64,
+    /// The most mutants to score (`gp bench clips --mutants` wins over
+    /// it; default `DEFAULT_MUTANTS`).
+    #[serde(default)]
+    pub(crate) mutants: Option<usize>,
     #[serde(default)]
     #[allow(dead_code)]
     baselines: Option<PathBuf>,
@@ -213,6 +218,47 @@ fn dense_budget() -> u64 {
 
 fn dense_keep() -> u64 {
     15
+}
+
+/// The mutants a bench scores when neither its file nor the command gives
+/// a cap: each is a score of the whole corpus, a minute or more on a large
+/// model, so this ends within the hour.
+pub(crate) const DEFAULT_MUTANTS: usize = 20;
+
+/// The mutants a bench scores: its cap, where the cap came from, how many
+/// the model has in all, and the ones chosen.
+pub(crate) struct MutantPlan {
+    pub(crate) cap: usize,
+    pub(crate) cap_from: &'static str,
+    pub(crate) made: usize,
+    pub(crate) chosen: Vec<crate::mutants::Made>,
+}
+
+/// The cap is the command's `--mutants`, else the bench file's `[bench]
+/// mutants`, else `DEFAULT_MUTANTS`; the mutants are spread over the kinds
+/// (crate::mutants::spread), and only those are made.
+pub(crate) fn mutant_plan(real: &Toml, file: Option<usize>, flag: Option<usize>) -> MutantPlan {
+    let (cap, cap_from) = match (flag, file) {
+        (Some(n), _) => (n, "--mutants"),
+        (None, Some(n)) => (n, "the bench file"),
+        (None, None) => (DEFAULT_MUTANTS, "the default"),
+    };
+    let (made, chosen) = crate::mutants::spread(real, cap);
+    MutantPlan {
+        cap,
+        cap_from,
+        made,
+        chosen,
+    }
+}
+
+/// Writes the chosen mutants, and only those, to DIR/mutants.toml.
+pub(crate) fn write_mutants(dir: &Path, plan: &MutantPlan) -> Result<PathBuf> {
+    let list: Vec<Mutant> = plan.chosen.iter().map(|m| m.mutant.clone()).collect();
+    let file = dir.join("mutants.toml");
+    fs::write(&file, crate::mutants::file_text(&list)?)
+        .with_context(|| format!("writing {}", file.display()))?;
+    Ok(file)
 }
 
 #[derive(Deserialize)]
@@ -700,26 +746,11 @@ pub fn clips(paths: &Paths, a: &ClipsArgs) -> Result<Value> {
     lap("wrong_model", &mut clock);
 
     // Mutants of the real model, scored on the corpus.
-    let made_all = crate::mutants::make(&real);
-    let about: BTreeMap<String, (&'static str, String, String)> = made_all
-        .iter()
-        .map(|m| {
-            (
-                m.mutant.name.clone(),
-                (m.kind, m.path.clone(), m.what.clone()),
-            )
-        })
-        .collect();
-    let mut mutants: Vec<Mutant> = made_all.into_iter().map(|m| m.mutant).collect();
-    let made = mutants.len();
-    let limited = a.mutants.is_some_and(|n| n < made);
-    if let Some(n) = a.mutants {
-        mutants.truncate(n);
-    }
-    fs::write(
-        work.join("mutants.toml"),
-        crate::mutants::file_text(&mutants)?,
-    )?;
+    let plan = mutant_plan(&real, spec.bench.mutants, a.mutants);
+    write_mutants(&work, &plan)?;
+    let made = plan.made;
+    let chosen = plan.chosen.len();
+    let limited = chosen < made;
     let mut by_kind: BTreeMap<&str, (u64, u64, u64)> = crate::mutants::KINDS
         .iter()
         .map(|(k, _)| (*k, (0, 0, 0)))
@@ -728,10 +759,13 @@ pub fn clips(paths: &Paths, a: &ClipsArgs) -> Result<Value> {
     let mut invalid = Vec::new();
     let mut catches: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let mdir = work.join("mutant");
-    for m in &mutants {
-        let Some((kind, path, what)) = about.get(&m.name) else {
-            continue;
-        };
+    for made_one in &plan.chosen {
+        let (m, kind, path, what) = (
+            &made_one.mutant,
+            made_one.kind,
+            &made_one.path,
+            &made_one.what,
+        );
         let e = by_kind.entry(kind).or_default();
         let scored = crate::mutants::mutate(&real_text, m)
             .and_then(|text| model_dir(&mdir, &text, &mapping))
@@ -815,7 +849,8 @@ pub fn clips(paths: &Paths, a: &ClipsArgs) -> Result<Value> {
          "value": format!("{} of the corpus's {} clips ({} of {} own frames), by gp corpus reduce",
             p["kept"], p["clips"], p["kept_frames"], p["all_frames"])},
         {"measure": "Wrong models caught",
-         "value": format!("{caught} of {tried} mutants, by the corpus's {run_clips} clips{}", if limited { " (a limited run)" } else { "" }),
+         "value": format!("{caught} of {tried} mutants, by the corpus's {run_clips} clips ({chosen} scored of the {made} made, at most {} by {})",
+            plan.cap, plan.cap_from),
          "detail": "Per kind below. A mutant is caught when a clip scores worse on it than on the hand-written model; dropping a mapping field isn't a mutant the existing code can make (it edits model.toml only)"},
         {"measure": "Stable targets",
          "value": format!("dense clips Jaccard {} across seeds; the wrong model ({}) {} on {} clips",
@@ -844,7 +879,8 @@ pub fn clips(paths: &Paths, a: &ClipsArgs) -> Result<Value> {
                 let (c, t, bad) = by_kind.get(k).copied().unwrap_or_default();
                 json!({"kind": k, "says": says, "caught": c, "scored": t, "invalid": bad})
             }).collect::<Vec<_>>(),
-            "made": made, "caught": caught, "scored": tried, "run_clips": run_clips, "limited": limited,
+            "made": made, "chosen": chosen, "cap": plan.cap, "cap_from": plan.cap_from,
+            "caught": caught, "scored": tried, "run_clips": run_clips, "limited": limited,
             "uncaught": uncaught, "invalid": invalid, "catches_by_clip": catches,
         },
     });
@@ -930,6 +966,92 @@ pub(crate) fn text_of(v: &Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// bench-mutants-have-a-cap: a model with a large table has thousands
+    /// of mutants, each setting the whole table; the bench scores a few,
+    /// of every kind, and writes only those.
+    #[test]
+    fn a_bench_scores_a_capped_spread_of_mutants() {
+        let mut text = String::from(
+            r#"
+[model]
+systems = ["walk", "fall", "score"]
+[entities.hero.walk]
+speed = 2
+stops = ["wall", "ledge"]
+[[rules.game.states.over.transition]]
+to = "title"
+after = 60
+[rules.game.states.over.transition.if]
+counter = "lives"
+[[rules.game.states.over.transition]]
+to = "title"
+after = 90
+"#,
+        );
+        for i in 0..2000 {
+            text.push_str(&format!(
+                "[[levels.hilltop.cells]]\nx = {}\ny = {}\nkind = {}\n",
+                i % 40,
+                i / 40,
+                i % 7
+            ));
+        }
+        let real: Toml = toml::from_str(&text).unwrap();
+
+        let plan = mutant_plan(&real, None, None);
+        assert_eq!(
+            (plan.cap, plan.cap_from, plan.chosen.len()),
+            (DEFAULT_MUTANTS, "the default", DEFAULT_MUTANTS)
+        );
+        assert!(plan.made > 6000, "{} made", plan.made);
+        let kinds: BTreeSet<&str> = plan.chosen.iter().map(|m| m.kind).collect();
+        assert_eq!(
+            kinds.into_iter().collect::<Vec<_>>(),
+            ["constant", "input", "order", "period", "transition"]
+        );
+        // The constants are spread over the table, not its first cell's.
+        let cells: BTreeSet<&str> = plan
+            .chosen
+            .iter()
+            .filter(|m| m.kind == "constant")
+            .map(|m| m.path.as_str())
+            .collect();
+        assert!(cells.len() > 5, "{cells:?}");
+
+        let file = mutant_plan(&real, Some(7), None);
+        assert_eq!(
+            (file.cap, file.cap_from, file.chosen.len()),
+            (7, "the bench file", 7)
+        );
+        let flag = mutant_plan(&real, Some(7), Some(3));
+        assert_eq!(
+            (flag.cap, flag.cap_from, flag.chosen.len()),
+            (3, "--mutants", 3)
+        );
+        let kinds: BTreeSet<&str> = flag.chosen.iter().map(|m| m.kind).collect();
+        assert_eq!(kinds.len(), 3, "{kinds:?}");
+
+        // The file holds the chosen ones only, named as gp model mutants
+        // names them, and stays small.
+        let d = tempfile::tempdir().unwrap();
+        let f = write_mutants(d.path(), &plan).unwrap();
+        let size = fs::metadata(&f).unwrap().len();
+        assert!(size < 4 << 20, "{size} bytes");
+        let written = fs::read_to_string(&f).unwrap();
+        assert_eq!(written.matches("[[mutant]]").count(), DEFAULT_MUTANTS);
+        let small: Toml = toml::from_str(
+            "[model]\nsystems = [\"a\", \"b\"]\n[entities.p.walk]\nspeed = 1\nafter = 3\n",
+        )
+        .unwrap();
+        let names = |v: Vec<crate::mutants::Made>| -> Vec<String> {
+            v.into_iter().map(|m| m.mutant.name).collect()
+        };
+        assert_eq!(
+            names(crate::mutants::spread(&small, 99).1),
+            names(crate::mutants::make(&small))
+        );
+    }
 
     #[test]
     fn a_clip_is_worse_when_it_fails_more_or_cant_be_made() {
