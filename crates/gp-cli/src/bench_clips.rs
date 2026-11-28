@@ -37,7 +37,7 @@ use crate::bench_grade::{Grader, jaccard, round3};
 use crate::mutants::Mutant;
 
 /// The JSON shape of `gp bench clips`. A change to it bumps this.
-pub const CLIPS_SCHEMA: &str = "gp bench clips 2";
+pub const CLIPS_SCHEMA: &str = "gp bench clips 3";
 
 #[derive(Subcommand)]
 pub enum BenchCmd {
@@ -414,6 +414,102 @@ pub(crate) fn home_with_rom(home: &Path, rom: &Path) -> Result<()> {
     Ok(())
 }
 
+/// One of a game's sets the person's ROM folder doesn't hold: the bench
+/// leaves out the clips that play it, and its report names them.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct MissingSet {
+    pub(crate) set: String,
+    pub(crate) sha256: String,
+    pub(crate) clips: Vec<String>,
+}
+
+/// The game's other sets (each `[[rom.entry]]` of `game`'s package.toml
+/// but the scored one), found by hash in `from`, the person's ROM folder,
+/// and written into the bench home's ROM folder, so `gp corpus score` there
+/// finds the ROM each clip plays (bench-home-has-every-rom-set). A set
+/// `from` doesn't hold comes back with the clips of `game`'s corpus that
+/// play it.
+pub(crate) fn home_with_sets(home: &Path, game: &Path, from: &Path) -> Result<Vec<MissingSet>> {
+    let others: Vec<crate::clipset::PackageSet> = crate::clipset::package_sets(game)
+        .into_iter()
+        .filter(|s| !s.scored && !s.sha256.is_empty())
+        .collect();
+    if others.is_empty() {
+        return Ok(Vec::new());
+    }
+    let wanted: Vec<String> = others.iter().map(|s| s.sha256.clone()).collect();
+    let found = crate::roms::find(&wanted, &[], from)?;
+    let clips = crate::clipset::read_game(game)?.clips;
+    // Apart from the scored ROM's file, so no name meets it.
+    let roms = home.join("roms").join("sets");
+    fs::create_dir_all(&roms)?;
+    let mut missing = Vec::new();
+    for s in &others {
+        match found.get(&s.sha256) {
+            Some(rom) => {
+                let name = if s.system.is_empty() {
+                    &s.id
+                } else {
+                    &s.system
+                };
+                let ext = match rom.platform {
+                    crate::roms::Platform::Arcade => "zip",
+                    crate::roms::Platform::Nes => "nes",
+                };
+                fs::write(roms.join(format!("{name}.{ext}")), &rom.bytes)?;
+            }
+            None => missing.push(MissingSet {
+                set: s.id.clone(),
+                sha256: s.sha256.clone(),
+                clips: clips
+                    .iter()
+                    .filter(|r| r.set == s.id || (!s.system.is_empty() && r.set == s.system))
+                    .map(|r| r.id.clone())
+                    .collect(),
+            }),
+        }
+    }
+    Ok(missing)
+}
+
+/// The bench's copy of a game with the clips `ids` left out of its corpus
+/// plan, and the plan's recipe-set hash made again for the clips left, so
+/// the copy scores as a corpus of its own. Only a plan: an older
+/// `clips.toml` is refused.
+pub(crate) fn leave_out(game: &Path, ids: &BTreeSet<String>) -> Result<()> {
+    if ids.is_empty() {
+        return Ok(());
+    }
+    let file = game.join(crate::corpus_score::FILE);
+    if crate::plan::load(game)?.is_none() {
+        bail!(
+            "{} isn't a corpus plan, so the bench can't leave out the {} clips of a set the ROM folder doesn't hold",
+            file.display(),
+            ids.len()
+        );
+    }
+    let mut t: toml::Table = fs::read_to_string(&file)
+        .with_context(|| format!("reading {}", file.display()))?
+        .parse()
+        .with_context(|| file.display().to_string())?;
+    if let Some(Toml::Array(a)) = t.get_mut("clip") {
+        a.retain(|c| {
+            !c.get("id")
+                .and_then(Toml::as_str)
+                .is_some_and(|id| ids.contains(id))
+        });
+    }
+    fs::write(&file, toml::to_string(&t)?)?;
+    let hash = crate::plan::load(game)?
+        .context("the plan, read again")?
+        .hash;
+    if let Some(Toml::Table(c)) = t.get_mut("corpus") {
+        c.insert("recipes".into(), Toml::String(hash));
+    }
+    fs::write(&file, toml::to_string(&t)?)?;
+    Ok(())
+}
+
 /// Each clip's row of a `gp corpus score --json`, by ID.
 pub(crate) fn score_rows(v: &Value) -> BTreeMap<String, Value> {
     // `gp corpus score --json` keeps them in its score record.
@@ -526,6 +622,16 @@ pub fn clips(paths: &Paths, a: &ClipsArgs) -> Result<Value> {
         env: vec![("GP_GAMES_DIR".into(), root.clone())],
     };
     home_with_rom(&tools.home, &rom)?;
+    // Every other set the clips play, from the person's ROM folder; the
+    // clips of a set it doesn't hold are left out, and the report says so.
+    let missing = home_with_sets(&tools.home, &g, &paths.roms)?;
+    leave_out(
+        &g,
+        &missing
+            .iter()
+            .flat_map(|m| m.clips.iter().cloned())
+            .collect(),
+    )?;
     let gs = s(&g);
 
     // The corpus on the real model.
@@ -725,6 +831,7 @@ pub fn clips(paths: &Paths, a: &ClipsArgs) -> Result<Value> {
         "rom_sha256": sha,
         "measures": measures,
         "corpus": {"clips": run_clips, "exact": exact, "failed": real_failed},
+        "sets_left_out": missing.iter().map(|m| json!({"set": m.set, "sha256": m.sha256, "clips": m.clips})).collect::<Vec<_>>(),
         "reduce": reduce["plan"],
         "dense": dense.iter().map(|d| json!({"seed": d["seed"], "pool": d["pool"], "kept": d["kept"]})).collect::<Vec<_>>(),
         "seeds": spec.bench.seeds,
@@ -761,6 +868,16 @@ pub(crate) fn text_of(v: &Value) -> String {
         ),
         String::new(),
     ];
+    for m in v["sets_left_out"].as_array().into_iter().flatten() {
+        let n = m["clips"].as_array().map_or(0, Vec::len);
+        out.push(format!(
+            "The ROM folder has no ROM of the set {} (sha256 {}): its {n} clip{} left out",
+            m["set"].as_str().unwrap_or(""),
+            m["sha256"].as_str().unwrap_or(""),
+            if n == 1 { " is" } else { "s are" }
+        ));
+        out.push(String::new());
+    }
     out.push("| Measure | Value |".into());
     out.push("|---|---|".into());
     for m in v["measures"].as_array().into_iter().flatten() {
@@ -828,6 +945,105 @@ mod tests {
         ]});
         assert_eq!(worse(&real, &other), ["a", "c"]);
         assert!(worse(&real, &json!({"clips": []})).is_empty());
+    }
+
+    /// bench-home-has-every-rom-set: a made-up game whose clips play three
+    /// sets, the person's ROM folder holding a zip of one of the two that
+    /// aren't scored. The bench's home gets that zip, found there by its
+    /// hash; the set with no zip is named with its one clip, which is left
+    /// out of the bench's copy of the plan, and the copy's recipe-set hash
+    /// is its clips' own.
+    #[test]
+    fn a_bench_home_holds_every_set_the_rom_folder_has() {
+        use std::io::Write as _;
+        let zip_of = |files: &[(String, Vec<u8>)]| {
+            let mut out = std::io::Cursor::new(Vec::new());
+            let mut z = zip::ZipWriter::new(&mut out);
+            for (name, bytes) in files {
+                z.start_file(name.as_str(), zip::write::SimpleFileOptions::default())
+                    .unwrap();
+                z.write_all(bytes).unwrap();
+            }
+            z.finish().unwrap();
+            out.into_inner()
+        };
+        let have = gp_arcade::testrom::known_made_up_set("rooftopbb");
+        gp_arcade::testrom::known_made_up_set("rooftopbc");
+        let id = |n: &str| gp_arcade::romset::set(n).unwrap().identity();
+        let d = tempfile::tempdir().unwrap();
+        let person = d.path().join("roms");
+        fs::create_dir_all(person.join("arcade")).unwrap();
+        fs::write(person.join("arcade/rooftopbb.zip"), zip_of(&have)).unwrap();
+        let g = d.path().join("game");
+        fs::create_dir_all(g.join("inputs")).unwrap();
+        fs::write(
+            g.join("package.toml"),
+            format!(
+                "[[rom.entry]]\nid = \"rooftop\"\nrole = \"scored\"\nsystem = \"rooftopba\"\nsha256 = \"aa\"\n\n\
+                 [[rom.entry]]\nid = \"rooftop-b\"\nrole = \"play\"\nsystem = \"rooftopbb\"\nsha256 = \"{}\"\n\n\
+                 [[rom.entry]]\nid = \"rooftop-c\"\nrole = \"play\"\nsystem = \"rooftopbc\"\nsha256 = \"{}\"\n",
+                id("rooftopbb"),
+                id("rooftopbc")
+            ),
+        )
+        .unwrap();
+        for (clip, line) in [
+            ("a", ""),
+            ("b", "arcade rooftopbb CSRLDUT\n"),
+            ("c", "arcade rooftopbc CSRLDUT\n"),
+        ] {
+            fs::write(
+                g.join(format!("inputs/{clip}.start.presses")),
+                format!("gp-presses 0\nframes 8\n{line}"),
+            )
+            .unwrap();
+        }
+        let clip = |c: &str| {
+            format!(
+                "[[clip]]\nid = \"{c}.1\"\nname = \"{c}\"\nstart = \"inputs/{c}.start.presses\"\npresses = []\nframes = 5\n\n"
+            )
+        };
+        fs::write(
+            g.join(crate::corpus_score::FILE),
+            format!(
+                "[corpus]\nformat = \"1.0.0\"\nname = \"rooftop\"\nversion = \"1.0.0\"\nrecipes = \"RECIPES\"\n\n\
+                 [target]\ngame = \"rooftop\"\nrom = \"aa\"\n\n{}{}{}",
+                clip("a"),
+                clip("b"),
+                clip("c")
+            ),
+        )
+        .unwrap();
+
+        let home = d.path().join("bench-home");
+        let missing = home_with_sets(&home, &g, &person).unwrap();
+        assert_eq!(
+            missing,
+            [MissingSet {
+                set: "rooftop-c".into(),
+                sha256: id("rooftopbc"),
+                clips: vec!["c.1".into()],
+            }]
+        );
+        let found = crate::roms::find(&[id("rooftopbb")], &[], &home.join("roms")).unwrap();
+        assert!(
+            found.contains_key(&id("rooftopbb")),
+            "the bench's home holds the set the person has"
+        );
+
+        leave_out(&g, &missing.iter().flat_map(|m| m.clips.clone()).collect()).unwrap();
+        let (now, m, problems) = crate::corpus_score::checked(&g).unwrap();
+        let ids: Vec<&str> = now.set.clips.iter().map(|c| c.id.as_str()).collect();
+        assert_eq!(ids, ["a.1", "b.1"]);
+        assert_eq!(m.corpus.hash, now.hash);
+        assert!(problems.is_empty(), "{problems:?}");
+        // Nothing to leave out changes nothing.
+        let before = fs::read_to_string(g.join(crate::corpus_score::FILE)).unwrap();
+        leave_out(&g, &BTreeSet::new()).unwrap();
+        assert_eq!(
+            fs::read_to_string(g.join(crate::corpus_score::FILE)).unwrap(),
+            before
+        );
     }
 
     /// `gp bench report` prints the measures of both reports, and exits 2
