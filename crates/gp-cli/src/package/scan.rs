@@ -44,16 +44,44 @@ use crate::template::{self, lifted_digest, sha256_hex};
 use rom_match::{Match, Num, RomIndex};
 
 pub fn run(dir: &Path, given: &[PathBuf], wasm: &[PathBuf], paths: &Paths) -> Result<Outcome> {
-    let pkg = Package::load(dir)?;
+    let mut pkg = Package::load(dir)?;
+    pkg.borrow_game_roms()?;
     let found = roms::find(&pkg.rom_hashes(), given, &paths.roms)?;
     let mut outcome = scan(&pkg, &found)?.outcome();
-    let wasm_report = scan_wasm(dir, wasm, &found)?;
+    let sets: Vec<&str> = pkg.entries.iter().map(|e| e.id.as_str()).collect();
+    let wasm_report = scan_wasm(dir, wasm, &found, &sets)?;
     outcome.text.push_str(&wasm_report.0);
     outcome.json["wasm"] = wasm_report.1;
     if wasm_report.2 {
         outcome.exit = outcome.exit.max(1);
     }
     Ok(outcome)
+}
+
+/// `--need-roms`: a scan that compared with no ROM fails (exit 1), for a
+/// machine that holds the ROMs, where nothing compared means something is
+/// wrong. Without it such a scan passes, as on GitHub's machines, which
+/// hold none.
+pub fn need_roms(o: &mut Outcome) {
+    if o.json["rom_compared"] == true {
+        return;
+    }
+    let sets: Vec<&str> = o.json["not_compared"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .collect();
+    let _ = write!(
+        o.text,
+        "\nNEED ROMS: --need-roms is given and this scan compared with no ROM ({})",
+        if sets.is_empty() {
+            "it names no ROM set to look for".to_owned()
+        } else {
+            format!("looked for {} under $GP_ROM_DIR", sets.join(", "))
+        }
+    );
+    o.exit = o.exit.max(1);
 }
 
 /// [`run`] held to a baseline, an earlier scan's `--json` output: its
@@ -112,11 +140,12 @@ pub fn known_keys(text: &str) -> Result<BTreeSet<String>> {
 
 /// Every data segment and custom section of each `.wasm` of the folder, and
 /// of `extra`, against the ROMs: the text report, the JSON and whether any
-/// ROM bytes were found.
+/// ROM bytes were found. `sets` are the ids of the ROM sets looked for.
 fn scan_wasm(
     dir: &Path,
     extra: &[PathBuf],
     found: &BTreeMap<String, Rom>,
+    sets: &[&str],
 ) -> Result<(String, serde_json::Value, bool)> {
     let mut files: Vec<PathBuf> = extra.to_vec();
     // Any other file that isn't text is compared whole: no field of it can
@@ -171,8 +200,14 @@ fn scan_wasm(
         ));
     }
     if !files.is_empty() && found.is_empty() {
-        text.push_str(
-            "\nNOT COMPARED: no ROM here, so nothing says these modules are free of ROM data",
+        let _ = write!(
+            text,
+            "\nNOT COMPARED: {}, so nothing says these modules are free of ROM data",
+            if sets.is_empty() {
+                "no ROM set is named for this package".to_owned()
+            } else {
+                format!("no ROM of {} under $GP_ROM_DIR", sets.join(", "))
+            }
         );
     }
     let bad = !finds.is_empty();
@@ -407,6 +442,9 @@ pub struct Report {
     /// Each entry's id and whether its ROM was there to compare with.
     entries: Vec<(String, bool)>,
     parts: Vec<PartReport>,
+    /// For content naming no ROM: the game whose sets it is compared with,
+    /// and the line saying so, or the line saying none was found.
+    rom_sets: Option<(Option<String>, String)>,
 }
 
 impl Report {
@@ -447,6 +485,9 @@ impl Report {
             let _ = write!(text, " ({})", self.tier);
         }
         let not = self.not_compared();
+        if let Some((_, line)) = &self.rom_sets {
+            let _ = write!(text, "\n{line}");
+        }
         if self.entries.is_empty() {
             text.push_str("\nROM comparison: this package names no ROM");
         } else if not.is_empty() {
@@ -505,6 +546,7 @@ impl Report {
                 "version": self.version,
                 "tier": self.tier,
                 "rom_compared": !self.compared().is_empty(),
+                "rom_sets_of": self.rom_sets.as_ref().and_then(|s| s.0.clone()),
                 "compared": self.compared(),
                 "not_compared": not,
                 "parts": parts_json,
@@ -1201,7 +1243,13 @@ pub fn scan(pkg: &Package, found: &BTreeMap<String, Rom>) -> Result<Report> {
     if let Some(open) = &pkg.open {
         parts.push(scan_part(pkg, &open_part(open)?, found)?);
     }
-    for (id, what) in pkg.roms_toml_disagreements()? {
+    // Borrowed entries are the game's, which its own roms.toml lists.
+    let disagreements = if pkg.borrowed.is_some() {
+        Vec::new()
+    } else {
+        pkg.roms_toml_disagreements()?
+    };
+    for (id, what) in disagreements {
         parts[0].rewrite.push(Rewrite {
             file: "roms.toml".to_owned(),
             line: 0,
@@ -1212,7 +1260,30 @@ pub fn scan(pkg: &Package, found: &BTreeMap<String, Rom>) -> Result<Report> {
             span: None,
         });
     }
+    let rom_sets = match &pkg.borrowed {
+        Some(b) => Some((
+            Some(b.game.clone()),
+            format!(
+                "ROM sets: those of {} ({}), the game this content is for",
+                b.game,
+                b.dir.join("package.toml").display()
+            ),
+        )),
+        None if pkg.kind == "content" && pkg.entries.is_empty() => Some((
+            None,
+            if pkg.for_games.is_empty() {
+                "ROM sets: none found; no folder up to three above this one holds a game's package.toml with [[rom.entry]]s".to_owned()
+            } else {
+                format!(
+                    "ROM sets: none found; no package of {} with [[rom.entry]]s is in a folder up to three above this one or beside one",
+                    pkg.for_games.join(", ")
+                )
+            },
+        )),
+        None => None,
+    };
     Ok(Report {
+        rom_sets,
         name: pkg.name.clone(),
         version: pkg.version.clone(),
         tier: pkg.tier.clone(),

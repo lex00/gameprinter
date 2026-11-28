@@ -259,12 +259,13 @@ async function spriteRuns(page, base, open) {
     { from: 3, to: 5, original: 2, model: 1, missing: [{ code: "02a", box: [40, 60, 16, 16] }], extra: [], boxes: [[[40, 60, 16, 16]], [[41, 60, 16, 16]], [[42, 60, 16, 16]]] },
     { from: 20, to: 22, original: 1, model: 1, missing: [{ code: "031", box: [100, 120, 8, 8] }], extra: [{ kind: "slug", box: [10, 10, 16, 16] }], boxes: [[[100, 120, 8, 8]], [[100, 120, 8, 8]], [[100, 120, 8, 8]]] },
   ];
-  let asked = 0;
+  let asked = 0, reads = 0;
   const routes = [
     [/\/api\/screen\/sprite-runs\?/, (r) => { asked += 1; return r.fulfill({ json: asked < 2 ? { id, model: "check", state: "scanning" } : { id, model: "check", state: "done", frames, runs } }); }],
     [/\/api\/screen\/work-clip\?/, (r) => r.fulfill({ json: { id, name: "the clip just recorded", start: meta.start, frames, log, draws: null, draw_sites: null } })],
     [/\/api\/screen$/, async (r) => {
       if (r.request().method() !== "GET") return r.continue();
+      reads += 1;
       const res = await r.fetch();
       const j = await res.json();
       j.work = { live: true, clip: id, from: meta.start, to: meta.start + frames - 1, start: meta.start, frames, says: "the page check" };
@@ -285,9 +286,20 @@ async function spriteRuns(page, base, open) {
       const px = await page.evaluate(() => [...document.getElementById("a").getContext("2d").getImageData(100, 120, 1, 1).data].slice(0, 3).join());
       return px === "255,0,255" && px;
     }, 5000);
+    // It stays there (sprite-run-click-stays-at-its-frame): on 2026-11-28 a
+    // click held for 2 to 3 s, then the model's load ended and the clip
+    // played on in the work's loop. Two more reads of api/screen (each may
+    // follow the work) and about 6 s later, the frame and its box are where
+    // the click put them.
+    const readsAt = reads, clickedAt = Date.now();
+    await until("two more reads of api/screen after the click", async () => reads >= readsAt + 2 && Date.now() - clickedAt >= 6000, 20000);
+    const still = await text(page, "#clip-at");
+    if (!still.startsWith("frame 20 ")) fail(`a run clicked let go: ${reads - readsAt} reads of api/screen and ${Math.round((Date.now() - clickedAt) / 1000)} s later the clip is at ${still}, not frame 20; the line over the screens says ${await text(page, "#follow")}`);
+    const stillPx = await page.evaluate(() => [...document.getElementById("a").getContext("2d").getImageData(100, 120, 1, 1).data].slice(0, 3).join());
+    if (stillPx !== "255,0,255") fail(`a run clicked lost its box: ${reads - readsAt} reads of api/screen later the original's pixel at 100, 120 is ${stillPx}, not 255,0,255`);
     const listed = await text(page, "#sprite-runs-list li:nth-child(2)");
     if (!/FRAMES 20 TO 22/.test(listed) || !/031/.test(listed) || !/slug/.test(listed)) fail(`the second run reads: ${listed}`);
-    return `SPRITE RUNS on a corpus clip lists its runs once the scan ends ("${listed}"), and a run clicked stands the clip at its first frame (${at}), its missing sprite boxed on the original (${boxed} at 100, 120)`;
+    return `SPRITE RUNS on a corpus clip lists its runs once the scan ends ("${listed}"), and a run clicked stands the clip at its first frame (${at}), its missing sprite boxed on the original (${boxed} at 100, 120), and it is still there ${reads - readsAt} reads of api/screen later (${still})`;
   } finally {
     for (const [url, f] of routes) await page.unroute(url, f);
     await open();

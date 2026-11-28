@@ -145,13 +145,20 @@ pub enum LoopCmd {
     /// tools' patches and one gp model gate for each game's. A failing
     /// stack is tried once more, then split in halves (dry runs) to find
     /// the patch at fault, whose row goes back to next with the gate's
-    /// words while the rest land. Each landed row is set done with the
-    /// commit. One line a row. Only the person runs it.
+    /// words while the rest land. When the tools' patches change the page
+    /// or a page check (the paths of .github/workflows/check-web.yml), the
+    /// stack runs just check-web after the tool gate's dry pass and before
+    /// it lands, a failure handled as the gate's. Each landed row is set
+    /// done with the commit. One line a row. Only the person runs it.
     Train {
-        /// Print the order, what applies and which gate would take it, and
-        /// gate nothing.
+        /// Print the order, what applies, which gate would take it and
+        /// which patches would run just check-web, and gate nothing.
         #[arg(long)]
         dry_run: bool,
+        /// Run no just check-web, even on a stack that changes the page; the
+        /// output says so.
+        #[arg(long)]
+        no_check_web: bool,
         /// The gameprinter checkout the tool gate lands in (default: the one
         /// gp was built from).
         #[arg(long)]
@@ -545,11 +552,10 @@ fn steps_text(v: &Value) -> String {
 pub(crate) fn run(cmd: &LoopCmd, paths: &gp_evidence::Paths) -> Result<Outcome> {
     match cmd {
         LoopCmd::Health => {
-            // Read by hand, GitHub's checks are read first when the kept
-            // read is old (gp serve's runner reads them in the background).
-            if let Some(repo) = crate::repo::built().filter(|r| r.join(".git").exists()) {
-                crate::github_checks::refresh(&paths.home, &repo);
-            }
+            // Read by hand, GitHub's checks (gameprinter's and the games
+            // checkout's) are read first when the kept read is old (gp
+            // serve's runner reads them in the background).
+            crate::github_checks::refresh(&paths.home, &crate::github_checks::repos(None));
             let mut v = health(paths);
             // Read by hand only (it starts the agent's program once): does
             // the installed agent take the flags the runner gives a worker?
@@ -709,9 +715,11 @@ pub(crate) fn run(cmd: &LoopCmd, paths: &gp_evidence::Paths) -> Result<Outcome> 
             );
             Ok(Outcome::ok(v, text))
         }
-        LoopCmd::Train { dry_run, repo } => {
-            crate::loop_train::run_train(paths, repo.as_deref(), *dry_run)
-        }
+        LoopCmd::Train {
+            dry_run,
+            no_check_web,
+            repo,
+        } => crate::loop_train::run_train(paths, repo.as_deref(), *dry_run, !*no_check_web),
         LoopCmd::Steps => {
             let v = steps_json(paths, None);
             let text = steps_text(&v);
@@ -1226,10 +1234,12 @@ fn checks(paths: &gp_evidence::Paths, games_dir: Option<&std::path::Path>) -> Va
             Some(Err(p)) => bad(&mut lines, &mut problems, p),
             None => {}
         }
-        crate::github_checks::refresh_behind(home, &repo);
     }
-    // GitHub's checks of main (check-web's browser checks run nowhere else):
-    // the last read kept, a failure a problem with its FAIL line under it.
+    crate::github_checks::refresh_behind(home, crate::github_checks::repos(games_dir));
+    // GitHub's checks of main (check-web's browser checks run nowhere else),
+    // gameprinter's and the games repo's: the last reads kept, a failure a
+    // problem with its FAIL line under it, a run queued for over an hour a
+    // problem naming the job that waits.
     for l in crate::github_checks::health_lines(home, now) {
         match l {
             Ok(l) => lines.push(l),
@@ -1271,7 +1281,7 @@ fn checks(paths: &gp_evidence::Paths, games_dir: Option<&std::path::Path>) -> Va
     if s.runner.on
         && let Some(why) = crate::serve::runner_limits::held_now(home)
     {
-        lines.push(format!("HELD     the runner starts no worker: {why}"));
+        lines.push(crate::serve::runner_limits::health_line(&why));
     }
     if s.runner.max_workers == 0 {
         bad(

@@ -48,12 +48,97 @@ pub struct Package {
     pub name: String,
     pub version: String,
     pub tier: String,
+    /// `game` or `content` (a theme), empty when not given.
+    pub kind: String,
+    /// `[package].for_games`: the games content is for, as NAMESPACE/NAME.
+    pub for_games: Vec<String>,
     pub entries: Vec<RomEntry>,
     pub open: Option<OpenPart>,
+    /// The game package whose ROM entries `entries` are, for content that
+    /// names none of its own ([`Package::borrow_game_roms`]).
+    pub borrowed: Option<Borrowed>,
+}
+
+/// The game a content package took its ROM entries from.
+pub struct Borrowed {
+    pub game: String,
+    pub dir: PathBuf,
 }
 
 fn str_of(v: Option<&toml::Value>) -> String {
     v.and_then(toml::Value::as_str).unwrap_or("").to_owned()
+}
+
+/// A package.toml's `[[rom.entry]]` list.
+fn parse_entries(t: &toml::Table) -> Vec<RomEntry> {
+    t.get("rom")
+        .and_then(|r| r.get("entry"))
+        .and_then(toml::Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or_default()
+        .iter()
+        .map(|e| RomEntry {
+            id: str_of(e.get("id")),
+            role: str_of(e.get("role")),
+            sha256: str_of(e.get("sha256")),
+            platform: e
+                .get("platform")
+                .and_then(toml::Value::as_str)
+                .unwrap_or("nes")
+                .to_owned(),
+            system: e
+                .get("system")
+                .and_then(toml::Value::as_str)
+                .map(str::to_owned),
+            asset_map: str_of(e.get("asset_map")),
+            asset_map_sha256: str_of(e.get("asset_map_sha256")),
+            lifted_sha256: e
+                .get("lifted_sha256")
+                .and_then(toml::Value::as_str)
+                .map(str::to_owned),
+        })
+        .collect()
+}
+
+/// The game package a content folder at `dir` is for: its name, folder and
+/// package.toml. See [`Package::borrow_game_roms`].
+fn game_above(dir: &Path, for_games: &[String]) -> Option<(String, PathBuf, toml::Table)> {
+    // A package folder with ROM entries, whose name `for_games` lists (by
+    // NAMESPACE/NAME, or NAME alone) when it names any.
+    let game_at = |d: &Path| -> Option<(String, toml::Table)> {
+        let t: toml::Table = fs::read_to_string(d.join("package.toml"))
+            .ok()?
+            .parse()
+            .ok()?;
+        let name = str_of(t.get("package")?.get("name"));
+        let wanted = for_games.is_empty()
+            || for_games.iter().any(|g| {
+                *g == name || (!g.contains('/') && name.rsplit('/').next() == Some(g.as_str()))
+            });
+        (wanted && !parse_entries(&t).is_empty()).then_some((name, t))
+    };
+    for up in dir.ancestors().skip(1).take(3) {
+        if let Some((name, t)) = game_at(up) {
+            return Some((name, up.to_owned(), t));
+        }
+        if for_games.is_empty() {
+            continue;
+        }
+        let mut beside: Vec<PathBuf> = fs::read_dir(up)
+            .into_iter()
+            .flatten()
+            .filter_map(Result::ok)
+            .map(|e| e.path())
+            .filter(|p| p.is_dir() && !dir.starts_with(p))
+            .collect();
+        beside.sort();
+        for b in beside {
+            if let Some((name, t)) = game_at(&b) {
+                return Some((name, b, t));
+            }
+        }
+    }
+    None
 }
 
 impl Package {
@@ -67,34 +152,6 @@ impl Package {
         let pkg = t
             .get("package")
             .with_context(|| format!("{} has no [package]", file.display()))?;
-        let entries = t
-            .get("rom")
-            .and_then(|r| r.get("entry"))
-            .and_then(toml::Value::as_array)
-            .map(Vec::as_slice)
-            .unwrap_or_default()
-            .iter()
-            .map(|e| RomEntry {
-                id: str_of(e.get("id")),
-                role: str_of(e.get("role")),
-                sha256: str_of(e.get("sha256")),
-                platform: e
-                    .get("platform")
-                    .and_then(toml::Value::as_str)
-                    .unwrap_or("nes")
-                    .to_owned(),
-                system: e
-                    .get("system")
-                    .and_then(toml::Value::as_str)
-                    .map(str::to_owned),
-                asset_map: str_of(e.get("asset_map")),
-                asset_map_sha256: str_of(e.get("asset_map_sha256")),
-                lifted_sha256: e
-                    .get("lifted_sha256")
-                    .and_then(toml::Value::as_str)
-                    .map(str::to_owned),
-            })
-            .collect();
         let open = match t.get("open") {
             Some(o) => Some(Self::load_open(dir, o)?),
             None => None,
@@ -104,9 +161,49 @@ impl Package {
             name: str_of(pkg.get("name")),
             version: str_of(pkg.get("version")),
             tier: str_of(pkg.get("tier")),
-            entries,
+            kind: str_of(pkg.get("kind")),
+            for_games: pkg
+                .get("for_games")
+                .and_then(toml::Value::as_array)
+                .map(Vec::as_slice)
+                .unwrap_or_default()
+                .iter()
+                .filter_map(|g| g.as_str().map(str::to_owned))
+                .collect(),
+            entries: parse_entries(&t),
             open,
+            borrowed: None,
         })
+    }
+
+    /// Content (a theme) names no ROM of its own: its pictures and sound
+    /// are checked against the ROM sets of the game it is for. That game is
+    /// a package folder with `[[rom.entry]]`s above it, or beside a folder
+    /// above it, up to three levels (GAME/themes/NAME in the games
+    /// checkout); with `for_games`, only one of those names, else the
+    /// nearest above. Its entries are taken without their asset maps, which
+    /// are the game's recipes, so every byte of each ROM is compared.
+    /// Nothing is done for a package with entries of its own, or one that
+    /// isn't content.
+    pub fn borrow_game_roms(&mut self) -> Result<()> {
+        if self.kind != "content" || !self.entries.is_empty() {
+            return Ok(());
+        }
+        let dir = fs::canonicalize(&self.dir).unwrap_or_else(|_| self.dir.clone());
+        let Some((game, at, t)) = game_above(&dir, &self.for_games) else {
+            return Ok(());
+        };
+        self.entries = parse_entries(&t)
+            .into_iter()
+            .map(|e| RomEntry {
+                asset_map: String::new(),
+                asset_map_sha256: String::new(),
+                lifted_sha256: None,
+                ..e
+            })
+            .collect();
+        self.borrowed = Some(Borrowed { game, dir: at });
+        Ok(())
     }
 
     fn load_open(dir: &Path, o: &toml::Value) -> Result<OpenPart> {

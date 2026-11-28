@@ -9,6 +9,12 @@
 # themes/NAME-src, how a theme was made (its scripts, prompts and the
 # images they cut from), is left out. Exit codes: 0
 # published, 2 couldn't.
+#
+# A publish into the page's registry changes what the live public page
+# serves with no deploy, so its last line names the two checks to run next
+# (row publish-says-the-live-page-check): gp registry check on the
+# registry's address (sources.toml's [registry] url) and, from the games
+# checkout, just page-live arcade. It prints them and runs neither.
 set -euo pipefail
 trap 'exit 2' ERR
 real="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -27,3 +33,5 @@ PY
 )
 "$gp" registry publish "$target" "$stage" --name "$name" --version "$version" --kind "$kind" --title "$title" ${key:+--key "$key"}
 rm -rf "$stage"
+address="$(python3 -I -c 'import sys, tomllib; print(tomllib.load(open(sys.argv[1], "rb"))["registry"]["url"])' "$real/scripts/web/sources.toml")"
+echo "published $name $version; the live page serves it now with no deploy, so check it next: gp registry check $address (the registry as a visitor's browser reads it: CORS, every file by its hash, the game's list) and, from the games checkout, just page-live arcade (the page check on the live page's own address: the arcade game installed by its name and played there)"

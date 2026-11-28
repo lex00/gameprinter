@@ -331,6 +331,96 @@ fn with_no_rom_the_report_says_nothing_was_compared() {
     assert_eq!(out.json["rom_compared"], false);
 }
 
+/// A theme's package names no ROM of its own: it is compared with the ROM
+/// sets of the game it is for, the game's folder above it or, by
+/// for_games, beside it; with none here the scan names the sets it looked
+/// for and passes, unless --need-roms is given
+/// (theme-package-scan-compares-with-the-game-s-roms).
+#[test]
+fn a_theme_package_scan_compares_with_the_game_s_roms() {
+    let d = tempfile::tempdir().unwrap();
+    let game = made_up_package(d.path(), None, false);
+    let theme = game.join("themes/dusk");
+    write(
+        &theme.join("package.toml"),
+        "[package]\nname = \"test/dusk\"\nversion = \"0.1.0\"\nkind = \"content\"\ntitle = \"Dusk\"\n",
+    );
+    // A table of the game's ROM typed out in the theme.
+    let vals: Vec<String> = TABLE.iter().map(u8::to_string).collect();
+    write(
+        &theme.join("look.toml"),
+        &format!("t = [{}]\n", vals.join(", ")),
+    );
+    let paths = |roms: &str| gp_evidence::Paths {
+        home: d.path().join("home"),
+        store: d.path().join("home/store"),
+        roms: d.path().join(roms),
+    };
+    let o = super::run(&theme, &[], &[], &paths("roms")).unwrap();
+    assert!(
+        o.text.contains("ROM sets: those of test/made-up"),
+        "{}",
+        o.text
+    );
+    assert!(o.text.contains("done against made-up"), "{}", o.text);
+    assert_eq!(o.json["rom_compared"], true);
+    assert_eq!(o.json["rom_sets_of"], "test/made-up");
+    assert_eq!(o.exit, 1, "{}", o.text);
+    assert!(
+        o.json["parts"][0]["rewrite"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["file"] == "look.toml")
+    );
+    let mut held = o;
+    super::need_roms(&mut held);
+    assert!(!held.text.contains("NEED ROMS"), "{}", held.text);
+
+    // No ROM here: the sets looked for are named and it passes, unless
+    // --need-roms.
+    fs::create_dir_all(d.path().join("none")).unwrap();
+    let mut o = super::run(&theme, &[], &[], &paths("none")).unwrap();
+    assert_eq!(o.exit, 0, "{}", o.text);
+    assert!(
+        o.text.contains("No ROM with the hash of made-up"),
+        "{}",
+        o.text
+    );
+    super::need_roms(&mut o);
+    assert_eq!(o.exit, 1);
+    assert!(
+        o.text.contains("NEED ROMS") && o.text.contains("looked for made-up"),
+        "{}",
+        o.text
+    );
+
+    // A theme beside the game, by for_games; one naming a game not here.
+    let beside = d.path().join("dusk");
+    write(
+        &beside.join("package.toml"),
+        "[package]\nname = \"test/dusk\"\nversion = \"0.1.0\"\nkind = \"content\"\nfor_games = [\"test/made-up\"]\n",
+    );
+    let o = super::run(&beside, &[], &[], &paths("roms")).unwrap();
+    assert_eq!(o.json["rom_sets_of"], "test/made-up", "{}", o.text);
+    assert_eq!(o.json["rom_compared"], true);
+    write(
+        &beside.join("package.toml"),
+        "[package]\nname = \"test/dusk\"\nversion = \"0.1.0\"\nkind = \"content\"\nfor_games = [\"test/hilltop\"]\n",
+    );
+    let mut o = super::run(&beside, &[], &[], &paths("roms")).unwrap();
+    assert!(
+        o.text
+            .contains("ROM sets: none found; no package of test/hilltop"),
+        "{}",
+        o.text
+    );
+    assert_eq!(o.exit, 0, "{}", o.text);
+    super::need_roms(&mut o);
+    assert_eq!(o.exit, 1);
+    assert!(o.text.contains("names no ROM set"), "{}", o.text);
+}
+
 #[test]
 fn a_disagreement_between_package_and_roms_toml_needs_rewrite() {
     let d = tempfile::tempdir().unwrap();

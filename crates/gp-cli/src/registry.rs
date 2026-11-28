@@ -3549,3 +3549,78 @@ mod command_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod publish_script_tests {
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+    use std::process::Command;
+
+    /// scripts/web/publish-game.sh, after its publish, prints one line naming
+    /// the two checks a publish into the page's registry needs, since the
+    /// live page serves it with no deploy: gp registry check on the
+    /// registry's address from sources.toml, and the games checkout's just
+    /// page-live arcade (row publish-says-the-live-page-check). It runs
+    /// neither: the stub gp it is given is called once, for the publish.
+    #[test]
+    fn publishing_a_game_names_the_live_checks_to_run_next() {
+        let d = tempfile::tempdir().unwrap();
+        let repo = d.path().join("repo");
+        let web = repo.join("scripts/web");
+        fs::create_dir_all(&web).unwrap();
+        let script = web.join("publish-game.sh");
+        fs::write(
+            &script,
+            include_str!("../../../scripts/web/publish-game.sh"),
+        )
+        .unwrap();
+        fs::write(
+            web.join("sources.toml"),
+            "[registry]\nname = \"made-up\"\nurl = \"https://registry.example/rooftop\"\n",
+        )
+        .unwrap();
+        let calls = d.path().join("calls");
+        let gp = d.path().join("gp");
+        fs::write(
+            &gp,
+            format!("#!/bin/bash\necho \"$*\" >> '{}'\n", calls.display()),
+        )
+        .unwrap();
+        fs::set_permissions(&gp, fs::Permissions::from_mode(0o755)).unwrap();
+        let game = d.path().join("rooftop");
+        fs::create_dir_all(&game).unwrap();
+        fs::write(
+            game.join("package.toml"),
+            "[package]\nname = \"test/rooftop\"\nversion = \"0.1.0\"\nkind = \"game\"\ntitle = \"Rooftop Run\"\n",
+        )
+        .unwrap();
+        let play = d.path().join("play");
+        fs::create_dir_all(&play).unwrap();
+        fs::write(play.join("page.json"), "{}").unwrap();
+        let o = Command::new("bash")
+            .arg(&script)
+            .arg(&game)
+            .arg(&play)
+            .arg(d.path().join("registry"))
+            .env("GP", &gp)
+            .output()
+            .unwrap();
+        let out = String::from_utf8_lossy(&o.stdout);
+        assert!(o.status.success(), "{o:?}");
+        let last = out.lines().last().unwrap_or_default();
+        assert!(last.starts_with("published test/rooftop 0.1.0;"), "{out}");
+        assert!(
+            last.contains("gp registry check https://registry.example/rooftop ("),
+            "{out}"
+        );
+        assert!(last.contains("CORS, every file by its hash"), "{out}");
+        assert!(
+            last.contains("from the games checkout, just page-live arcade ("),
+            "{out}"
+        );
+        assert!(last.contains("live page's own address"), "{out}");
+        let calls = fs::read_to_string(&calls).unwrap();
+        assert_eq!(calls.lines().count(), 1, "{calls}");
+        assert!(calls.starts_with("registry publish "), "{calls}");
+    }
+}

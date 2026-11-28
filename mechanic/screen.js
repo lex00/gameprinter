@@ -981,8 +981,11 @@ async function openWorkClip(id, lo, hi, name, lead = 0) {
   // clip's first frame is heard. Frames then count from the earlier start.
   const early = Math.max(0, Math.min(meta.start ?? 0, Math.round(Number(lead) || 0)));
   await showClipLog({ key: `work/${id}`, n: null, mechanic: null, work: id, name: name ?? `THE CLIP YOUR AGENT REFINES: ${id.toUpperCase()}`, says: `corpus clip ${id}`, note: meta.name ?? "", start: (meta.start ?? 0) - early, frames: meta.frames + early, log: meta.log, draws: meta.draws ?? null, drawSites: meta.draw_sites ?? null }, lo);
-  // A window past the clip's end stops at its last frame.
-  if (clip?.work === id) {
+  // A window past the clip's end stops at its last frame. The clip shows
+  // while its model loads (showClipLog awaits loadModel), so the person may
+  // have stood it already (a sprite run clicked): it stays where they put
+  // it (sprite-run-click-stays-at-its-frame).
+  if (clip?.work === id && !clip.held) {
     const last = clip.frames - 1;
     const from = Math.max(0, Math.min(lo, last));
     clip.loop = [from, Math.max(from, Math.min(hi, last))];
@@ -1037,9 +1040,12 @@ async function judgeOn(r) {
     // The same clip was up already (no load): the other model loads now.
     if (changed && model.loads === loads) void loadModel();
     beforeButton();
-    seekClip(lo, true);
-    if (hi !== null && hi > lo) { clip.loop = [lo, Math.min(hi, clip.frames - 1)]; playClip(true); }
-    else { clip.loop = null; playClip(false); }
+    // A clip the person stood while it loaded stays where they put it.
+    if (!clip.held) {
+      seekClip(lo, true);
+      if (hi !== null && hi > lo) { clip.loop = [lo, Math.min(hi, clip.frames - 1)]; playClip(true); }
+      else { clip.loop = null; playClip(false); }
+    }
     document.body.dataset.judging = r.mechanic;
     note(r.ask
       ? `${r.mechanic}: ${judgeWords(r).toLowerCase()}, the original on the left, the model after this change on the right. BEFORE shows main's.`
@@ -1165,7 +1171,9 @@ async function showClipLog(c, f) {
   }
   if (recordHere) player.drawSites(1, "");
   clip = {
-    key: c.key, n, mechanic, work: c.work, loop: null, note: c.note, start, frames: length, log, pads, polled, upTo, snaps, f: 0, pos: length, playing: false, path: null,
+    // held: the person stood it at a frame (holdClip); nothing that started
+    // before sets it playing again.
+    key: c.key, n, mechanic, work: c.work, loop: null, held: false, note: c.note, start, frames: length, log, pads, polled, upTo, snaps, f: 0, pos: length, playing: false, path: null,
     draws: clipDraws, frameDraws, soft: c.draws ? softOf(c.draws) : softLines(sites),
   };
   spriteRunsFor();
@@ -1200,6 +1208,19 @@ function seekClip(f, quiet) {
   $("clip-scrub").value = String(f);
   $("clip-at").textContent = `frame ${f} of ${c.frames - 1}`;
   if (!quiet) report();
+}
+
+/** The person stood the clip at frame `f`: it stands there, its loop let go,
+ * until BACK TO PLAYING, a game button or another clip. Following the work
+ * holds too (holdBy's "looking"), and a load that started before it (the
+ * clip shows while its model loads) leaves it there. */
+function holdClip(f) {
+  if (!clip) return;
+  show.by = "person";
+  clip.held = true;
+  clip.loop = null;
+  playClip(false);
+  seekClip(f);
 }
 
 function playClip(on) {
@@ -1291,10 +1312,7 @@ function drawSpriteRuns(v) {
     b.addEventListener("click", (e) => {
       e.currentTarget.blur();
       if (!clip || clip.work !== sprites.id) return;
-      show.by = "person";
-      clip.loop = null;
-      playClip(false);
-      seekClip(r.from);
+      holdClip(r.from);
       markSpriteRun();
     });
     li.append(b);
@@ -3532,7 +3550,7 @@ window.addEventListener("keydown", (e) => {
     if (clip?.work && e.code !== "Escape") show.by = "person";
     if (e.code === "Escape") { e.preventDefault(); show.by = "person"; backToLive(); drawClips(); }
     else if (e.code === "Space" || e.code === "Enter") { e.preventDefault(); if (!e.repeat) playClip(!clip?.playing); }
-    else if (e.code === "ArrowLeft" || e.code === "ArrowRight") { e.preventDefault(); playClip(false); seekClip((clip?.f ?? 0) + (e.code === "ArrowLeft" ? -1 : 1)); }
+    else if (e.code === "ArrowLeft" || e.code === "ArrowRight") { e.preventDefault(); if (clip) clip.held = true; playClip(false); seekClip((clip?.f ?? 0) + (e.code === "ArrowLeft" ? -1 : 1)); }
     return;
   }
   if (gameKey(e.code)) e.preventDefault();
@@ -3557,7 +3575,7 @@ function wire() {
     if (recording) void stopRecording(true, true);
   });
   $("clip-play").addEventListener("click", (e) => { e.currentTarget.blur(); playClip(!clip?.playing); });
-  $("clip-scrub").addEventListener("input", (e) => { playClip(false); seekClip(Number(e.target.value), true); });
+  $("clip-scrub").addEventListener("input", (e) => { if (clip) clip.held = true; playClip(false); seekClip(Number(e.target.value), true); });
   $("clip-scrub").addEventListener("change", (e) => { e.target.blur(); show.by = "person"; report(); });
   $("clip-live").addEventListener("click", (e) => { e.currentTarget.blur(); show.by = "person"; backToLive(); drawClips(); });
   $("clip-runs").addEventListener("click", (e) => { e.currentTarget.blur(); showSpriteRuns(!sprites.open); });

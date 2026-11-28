@@ -3,11 +3,15 @@
 `gp package scan DIR` sorts everything in a game's folder into what its package (the published version of that folder) may hold and what must be lifted again from the person's own ROM. Each piece of a game's model ships in its package, or ships as a recipe that lifts it from the ROM with a hash that checks the result. Nothing may simply be missing. It came from game-printer's docs/package-scan.md, where it read a template folder; here it reads a package folder in the games checkout and its `[[rom.entry]]` list, and `gp package rederive` is part of the scan only.
 
 ```text
-gp package scan ../games/donkey-kong [--rom ROM] [--wasm MODULE] [--baseline SCAN.json]
+gp package scan ../games/donkey-kong [--rom ROM] [--wasm MODULE] [--baseline SCAN.json] [--need-roms]
 gp package scan ../games/donkey-kong --json > scan.json
 ```
 
-The ROMs compared with are each ROM entry of `package.toml` found by its hash in `$GP_ROM_DIR`, or the file `--rom` gives. With no ROM found the report says plainly that nothing was compared, and the only items it can find are the ones that need no ROM. The ROM is read locally and nothing of it is printed: a match is reported by where it is in the file, where it is in the ROM, and its length.
+The ROMs compared with are each ROM entry of `package.toml` found by its hash in `$GP_ROM_DIR`, or the file `--rom` gives. With no ROM found the report says plainly that nothing was compared and names the sets it looked for, and the only items it can find are the ones that need no ROM. The ROM is read locally and nothing of it is printed: a match is reported by where it is in the file, where it is in the ROM, and its length.
+
+A theme's package (`kind = "content"` with no `[[rom.entry]]` of its own, such as `GAME/themes/NAME/package.toml`) is compared with the ROM sets of the game it is for. That game is the package folder with `[[rom.entry]]`s nearest above the theme's, up to three folders up; with `[package].for_games` (NAMESPACE/NAME, or NAME alone) it is the one of those names, above the theme or in a folder beside one of those above. Its entries are taken without their asset maps, which are the game's recipes, so every file of the theme is compared with every byte of each set, and the report's line `ROM sets: those of GAME (FILE)` says where they came from (`rom_sets_of` in the JSON). When no such game is found, the line says so.
+
+A scan with no ROM to compare with passes, since GitHub's machines hold none. `--need-roms` makes it fail (exit 1, with a `NEED ROMS` line naming the sets looked for), for a runner that holds the ROMs, where a scan that compared with nothing means a set is missing or the package names the wrong one. A scan that compared with some of the sets and not others passes with it; its `ROM comparison` line names the ones not run.
 
 A package with an open version (an `[open]` table in `package.toml`, naming a model in a folder of the package with its own `template.toml`) is scanned in two parts: the ROM game at the root, and the open version in its folder. An original (`source.how = "authored"`) isn't compared with its own image, which is built from its files.
 

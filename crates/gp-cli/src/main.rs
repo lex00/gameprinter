@@ -1346,6 +1346,11 @@ enum PackageCmd {
         /// listed as known, and only new ones fail.
         #[arg(long)]
         baseline: Option<PathBuf>,
+        /// Fail (exit 1) when no ROM was compared, for a machine that holds
+        /// the ROMs. Without it a scan with no ROM here passes and says so.
+        /// Example: --need-roms
+        #[arg(long)]
+        need_roms: bool,
     },
 }
 
@@ -1890,14 +1895,19 @@ fn dispatch(cmd: &Cmd) -> Result<Outcome> {
                 dir,
                 rom,
                 wasm,
-                baseline: None,
-            } => package::scan::run(dir, rom, wasm, &gp_evidence::Paths::from_env()?),
-            PackageCmd::Scan {
-                dir,
-                rom,
-                wasm,
-                baseline: Some(b),
-            } => package::scan::run_against(dir, rom, wasm, b, &gp_evidence::Paths::from_env()?),
+                baseline,
+                need_roms,
+            } => {
+                let paths = gp_evidence::Paths::from_env()?;
+                let mut o = match baseline {
+                    None => package::scan::run(dir, rom, wasm, &paths)?,
+                    Some(b) => package::scan::run_against(dir, rom, wasm, b, &paths)?,
+                };
+                if *need_roms {
+                    package::scan::need_roms(&mut o);
+                }
+                Ok(o)
+            }
         },
         Cmd::Registry { cmd } => registry::run(cmd),
         Cmd::Explore(a) => explore::run(a, &gp_evidence::Paths::from_env()?),

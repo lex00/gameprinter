@@ -233,7 +233,93 @@ impl Group {
     }
 }
 
+/// The files of the page and its checks, the paths that make GitHub run
+/// `just check-web` (.github/workflows/check-web.yml's paths, which a test
+/// holds to this list): a tools patch that changes one makes the train run
+/// `just check-web` on its stack (row train-runs-check-web-for-page-patches).
+/// A pattern's `**` is any path under it, its `*` any part of one name.
+pub(crate) const PAGE_PATHS: &[&str] = &[
+    "scripts/web/**",
+    "scripts/inspector/**",
+    "editor/**",
+    "mechanic/**",
+    "crates/gp-play/**",
+    "crates/gp-web/**",
+    "crates/gp-web-*/**",
+    "crates/gp-arcade-play/**",
+    "crates/gp-cli/src/serve/**",
+    "crates/gp-cli/src/mechanic/**",
+    "justfile",
+    ".github/workflows/check-web.yml",
+];
+
+/// One name of a path against one name of a pattern, `*` any run of
+/// letters.
+fn name_matches(pat: &str, name: &str) -> bool {
+    match pat.split_once('*') {
+        None => pat == name,
+        Some((head, tail)) => {
+            name.len() >= head.len() + tail.len() && name.starts_with(head) && name.ends_with(tail)
+        }
+    }
+}
+
+/// Whether `path` is under pattern `pat` of [`PAGE_PATHS`].
+fn path_matches(pat: &str, path: &str) -> bool {
+    let (mut p, mut f) = (pat.split('/'), path.split('/'));
+    loop {
+        match (p.next(), f.next()) {
+            (Some("**"), Some(_)) => return true,
+            (Some(a), Some(b)) if name_matches(a, b) => {}
+            (None, None) => return true,
+            _ => return false,
+        }
+    }
+}
+
+/// The files a patch changes, from its `diff --git a/X b/Y` lines (both
+/// names, so a file moved out of the page counts too).
+fn patch_files(text: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for l in text.lines() {
+        let Some(rest) = l.strip_prefix("diff --git a/") else {
+            continue;
+        };
+        let (a, b) = rest.split_once(" b/").unwrap_or((rest, rest));
+        for f in [a, b] {
+            if !out.iter().any(|o| o == f) {
+                out.push(f.to_owned());
+            }
+        }
+    }
+    out
+}
+
+/// The page's files (by [`PAGE_PATHS`]) that `items`' patches change.
+fn page_files(items: &[HandIn]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for h in items {
+        let text = fs::read_to_string(&h.patch).unwrap_or_default();
+        for f in patch_files(&text) {
+            if PAGE_PATHS.iter().any(|p| path_matches(p, &f)) && !out.contains(&f) {
+                out.push(f);
+            }
+        }
+    }
+    out
+}
+
+/// Up to three of `files`, and how many more.
+fn some_files(files: &[String]) -> String {
+    let mut s = files.iter().take(3).cloned().collect::<Vec<_>>().join(", ");
+    if files.len() > 3 {
+        s.push_str(&format!(" and {} more", files.len() - 3));
+    }
+    s
+}
+
 /// One call of the gate: the stack as one patch.
+#[derive(Clone)]
 pub(crate) struct Batch<'a> {
     pub group: &'a Group,
     /// The repo the gate lands in.
@@ -249,6 +335,18 @@ pub(crate) struct Batch<'a> {
 /// The gate: Ok with the commit it landed (or a pass, on a dry run), Err
 /// with its words.
 pub(crate) type Gate<'a> = dyn FnMut(&Batch) -> std::result::Result<String, String> + 'a;
+
+/// `just check-web` on a stack's scratch worktree: Err with its words.
+pub(crate) type WebCheck<'a> = dyn FnMut(&Path) -> std::result::Result<(), String> + 'a;
+
+/// What the train runs on a stack: the gate, and `just check-web` after
+/// the tool gate's dry pass when the tools' patches change the page
+/// (unless `check_web` is off: `--no-check-web`).
+pub(crate) struct Checks<'a> {
+    pub gate: &'a mut Gate<'a>,
+    pub web: &'a mut WebCheck<'a>,
+    pub check_web: bool,
+}
 
 /// What the train did to each row, in its order.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -507,7 +605,10 @@ fn removes_of(items: &[HandIn]) -> Vec<String> {
     r
 }
 
-/// Gates `items` stacked on `repo`'s tip.
+/// Gates `items` stacked on `repo`'s tip. When the tools' patches change
+/// the page ([`page_files`]) and `just check-web` is on, the tool gate
+/// runs dry first, then `just check-web` on the stack, then (unless
+/// `dry_run`) the tool gate lands it: a failure of either is the gate's.
 fn gate_items(
     dir: &Path,
     group: &Group,
@@ -515,7 +616,7 @@ fn gate_items(
     tree: &Path,
     items: &[HandIn],
     dry_run: bool,
-    gate: &mut Gate,
+    checks: &mut Checks,
 ) -> Result<(Stack, std::result::Result<String, String>)> {
     let s = stack(repo, tree, items)?;
     if s.kept.is_empty() {
@@ -533,7 +634,41 @@ fn gate_items(
         rows: s.kept.iter().map(HandIn::name).collect(),
         dry_run,
     };
-    let r = gate(&b);
+    let page = if *group == Group::Tools {
+        page_files(&s.kept)
+    } else {
+        Vec::new()
+    };
+    if page.is_empty() {
+        let r = (checks.gate)(&b);
+        return Ok((s, r));
+    }
+    if !checks.check_web {
+        eprintln!(
+            "gp loop train: just check-web is not run (--no-check-web), though the stack changes {}",
+            some_files(&page)
+        );
+        let r = (checks.gate)(&b);
+        return Ok((s, r));
+    }
+    let dry = Batch {
+        dry_run: true,
+        ..b.clone()
+    };
+    let r = (checks.gate)(&dry).and_then(|pass| {
+        eprintln!(
+            "gp loop train: just check-web for {} (the stack changes {})",
+            b.rows.join(", "),
+            some_files(&page)
+        );
+        (checks.web)(&s.tree).map_err(|why| {
+            format!(
+                "just check-web fails on the stack (it changes {}): {why}",
+                some_files(&page)
+            )
+        })?;
+        if dry_run { Ok(pass) } else { (checks.gate)(&b) }
+    });
     Ok((s, r))
 }
 
@@ -544,7 +679,7 @@ fn run_group(
     repo: &Path,
     items: &[HandIn],
     dry_run: bool,
-    gate: &mut Gate,
+    checks: &mut Checks,
 ) -> Result<Vec<(HandIn, Fate)>> {
     let tree = dir.join(format!("stack-{}", group.slug()));
     let mut fates: Vec<(HandIn, Fate)> = Vec::new();
@@ -555,14 +690,32 @@ fn run_group(
             fates.push((h, Fate::Back(why)));
         }
         for h in s.kept {
-            fates.push((h, Fate::WouldGate(group.words())));
+            let page = if *group == Group::Tools {
+                page_files(std::slice::from_ref(&h))
+            } else {
+                Vec::new()
+            };
+            let words = match (page.is_empty(), checks.check_web) {
+                (true, _) => group.words(),
+                (false, true) => format!(
+                    "{}, then just check-web (it changes {})",
+                    group.words(),
+                    some_files(&page)
+                ),
+                (false, false) => format!(
+                    "{} (it changes {}; just check-web is not run: --no-check-web)",
+                    group.words(),
+                    some_files(&page)
+                ),
+            };
+            fates.push((h, Fate::WouldGate(words)));
         }
         remove_tree(repo, &tree);
         return Ok(fates);
     }
     let mut tried_again = false;
     loop {
-        let (s, mut r) = gate_items(dir, group, repo, &tree, &todo, false, gate)?;
+        let (s, mut r) = gate_items(dir, group, repo, &tree, &todo, false, checks)?;
         for (h, why) in s.dropped {
             fates.push((h, Fate::Back(why)));
         }
@@ -573,7 +726,7 @@ fn run_group(
         // A failure is tried once more, as a flaky check may pass.
         if r.is_err() && !tried_again {
             tried_again = true;
-            r = gate_items(dir, group, repo, &tree, &todo, false, gate)?.1;
+            r = gate_items(dir, group, repo, &tree, &todo, false, checks)?.1;
         }
         match r {
             Ok(c) => {
@@ -591,7 +744,7 @@ fn run_group(
                 let (mut good, mut end, mut why) = (0, todo.len(), words);
                 while end - good > 1 {
                     let mid = good + (end - good) / 2;
-                    match gate_items(dir, group, repo, &tree, &todo[..mid], true, gate)?.1 {
+                    match gate_items(dir, group, repo, &tree, &todo[..mid], true, checks)?.1 {
                         Ok(_) => good = mid,
                         Err(w) => {
                             end = mid;
@@ -621,7 +774,7 @@ pub(crate) fn train(
     paths: &gp_evidence::Paths,
     repos: &Repos,
     dry_run: bool,
-    gate: &mut Gate,
+    checks: &mut Checks,
 ) -> Result<Vec<(HandIn, Fate)>> {
     let dir = train_dir(&paths.home);
     let all = pending(&paths.home);
@@ -641,7 +794,7 @@ pub(crate) fn train(
             }
             continue;
         };
-        fates.extend(run_group(&dir, g, repo, &items, dry_run, gate)?);
+        fates.extend(run_group(&dir, g, repo, &items, dry_run, checks)?);
     }
     // In the order they came.
     fates.sort_by(|a, b| (a.0.at_ms, &a.0.id).cmp(&(b.0.at_ms, &b.0.id)));
@@ -751,6 +904,53 @@ pub(crate) fn real_gate(b: &Batch) -> std::result::Result<String, String> {
     git(b.repo, &["rev-parse", "--short", &branch]).map_err(|e| e.to_string())
 }
 
+/// `just check-web` on the scratch worktree `tree`, with the train's own
+/// cargo target folder under `dir` (kept from one train to the next, so it
+/// stays built) and its whole output in `dir/check-web.log`. Err with the
+/// failed steps (step.sh's `check-step: NAME S s (failed)` lines) or the
+/// last lines, and the log's place.
+pub(crate) fn real_check_web(dir: &Path, tree: &Path) -> std::result::Result<(), String> {
+    let log = dir.join("check-web.log");
+    let o = Command::new("just")
+        .arg("check-web")
+        .current_dir(tree)
+        .env("CARGO_TARGET_DIR", dir.join("target-web"))
+        .env_remove("GP_STEP")
+        .env_remove("GP_WORKER")
+        .output()
+        .map_err(|e| format!("just check-web didn't run: {e}"))?;
+    let said = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&o.stdout),
+        String::from_utf8_lossy(&o.stderr)
+    );
+    let _ = fs::write(&log, &said);
+    if o.status.success() {
+        return Ok(());
+    }
+    Err(format!(
+        "{} (its log: {})",
+        web_failure(&said),
+        log.display()
+    ))
+}
+
+/// What a failed `just check-web` said: its failed steps, else its last
+/// lines.
+fn web_failure(said: &str) -> String {
+    let failed: Vec<&str> = said
+        .lines()
+        .filter_map(|l| l.trim().strip_prefix("check-step: "))
+        .filter(|l| l.ends_with("(failed)"))
+        .filter_map(|l| l.split_whitespace().next())
+        .collect();
+    if failed.is_empty() {
+        last_lines(said, 6)
+    } else {
+        format!("step {} failed", failed.join(", "))
+    }
+}
+
 /// One line a row.
 fn fate_line(h: &HandIn, f: &Fate) -> String {
     match f {
@@ -765,6 +965,7 @@ pub(crate) fn run_train(
     paths: &gp_evidence::Paths,
     repo: Option<&Path>,
     dry_run: bool,
+    check_web: bool,
 ) -> Result<Outcome> {
     let tools = repo
         .map(Path::to_path_buf)
@@ -785,8 +986,24 @@ pub(crate) fn run_train(
             "No patch is handed in: nothing to gate.".into(),
         ));
     }
-    let fates = train(paths, &repos, dry_run, &mut real_gate)?;
-    let lines: Vec<String> = fates.iter().map(|(h, f)| fate_line(h, f)).collect();
+    let dir = train_dir(&paths.home);
+    let mut web = |tree: &Path| real_check_web(&dir, tree);
+    let fates = train(
+        paths,
+        &repos,
+        dry_run,
+        &mut Checks {
+            gate: &mut real_gate,
+            web: &mut web,
+            check_web,
+        },
+    )?;
+    let mut lines: Vec<String> = fates.iter().map(|(h, f)| fate_line(h, f)).collect();
+    if !check_web {
+        lines.push(
+            "just check-web is not run (--no-check-web): a tools patch that changes the page lands on the tool gate alone".into(),
+        );
+    }
     let rows: Vec<Value> = fates
         .iter()
         .map(|(h, f)| {
@@ -807,7 +1024,7 @@ pub(crate) fn run_train(
         format!("{} handed-in patches:", fates.len())
     };
     Ok(Outcome::ok(
-        json!({"rows": rows, "dry_run": dry_run}),
+        json!({"rows": rows, "dry_run": dry_run, "check_web": check_web}),
         format!("{head}\n{}", lines.join("\n")),
     ))
 }
@@ -864,6 +1081,9 @@ mod tests {
         )
         .unwrap();
         for (f, body) in files {
+            if let Some(dir) = wt.join(f).parent() {
+                fs::create_dir_all(dir).unwrap();
+            }
             fs::write(wt.join(f), body).unwrap();
         }
         git(&wt, &["add", "-A"]).unwrap();
@@ -891,6 +1111,261 @@ mod tests {
             tools: Some(repo.to_path_buf()),
             games: None,
         }
+    }
+
+    /// The train with `gate` and a just check-web that passes.
+    fn train_t(
+        paths: &gp_evidence::Paths,
+        repos: &Repos,
+        dry_run: bool,
+        gate: &mut Gate,
+    ) -> Result<Vec<(HandIn, Fate)>> {
+        let mut web = |_: &Path| Ok(());
+        train(
+            paths,
+            repos,
+            dry_run,
+            &mut Checks {
+                gate,
+                web: &mut web,
+                check_web: true,
+            },
+        )
+    }
+
+    /// The page's paths are the ones GitHub's check-web runs on, push and
+    /// pull request alike, so the two lists can't drift apart.
+    #[test]
+    fn the_page_paths_are_check_web_workflow_s() {
+        let wf = include_str!("../../../.github/workflows/check-web.yml");
+        let mut lists: Vec<Vec<&str>> = Vec::new();
+        let mut cur: Option<Vec<&str>> = None;
+        for l in wf.lines() {
+            let t = l.trim();
+            if t == "paths:" {
+                cur = Some(Vec::new());
+            } else if let Some(c) = cur.as_mut() {
+                match t.strip_prefix("- ") {
+                    Some(p) => c.push(p.trim_matches('"')),
+                    None => lists.extend(cur.take()),
+                }
+            }
+        }
+        lists.extend(cur);
+        assert_eq!(lists.len(), 2, "push and pull_request each list paths");
+        for l in &lists {
+            assert_eq!(l.as_slice(), PAGE_PATHS);
+        }
+    }
+
+    #[test]
+    fn page_paths_match_by_folder_and_name() {
+        let page = |f: &str| PAGE_PATHS.iter().any(|p| path_matches(p, f));
+        assert!(page("scripts/web/check-page.mjs"));
+        assert!(page("crates/gp-web-player/src/lib.rs"));
+        assert!(page("crates/gp-cli/src/serve/page.rs"));
+        assert!(page("justfile"));
+        assert!(!page("crates/gp-cli/src/loop_train.rs"));
+        assert!(!page("crates/gp-webby"));
+        assert!(!page("scripts/web"));
+        assert!(!page("docs/web.md"));
+        let p = "diff --git a/scripts/web/a.mjs b/scripts/web/a.mjs\n--- a/x\n+++ b/x\ndiff --git a/old.txt b/editor/new.txt\n";
+        assert_eq!(
+            patch_files(p),
+            ["scripts/web/a.mjs", "old.txt", "editor/new.txt"]
+        );
+    }
+
+    /// A failed just check-web is named by its failed steps.
+    #[test]
+    fn a_failed_check_web_names_its_steps() {
+        let said = "check-step: editor 3.0 s\nboom\ncheck-step: play-web 9.1 s (failed)\nerror: Recipe `check-web` failed\n";
+        assert_eq!(web_failure(said), "step play-web failed");
+        assert_eq!(web_failure("a\nb\n"), "a / b");
+    }
+
+    /// Row train-runs-check-web-for-page-patches: a tools patch that
+    /// changes the page makes the train run just check-web on the stack,
+    /// after the tool gate's dry pass and before it lands; a stack without
+    /// one runs none. A check-web failure is the gate's: tried once more,
+    /// then the patch at fault found by halves, its row back to next with
+    /// check-web's words while the rest land. --dry-run names the patches
+    /// that would run it, and --no-check-web runs none.
+    #[test]
+    fn a_page_patch_runs_check_web_before_it_lands() {
+        let d = tempfile::tempdir().unwrap();
+        let (paths, repo) = rig(d.path());
+        for (r, f) in [
+            ("one", "one.txt"),
+            ("two", "scripts/web/two.mjs"),
+            ("three", "three.txt"),
+        ] {
+            let p = patch_of(d.path(), &repo, r, &[(f, r)]);
+            hand(&paths, r, &p);
+        }
+        let mut gate_ok = |_: &Batch| Ok("abc1234".to_owned());
+        let mut web_ok = |_: &Path| Ok(());
+
+        // The dry run names the page patch and runs nothing.
+        let mut web_runs = 0;
+        let mut web = |_: &Path| {
+            web_runs += 1;
+            Ok(())
+        };
+        let fates = train(
+            &paths,
+            &repos(&repo),
+            true,
+            &mut Checks {
+                gate: &mut gate_ok,
+                web: &mut web,
+                check_web: true,
+            },
+        )
+        .unwrap();
+        assert_eq!(web_runs, 0);
+        assert_eq!(fates[0].1, Fate::WouldGate("the tool gate".into()));
+        assert_eq!(
+            fates[1].1,
+            Fate::WouldGate(
+                "the tool gate, then just check-web (it changes scripts/web/two.mjs)".into()
+            )
+        );
+        let fates = train(
+            &paths,
+            &repos(&repo),
+            true,
+            &mut Checks {
+                gate: &mut gate_ok,
+                web: &mut web_ok,
+                check_web: false,
+            },
+        )
+        .unwrap();
+        assert!(
+            matches!(&fates[1].1, Fate::WouldGate(w) if w.contains("just check-web is not run: --no-check-web")),
+            "{fates:?}"
+        );
+
+        // A stack check-web fails because of two: the order of the calls,
+        // and two goes back with check-web's words.
+        let calls = std::cell::RefCell::new(Vec::<String>::new());
+        let mut gate = |b: &Batch| {
+            calls
+                .borrow_mut()
+                .push(format!("gate {} dry={}", b.rows.len(), b.dry_run));
+            Ok("feed123".to_owned())
+        };
+        let mut web = |tree: &Path| {
+            let has_two = tree.join("scripts/web/two.mjs").is_file();
+            calls.borrow_mut().push(format!("web two={has_two}"));
+            if has_two {
+                Err("step play-web failed".to_owned())
+            } else {
+                Ok(())
+            }
+        };
+        let fates = train(
+            &paths,
+            &repos(&repo),
+            false,
+            &mut Checks {
+                gate: &mut gate,
+                web: &mut web,
+                check_web: true,
+            },
+        )
+        .unwrap();
+        let calls = calls.into_inner();
+        // The stack: dry pass, check-web fails, tried once more the same.
+        assert_eq!(
+            calls[..4],
+            [
+                "gate 3 dry=true",
+                "web two=true",
+                "gate 3 dry=true",
+                "web two=true"
+            ]
+        );
+        // The halves run as dry runs; a half without two runs no check-web.
+        assert!(calls.contains(&"gate 1 dry=true".to_owned()), "{calls:?}");
+        // The rest, no page patch among them, land in one gate with no
+        // check-web.
+        assert_eq!(calls.last().map(String::as_str), Some("gate 2 dry=false"));
+        assert!(!calls.iter().any(|c| c == "web two=false"), "{calls:?}");
+        let two = &fates.iter().find(|(h, _)| h.row == "two").unwrap().1;
+        assert!(
+            matches!(two, Fate::Back(w) if w.contains("just check-web fails on the stack (it changes scripts/web/two.mjs): step play-web failed")),
+            "{two:?}"
+        );
+        for r in ["one", "three"] {
+            assert_eq!(row(&paths, r)["status"], "done");
+        }
+        assert_eq!(row(&paths, "two")["status"], "next");
+
+        // Handed in again with check-web passing: dry pass, check-web,
+        // then the landing.
+        let p = patch_of(
+            d.path(),
+            &repo,
+            "two-again",
+            &[("scripts/web/two.mjs", "2")],
+        );
+        hand(&paths, "two", &p);
+        let calls = std::cell::RefCell::new(Vec::<String>::new());
+        let mut gate = |b: &Batch| {
+            calls.borrow_mut().push(format!("gate dry={}", b.dry_run));
+            Ok("cafe456".to_owned())
+        };
+        let mut web = |_: &Path| {
+            calls.borrow_mut().push("web".to_owned());
+            Ok(())
+        };
+        train(
+            &paths,
+            &repos(&repo),
+            false,
+            &mut Checks {
+                gate: &mut gate,
+                web: &mut web,
+                check_web: true,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            calls.into_inner(),
+            ["gate dry=true", "web", "gate dry=false"]
+        );
+        assert_eq!(row(&paths, "two")["status"], "done");
+
+        // --no-check-web: the gate alone.
+        let p = patch_of(
+            d.path(),
+            &repo,
+            "two-third",
+            &[("scripts/web/two.mjs", "3")],
+        );
+        hand(&paths, "two", &p);
+        let mut web_never = |_: &Path| -> std::result::Result<(), String> {
+            panic!("check-web ran with --no-check-web")
+        };
+        let mut gates = 0;
+        let mut gate = |_: &Batch| {
+            gates += 1;
+            Ok("beef789".to_owned())
+        };
+        train(
+            &paths,
+            &repos(&repo),
+            false,
+            &mut Checks {
+                gate: &mut gate,
+                web: &mut web_never,
+                check_web: false,
+            },
+        )
+        .unwrap();
+        assert_eq!(gates, 1);
     }
 
     /// A hand-in keeps the patch, its message, repo and tip under the
@@ -938,7 +1413,7 @@ mod tests {
             calls.push((b.rows.clone(), b.message.to_owned(), b.dry_run));
             Ok("c0ffee1".to_owned())
         };
-        let fates = train(&paths, &repos(&repo), false, &mut gate).unwrap();
+        let fates = train_t(&paths, &repos(&repo), false, &mut gate).unwrap();
         assert_eq!(calls.len(), 1, "gated once");
         assert_eq!(
             calls[0].0,
@@ -982,7 +1457,7 @@ mod tests {
         .unwrap();
         hand(&paths, "two", &bad);
         let mut dry_calls = 0;
-        let fates = train(&paths, &repos(&repo), true, &mut |_: &Batch| {
+        let fates = train_t(&paths, &repos(&repo), true, &mut |_: &Batch| {
             dry_calls += 1;
             Ok("x".into())
         })
@@ -994,7 +1469,7 @@ mod tests {
         assert_eq!(pending(&paths.home).len(), 2);
 
         let mut rows = Vec::new();
-        let fates = train(&paths, &repos(&repo), false, &mut |b: &Batch| {
+        let fates = train_t(&paths, &repos(&repo), false, &mut |b: &Batch| {
             rows.push(b.rows.clone());
             Ok("abc1234".into())
         })
@@ -1049,7 +1524,7 @@ mod tests {
             hand(&paths, r, p);
         }
         let mut got = String::new();
-        let fates = train(&paths, &repos(&repo), false, &mut |b: &Batch| {
+        let fates = train_t(&paths, &repos(&repo), false, &mut |b: &Batch| {
             got = fs::read_to_string(b.patch).unwrap();
             Ok("feed123".into())
         })
@@ -1078,7 +1553,7 @@ mod tests {
             hand(&paths, r, &p);
         }
         let mut calls: Vec<(usize, bool)> = Vec::new();
-        let fates = train(&paths, &repos(&repo), false, &mut |b: &Batch| {
+        let fates = train_t(&paths, &repos(&repo), false, &mut |b: &Batch| {
             calls.push((b.rows.len(), b.dry_run));
             if b.rows.iter().any(|r| r == "rooftop/three") {
                 Err("FAIL test: three broke it".into())

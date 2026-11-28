@@ -611,7 +611,7 @@ fn minutes_since(at: &str) -> Option<f64> {
 
 /// Seconds since 1970 of an RFC 3339 time (`2026-11-12T09:00:00.5Z` or with
 /// a `+hh:mm` offset), or none if it can't be read.
-fn rfc3339_seconds(at: &str) -> Option<f64> {
+pub(crate) fn rfc3339_seconds(at: &str) -> Option<f64> {
     let (date, rest) = at.split_once(['T', 't'])?;
     let mut d = date.splitn(3, '-');
     let y: i64 = d.next()?.parse().ok()?;

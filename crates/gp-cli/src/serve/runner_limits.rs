@@ -207,6 +207,11 @@ pub(crate) fn held(
     })
 }
 
+/// gp loop health's line for a hold's words `why` from [`held`].
+pub(crate) fn health_line(why: &str) -> String {
+    format!("HELD     the runner starts no worker: {why}")
+}
+
 /// [`held`] for `home` now: its settings, its ledger and the machine's load.
 pub(crate) fn held_now(home: &Path) -> Option<String> {
     let r = gp_mcp::steps::settings(home).runner;

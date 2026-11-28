@@ -444,6 +444,11 @@ draw (missing) or the model draws one the original doesn't (extra), with
 their frames and the codes or kinds, from the scan `gp picture --sprites`
 makes. A run clicked stands both games at its first frame, and while the
 clip stands in a run the missing sprites are boxed on the original's side.
+It stays there until BACK TO PLAYING, a game button or another clip: the
+followed refine's loop doesn't take it back, nor does the model's load
+ending when the click came while the model was still loading (the clip
+shows before its model is up). Stepping the clip with the arrow keys or the
+scrub bar holds it the same way.
 A clip with no runs says so. `api/screen/sprite-runs?id=ID` runs the scan
 off the page's thread (it plays the clip on the package's scored set and
 the model as it is): it answers `scanning` until the scan ends, then the

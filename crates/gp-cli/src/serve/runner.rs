@@ -2351,16 +2351,17 @@ fn look(ctx: &Ctx) {
     // A row with neither a target nor words for what would measure it
     // gets no worker (issue 55); gp loop health counts them.
     let open = measured(open, s.runner.measure_required);
-    let Some(open) = within_limits(home, open, &s.runner) else {
-        return;
-    };
-    let todo = plan(
-        &open,
+    let Ok(todo) = starts(
+        open,
+        || super::runner_limits::held_now(home),
+        || crate::worker_runs::lines_of(&crate::worker_runs::ledger(home)),
+        &s.runner,
         &loop_state::workers(home),
         &running_ids(),
-        s.runner.max_workers as usize,
         gp_mcp::asks::now_ms(),
-    );
+    ) else {
+        return;
+    };
     // Fewer workers than allowed and no row for another: the loop is idle,
     // and gp serve's finder (crate::scoreboard::find_work) makes rows of the
     // gaps on the scoreboard's lines that aren't full. The trouble filer's
@@ -2392,25 +2393,32 @@ fn measured(open: Vec<Value>, required: bool) -> Vec<Value> {
         .collect()
 }
 
-/// The open steps the runner may start within its limits (serve/
-/// runner_limits.rs): None while the day's spend cap or the load ceiling
-/// holds it, else the steps less those whose workers failed too many tries.
-fn within_limits(home: &Path, open: Vec<Value>, r: &loop_state::Runner) -> Option<Vec<Value>> {
-    if open.is_empty() {
-        return Some(open);
-    }
-    if super::runner_limits::held_now(home).is_some() {
-        return None;
-    }
-    if r.fail_tries == 0 {
-        return Some(open);
-    }
-    let lines = crate::worker_runs::lines_of(&crate::worker_runs::ledger(home));
-    Some(super::runner_limits::not_given_up(
-        open,
-        &lines,
-        r.fail_tries,
-    ))
+/// What one look starts of the `open` steps: the hold's words while
+/// `held` (serve/runner_limits.rs: the day's spend cap or the load
+/// ceiling) holds the runner, else the steps [`plan`] gives once those
+/// whose workers failed too many tries in the runs ledger (`lines`) are
+/// left out. `held` and `lines` are read only when needed: no hold is read
+/// with nothing open, no ledger with no try cap
+/// (load-ceiling-holds-a-start-test).
+fn starts(
+    open: Vec<Value>,
+    held: impl FnOnce() -> Option<String>,
+    lines: impl FnOnce() -> Vec<Value>,
+    r: &loop_state::Runner,
+    workers: &[Value],
+    live: &BTreeSet<String>,
+    now_ms: u64,
+) -> Result<Vec<Value>, String> {
+    let open = if open.is_empty() {
+        open
+    } else if let Some(why) = held() {
+        return Err(why);
+    } else if r.fail_tries == 0 {
+        open
+    } else {
+        super::runner_limits::not_given_up(open, &lines(), r.fail_tries)
+    };
+    Ok(plan(&open, workers, live, r.max_workers as usize, now_ms))
 }
 
 /// When the runner last looked and found fewer workers at work than
@@ -4485,6 +4493,75 @@ mod tests {
             "started_ms": now - AGAIN_AFTER_MS}),
         ];
         assert_eq!(plan(&open, &old, &none, 2, now).len(), 1);
+    }
+
+    /// One look with one open step: a made-up load over the ceiling, or a
+    /// made-up day's ledger at the spend cap, starts nothing and gives the
+    /// hold's words (health's HELD line); under them the same look starts
+    /// the step. With nothing open no hold is read (load-ceiling-holds-a-start-test).
+    #[test]
+    fn a_load_over_the_ceiling_holds_the_looks_start() {
+        let open = vec![s("s000000000001", "agent", &["row:rooftop/jump"])];
+        let none = BTreeSet::new();
+        let day = 86_400_000u64;
+        let now = 20_000 * day + 3_600_000;
+        let mut r = loop_state::Runner {
+            max_load: 0.01,
+            max_workers: 2,
+            fail_tries: 0,
+            ..loop_state::Runner::default()
+        };
+        let no_ledger = || -> Vec<Value> { panic!("no ledger is read with no try cap") };
+        let look = |r: &loop_state::Runner, load: f64, ledger: &[Value]| {
+            starts(
+                open.clone(),
+                || super::super::runner_limits::held(r, ledger, load, 8, now),
+                no_ledger,
+                r,
+                &[],
+                &none,
+                now,
+            )
+        };
+        // Over the ceiling: nothing starts, and the hold says why.
+        let why = look(&r, 0.4, &[]).expect_err("held");
+        assert!(
+            why.contains("over the ceiling of 0.01") && why.contains("--max-load"),
+            "{why}"
+        );
+        let line = super::super::runner_limits::health_line(&why);
+        assert!(line.starts_with("HELD ") && line.ends_with(&why), "{line}");
+        // Under it: the step starts.
+        r.max_load = 1.0;
+        let todo = look(&r, 0.4, &[]).expect("not held");
+        assert_eq!(todo.len(), 1);
+        assert_eq!(todo[0]["id"], json!("s000000000001"));
+        // The day's ledger at the cap holds it the same way; under, it starts.
+        let ledger = [json!({"at_ms": now - 60_000, "result": {"cost_usd": 12.0}})];
+        r.day_spend_usd = 10.0;
+        let why = look(&r, 0.4, &ledger).expect_err("held");
+        assert!(
+            why.contains("12.00") && why.contains("--day-spend"),
+            "{why}"
+        );
+        r.day_spend_usd = 20.0;
+        assert_eq!(look(&r, 0.4, &ledger).expect("not held").len(), 1);
+        // Nothing open: no hold is read, and nothing starts.
+        let nothing = starts(
+            Vec::new(),
+            || panic!("no hold is read with nothing open"),
+            no_ledger,
+            &r,
+            &[],
+            &none,
+            now,
+        );
+        assert_eq!(nothing, Ok(Vec::new()));
+        // With a try cap, a step whose workers failed it is left out.
+        r.fail_tries = 1;
+        let failed = || vec![json!({"step": "s000000000001", "state": "stopped", "why": "exit 1"})];
+        let todo = starts(open.clone(), || None, failed, &r, &[], &none, now);
+        assert_eq!(todo, Ok(Vec::new()));
     }
 
     #[test]
