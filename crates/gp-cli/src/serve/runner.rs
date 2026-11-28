@@ -3028,7 +3028,7 @@ pub(crate) fn brief(setup: &Setup, step: &Value, wt: &Path, branch: &str, run: &
         b.push(String::new());
         b.extend([
             if step["repo"] == json!("tools") {
-                format!("The step is quest-log item {row} of {game}, and its work is in gameprinter itself: your worktree is of the gameprinter checkout. Land the change with gp tool gate --patch FILE -m MESSAGE. Check it once: build gp, run only the tests you added or changed (cargo test -p CRATE NAME), then git diff > a patch file and gp_run tool gate with patch FILE, message and dry_run. Don't run the whole test suite, just check or clippy yourself: the dry run runs them all, and its FAIL line names what failed (for fmt, the files to format). Its pass is kept, so the gate after the person's YES lands that same tree without checking it again while main hasn't moved.")
+                format!("The step is quest-log item {row} of {game}, and its work is in gameprinter itself: your worktree is of the gameprinter checkout. Land the change with gp tool gate --patch FILE -m MESSAGE. Check it once: build gp, run only the tests you added or changed (cargo test -p CRATE NAME), then git diff > a patch file and gp_run tool gate with patch FILE, message and dry_run. Don't run the whole test suite, just check or clippy yourself: the dry run runs them all, and its FAIL line names what failed (for fmt, the files to format). Its pass is kept, so the gate after the person's YES lands that same tree without checking it again while main hasn't moved. In gameprinter's code, comments and tests, cite a row by its name alone ({row}), never with the game ({game}/{row}), and name no ported game or any theme of one; a test uses a made-up game (rooftop, hilltop); a commit message may name them. The gate's first step after applying the patch is that name check (scripts/check/no-game-names.sh), and it fails on any such word.")
             } else {
                 format!("The step is quest-log item {row} of {game}. Your worktree is of the games checkout: make the change there. A row about {game}'s own look (no theme named) is the port's fidelity work, not a theme: the model draws the original's pictures from the person's own ROM as it plays (gp needs their ROM file to run it), and the games repo holds no ROM bytes and no art copied from it, so making the model's screen match the original frame for frame is what an emulator does. A theme is new art of its own under {game}/themes/NAME, and only a row that names one is theme work.")
             },
@@ -5764,6 +5764,32 @@ mod tests {
                 .unwrap()
                 .contains("can't be read")
         );
+    }
+
+    /// A tools row's brief says to cite a row by its name alone and name no
+    /// ported game in gameprinter's code (scripts/check/no-game-names.sh),
+    /// and that the gate checks it first; a games row's brief doesn't.
+    #[test]
+    fn a_tools_rows_brief_says_to_cite_rows_without_the_game() {
+        let t = tempfile::tempdir().unwrap();
+        let setup = rig(t.path(), "true\n");
+        let wt = t.path().join("wt");
+        let mut step = s("s0000000000h2", "agent", &["row:g/r"]);
+        step["repo"] = json!("tools");
+        let b = brief(&setup, &step, &wt, "loop/s0000000000h2", &Run::default());
+        for want in [
+            "cite a row by its name alone (r), never with the game (g/r)",
+            "name no ported game or any theme of one",
+            "a commit message may name them",
+            "The gate's first step after applying the patch is that name check",
+        ] {
+            assert!(b.contains(want), "no {want:?} in:\n{b}");
+        }
+        // A games row's work is in the game's own repo, where its name is
+        // the game's: its brief says nothing of it.
+        step["repo"] = json!("games");
+        let b = brief(&setup, &step, &wt, "loop/s0000000000h2", &Run::default());
+        assert!(!b.contains("cite a row by its name alone"), "{b}");
     }
 
     /// Issue 55: the brief's rules come first and are the same from run to

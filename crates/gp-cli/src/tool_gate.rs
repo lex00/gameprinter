@@ -1,7 +1,8 @@
 //! `gp tool gate`: a patch to the tool repo (`gameprinter`), held to the
 //! tool's own checks. A worktree in the gate's home is put at the branch
-//! tip, the patch is applied and built, and `just check` and the tests run
-//! at once. `just check` is the game check: Moss Hop, built from its source
+//! tip, the patch is applied, held to the name check
+//! (scripts/check/no-game-names.sh) and built, and `just check` and the
+//! tests run at once. `just check` is the game check: Moss Hop, built from its source
 //! with no ROM, held to its baselines, in the interpreter, in the page's
 //! players and in web parity, all through the patched gp. The gate reads no
 //! ROM and no games checkout. What passes lands on the branch and is
@@ -292,6 +293,23 @@ fn missing_tools(c: &Cx) -> Vec<&'static str> {
             })
         })
         .collect()
+}
+
+/// The name check (scripts/check/no-game-names.sh) in the tree: the gate's
+/// first step once the patch is applied, since it takes under a second and
+/// needs no build, so a comment that names a ported game or cites a row
+/// with its game fails before anything is built. `just check` runs it too.
+/// A tree without the script (an older tip) skips it.
+fn names(c: &Cx) -> std::result::Result<(), String> {
+    let script = "scripts/check/no-game-names.sh";
+    if !c.tree.join(script).is_file() {
+        return Ok(());
+    }
+    let mut cmd = Command::new("bash");
+    cmd.arg(script)
+        .current_dir(&c.tree)
+        .env("PATH", path_with_locked(c).map_err(|e| e.to_string())?);
+    run_step(gate_env(&mut cmd), script)
 }
 
 /// `cargo fmt --all --check` in the tree: the first line of `just check`,
@@ -983,6 +1001,9 @@ fn trial(
     }
     if dropped.len() == items.len() {
         refuse!("no patch of the batch applies".into(), "patch");
+    }
+    if let Err(why) = c.steps.time("names", || names(c), Result::is_ok) {
+        refuse!(why, "names");
     }
     let files = git(tree, &["diff", "--name-only", tip, "HEAD"])?;
     let applied = git(tree, &["rev-parse", "HEAD^{tree}"])?;
@@ -1943,6 +1964,56 @@ date +%s > '{times}/just.end'
 
     fn dry_run(c: &Cx, patch: &Patch) -> Outcome {
         gate(c, patch, true)
+    }
+
+    /// The name check is the gate's first step after the patch applies: a
+    /// patch whose comment cites a row with its game fails in the names
+    /// phase with the check's own lines, before fmt and the build; one that
+    /// cites none goes on to them. The rig's check is a stand-in that
+    /// fails on `rooftop/`, a made-up game's row cited with its game.
+    #[test]
+    fn the_name_check_runs_first_and_fails_before_the_build() {
+        let dir = tempfile::tempdir().unwrap();
+        let c = gate_rig(dir.path());
+        script(
+            &c.repo.join("scripts/check/no-game-names.sh"),
+            "#!/bin/bash\nif git grep -nI 'rooftop/' -- crates; then echo 'no-game-names: the tools name a ported game' >&2; exit 1; fi\necho 'no-game-names: none'\n",
+        );
+        git_in(&c.repo, &["add", "-A"]);
+        git_in(&c.repo, &["commit", "-q", "-m", "the name check"]);
+        let step_names = || -> Vec<String> {
+            fs::read_to_string(dir.path().join("steps.jsonl"))
+                .unwrap()
+                .lines()
+                .map(|l| serde_json::from_str::<Value>(l).unwrap()["step"].to_string())
+                .collect()
+        };
+
+        let cited = patch_of(
+            &c,
+            "crates/gp-x/tests/slow.rs",
+            "// As rooftop/a-row asked.\n#[test]\nfn a_slow_one() {\n    if gp_arcade::skip_slow_test() {\n        return;\n    }\n}\n",
+        );
+        let o = dry_run(&c, &cited);
+        assert_eq!(o.json["verdict"], "FAIL", "{}", o.text);
+        assert_eq!(o.json["phase"], "names", "{}", o.text);
+        let why = o.json["why"].as_str().unwrap();
+        assert!(why.contains("rooftop/a-row"), "{why}");
+        assert!(why.contains("the tools name a ported game"), "{why}");
+        let steps = step_names();
+        assert!(steps.contains(&r#""names""#.to_owned()), "{steps:?}");
+        for not in [r#""fmt""#, r#""build""#] {
+            assert!(!steps.contains(&not.to_owned()), "{not} ran: {steps:?}");
+        }
+
+        fs::remove_file(dir.path().join("steps.jsonl")).unwrap();
+        let clean = patch_of(&c, "tool.txt", "the tool, said again\n");
+        let o = dry_run(&c, &clean);
+        assert_eq!(o.json["verdict"], "PASS", "{}", o.text);
+        let steps = step_names();
+        let at = |s: &str| steps.iter().position(|n| n == s).unwrap();
+        assert!(at(r#""names""#) < at(r#""fmt""#), "{steps:?}");
+        assert!(at(r#""fmt""#) < at(r#""build""#), "{steps:?}");
     }
 
     /// Before the gate touches its tree it checks it can land: git's

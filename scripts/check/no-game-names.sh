@@ -1,8 +1,9 @@
 #!/bin/bash
 # The tools are game-agnostic: crates/, mechanic/, plugin/ and scripts/ name
 # no ported game (a folder of lex00/games). Tests use made-up games
-# (rooftop, hilltop, made-up) and comments cite docs, not quest-log rows
-# (GAME/ROW). Fails with each line that names one. The ported games are
+# (rooftop, hilltop, made-up) and comments cite a quest-log row by its name
+# alone, never as GAME/ROW. Fails with each line that names one. gp tool
+# gate runs it first, right after the patch applies, before it builds. The ported games are
 # listed here; with GP_GAMES_DIR set, each folder of it holding a
 # model.toml is added. A name's hyphen also matches a space, an underscore
 # or nothing (donkey-kong, "Donkey Kong", donkey_kong, DonkeyKong).
@@ -45,7 +46,7 @@ if [ "$rc" -gt 1 ]; then
 fi
 if [ -n "$hits" ]; then
     echo "$hits"
-    echo "no-game-names: the tools name a ported game (${games[*]}) above: use a made-up game (rooftop, hilltop) in tests and cite docs, not quest-log rows" >&2
+    echo "no-game-names: the tools name a ported game (${games[*]}) above: use a made-up game (rooftop, hilltop) in tests, cite a quest-log row by its name alone (never GAME/ROW), and name no game's theme" >&2
     exit 1
 fi
 echo "no-game-names: crates/, mechanic/, plugin/ and scripts/ name no ported game (${games[*]})"
