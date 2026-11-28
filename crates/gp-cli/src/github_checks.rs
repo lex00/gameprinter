@@ -125,24 +125,69 @@ pub(crate) fn failed_steps(jobs: &Value) -> Vec<String> {
     out
 }
 
-/// The line of a failed run's log (`gh run view ID --log-failed`, each line
-/// `JOB<tab>STEP<tab>TIME TEXT`) that says why: the first that starts with
-/// FAIL, else the first error GitHub marked (`##[error]`), with the job,
-/// step, time and terminal colours taken off.
-pub(crate) fn why_line(log: &str) -> Option<String> {
+/// The lines of a failed run's log (`gh run view ID --log-failed`, each
+/// line `JOB<tab>STEP<tab>TIME TEXT`) that say why, with the job, step,
+/// time and terminal colours taken off: the first that starts with FAIL;
+/// `just check`'s failed steps (`check-step: NAME S s (failed)`, from
+/// scripts/check/step.sh) and its failed test runs (`tests: NAME failed`);
+/// the tests cargo failed (`test PATH ... FAILED`, at most three) and the
+/// first panic with the line after it. With none of those, the first error
+/// GitHub marked (`##[error]`). Until this only FAIL and `##[error]` were
+/// read, and `just check` prints no FAIL: on 1c2cc41a (2026-11-27) health
+/// kept "Process completed with exit code 1." and nothing else.
+pub(crate) fn why_lines(log: &str) -> Vec<String> {
     let texts: Vec<String> = log.lines().map(log_text).collect();
-    let fail = texts.iter().find(|t| t.starts_with("FAIL"));
-    let err = || {
-        texts.iter().find_map(|t| {
-            t.strip_prefix("##[error]")
-                .map(str::trim)
-                .map(str::to_owned)
-        })
-    };
-    fail.cloned()
-        .or_else(err)
-        .filter(|t| !t.is_empty())
-        .map(|t| crate::next::cut(&t, 200))
+    let mut out: Vec<String> = Vec::new();
+    fn add(out: &mut Vec<String>, t: &str) {
+        let t = crate::next::cut(t.trim(), 200);
+        if !t.is_empty() && !out.contains(&t) {
+            out.push(t);
+        }
+    }
+    if let Some(f) = texts.iter().find(|t| t.starts_with("FAIL")) {
+        add(&mut out, f);
+    }
+    for t in &texts {
+        if t.starts_with("check-step: ") && t.ends_with("(failed)") {
+            add(&mut out, t);
+        }
+    }
+    for t in &texts {
+        if t.starts_with("tests: ") && t.contains(" failed") {
+            add(&mut out, t);
+        }
+    }
+    for t in texts
+        .iter()
+        .filter(|t| t.starts_with("test ") && t.ends_with("... FAILED"))
+        .take(3)
+    {
+        add(&mut out, t);
+    }
+    if let Some(i) = texts.iter().position(|t| t.contains("' panicked at ")) {
+        add(&mut out, &texts[i]);
+        if let Some(next) = texts.get(i + 1) {
+            add(&mut out, next);
+        }
+    }
+    if out.is_empty()
+        && let Some(e) = texts.iter().find_map(|t| t.strip_prefix("##[error]"))
+    {
+        add(&mut out, e);
+    }
+    out
+}
+
+/// Where health keeps the failed steps' log of `workflow`'s newest failed
+/// run on main: `$GP_HOME/work/loop/github-failed-NAME.log`, NAME the
+/// workflow's name with each other character made `-`. A loop worker's
+/// shell runs no `gh`, but it can read the home's work folders.
+pub(crate) fn log_file(home: &Path, workflow: &str) -> PathBuf {
+    let name: String = workflow
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect();
+    gp_mcp::steps::loop_dir(home).join(format!("github-failed-{name}.log"))
 }
 
 fn log_text(line: &str) -> String {
@@ -179,10 +224,14 @@ fn log_text(line: &str) -> String {
 /// from push to push only as numbers (the commit, the run, the count),
 /// which crate::trouble's key turns into `#`, so a check that stays red
 /// adds to one row.
+/// `log` is where its failed steps' log was kept, when it was: the words
+/// name it after the part [`crate::trouble::key`] keeps (its first 240
+/// characters), so the row stays the one it was.
 pub(crate) fn line(
     s: &Standing,
     steps: &[String],
-    why: Option<&str>,
+    why: &[String],
+    log: Option<&Path>,
 ) -> Result<String, (String, Vec<String>)> {
     let at = &s.sha[..s.sha.len().min(8)];
     if s.failed_in_a_row == 0 {
@@ -193,12 +242,19 @@ pub(crate) fn line(
     } else {
         format!(" at {}", steps.join(", "))
     };
+    let kept = match log {
+        Some(p) => format!(
+            " Its failed steps' log, read by health, is at {} (a worker's shell runs no gh; read it there).",
+            p.display()
+        ),
+        None => String::new(),
+    };
     let words = format!(
-        "GitHub's {} fails on main{step}: its last {} finished run(s) failed, the newest on {at}. `just check` runs no such check, so fix it as a tools row and land it through the tool gate; `gh run view {} --log-failed` in the gameprinter checkout prints the whole failure.",
+        "GitHub's {} fails on main{step}: its last {} finished run(s) failed, the newest on {at}. `just check` runs no such check, so fix it as a tools row and land it through the tool gate; `gh run view {} --log-failed` in the gameprinter checkout prints the whole failure.{kept}",
         s.workflow, s.failed_in_a_row, s.id
     );
     let mut under = Vec::new();
-    if let Some(w) = why {
+    for w in why {
         under.push(format!("           {w}"));
     }
     if !s.url.is_empty() {
@@ -323,8 +379,9 @@ fn gh_out(repo: &Path, args: &[&str]) -> Result<String, String> {
     }
 }
 
-/// Reads GitHub now: the read as kept in [`file`].
-pub(crate) fn read_now(repo: &Path, now: u64) -> Value {
+/// Reads GitHub now: the read as kept in [`file`], with each failed run's
+/// log kept at [`log_file`].
+pub(crate) fn read_now(home: &Path, repo: &Path, now: u64) -> Value {
     let runs = gh_out(
         repo,
         &[
@@ -347,28 +404,46 @@ pub(crate) fn read_now(repo: &Path, now: u64) -> Value {
     };
     let mut lines = Vec::new();
     for s in standings(&runs) {
-        let (steps, why) = if s.failed_in_a_row > 0 {
+        let (steps, why, log) = if s.failed_in_a_row > 0 {
             let id = s.id.to_string();
             let steps = gh_out(repo, &["run", "view", &id, "--json", "jobs"])
                 .ok()
                 .and_then(|o| serde_json::from_str::<Value>(&o).ok())
                 .map(|j| failed_steps(&j))
                 .unwrap_or_default();
-            let why = gh_out(repo, &["run", "view", &id, "--log-failed"])
-                .ok()
-                .and_then(|l| why_line(&l));
-            (steps, why)
+            let text = gh_out(repo, &["run", "view", &id, "--log-failed"]).ok();
+            let why = text.as_deref().map(why_lines).unwrap_or_default();
+            let log = text.and_then(|t| keep_log(home, &s, &t));
+            (steps, why, log)
         } else {
-            (Vec::new(), None)
+            (Vec::new(), Vec::new(), None)
         };
         // A failure with a newer run going is held back until that run ends.
-        lines.push(match (waiting_line(&s), line(&s, &steps, why.as_deref())) {
-            (_, Ok(l)) => json!({"ok": l}),
-            (Some(w), Err((p, _))) => json!({"waiting": w, "held": p}),
-            (None, Err((p, under))) => json!({"problem": p, "under": under}),
-        });
+        lines.push(
+            match (waiting_line(&s), line(&s, &steps, &why, log.as_deref())) {
+                (_, Ok(l)) => json!({"ok": l}),
+                (Some(w), Err((p, _))) => json!({"waiting": w, "held": p}),
+                (None, Err((p, under))) => json!({"problem": p, "under": under}),
+            },
+        );
     }
     json!({"read_ms": now, "lines": lines})
+}
+
+/// Writes a failed run's log to [`log_file`], its first line naming the
+/// run, the commit and its address: the file, or None when it couldn't be
+/// written.
+fn keep_log(home: &Path, s: &Standing, log: &str) -> Option<PathBuf> {
+    let f = log_file(home, &s.workflow);
+    std::fs::create_dir_all(f.parent()?).ok()?;
+    let head = format!(
+        "GitHub's {} on main at {}, run {} ({}): gh run view {} --log-failed\n",
+        s.workflow, s.sha, s.id, s.url, s.id
+    );
+    let tmp = f.with_extension("log.tmp");
+    std::fs::write(&tmp, format!("{head}{log}")).ok()?;
+    std::fs::rename(&tmp, &f).ok()?;
+    Some(f)
 }
 
 fn kept(home: &Path) -> Option<Value> {
@@ -397,7 +472,7 @@ fn keep(home: &Path, v: &Value) {
 pub(crate) fn refresh(home: &Path, repo: &Path) {
     let now = gp_mcp::asks::now_ms();
     if crate::trouble::live_home(home) && !fresh(home, now) {
-        keep(home, &read_now(repo, now));
+        keep(home, &read_now(home, repo, now));
     }
 }
 
@@ -413,7 +488,7 @@ pub(crate) fn refresh_behind(home: &Path, repo: &Path) {
     }
     let (home, repo) = (home.to_path_buf(), repo.to_path_buf());
     std::thread::spawn(move || {
-        keep(&home, &read_now(&repo, gp_mcp::asks::now_ms()));
+        keep(&home, &read_now(&home, &repo, gp_mcp::asks::now_ms()));
         READING.store(false, Ordering::SeqCst);
     });
 }
@@ -518,15 +593,15 @@ mod tests {
         let log = "web\tmechanic-page\t2026-11-25T10:00:00.1234567Z ok the root\n\
                    web\tmechanic-page\t2026-11-25T10:01:00.1234567Z \u{1b}[31mFAIL timed out: the game's page\u{1b}[0m\n\
                    web\tmechanic-page\t2026-11-25T10:01:01.1234567Z ##[error]Process completed with exit code 1.\n";
-        let why = why_line(log);
-        assert_eq!(why.as_deref(), Some("FAIL timed out: the game's page"));
-        let Err((words, under)) = line(&s[0], &steps, why.as_deref()) else {
+        let why = why_lines(log);
+        assert_eq!(why, vec!["FAIL timed out: the game's page"]);
+        let Err((words, under)) = line(&s[0], &steps, &why, None) else {
             panic!("a failing check is a problem");
         };
         assert!(words.starts_with("GitHub's check-web fails on main at mechanic-page (job web): its last 3 finished run(s) failed, the newest on aa015082."), "{words}");
         assert_eq!(under[0], "           FAIL timed out: the game's page");
         assert_eq!(
-            line(&s[1], &[], None),
+            line(&s[1], &[], &[], None),
             Ok("GitHub's check passes on main at aa015082".to_owned())
         );
         // The next push failing the same way is the same trouble row.
@@ -536,18 +611,102 @@ mod tests {
             failed_in_a_row: 4,
             ..s[0].clone()
         };
-        let Err((again, _)) = line(&later, &steps, None) else {
+        let Err((again, _)) = line(&later, &steps, &[], None) else {
             panic!()
         };
         assert_eq!(crate::trouble::key(&words), crate::trouble::key(&again));
         // With no FAIL line, GitHub's own error says why.
         assert_eq!(
-            why_line(
+            why_lines(
                 "j\ts\t2026-11-25T10:01:01.1234567Z ##[error]Process completed with exit code 1."
-            )
-            .as_deref(),
-            Some("Process completed with exit code 1.")
+            ),
+            vec!["Process completed with exit code 1."]
         );
+    }
+
+    /// `just check` prints no FAIL line: its failed step, its failed test
+    /// run, the tests cargo failed and the first panic are what say why, and
+    /// GitHub's "exit code 1" isn't kept beside them (2026-11-27: health kept
+    /// only that for 1c2cc41a). The failed steps' log is kept where a
+    /// worker can read it, named after the part of the words the trouble
+    /// row's key keeps, so the row stays the one it was.
+    #[test]
+    fn a_just_check_failure_names_its_step_and_tests_and_its_log_is_kept() {
+        let at = "check\tRun just check\t2026-11-27T05:00:00.1234567Z ";
+        let log = [
+            "check-step: fmt 1.2 s",
+            "running 3 tests",
+            "test loop_train::tests::a_train_lands_two ... ok",
+            "test loop_train::tests::a_train_lands_one ... FAILED",
+            "test runner_limits::tests::a_run_past_its_limit_is_cut ... FAILED",
+            "---- loop_train::tests::a_train_lands_one stdout ----",
+            "thread 'loop_train::tests::a_train_lands_one' panicked at crates/gp-cli/src/loop_train.rs:900:9:",
+            "assertion `left == right` failed: the tree",
+            "tests: rest failed; its output:",
+            "check-step: test 812.0 s (failed)",
+            "##[error]Process completed with exit code 1.",
+        ]
+        .iter()
+        .map(|l| format!("{at}{l}\n"))
+        .collect::<String>();
+        assert_eq!(
+            why_lines(&log),
+            vec![
+                "check-step: test 812.0 s (failed)",
+                "tests: rest failed; its output:",
+                "test loop_train::tests::a_train_lands_one ... FAILED",
+                "test runner_limits::tests::a_run_past_its_limit_is_cut ... FAILED",
+                "thread 'loop_train::tests::a_train_lands_one' panicked at crates/gp-cli/src/loop_train.rs:900:9:",
+                "assertion `left == right` failed: the tree",
+            ]
+        );
+
+        let home = tempfile::tempdir().unwrap();
+        let s = Standing {
+            workflow: "check".into(),
+            id: 46113570452,
+            sha: "1c2cc41ab7d1".into(),
+            url: "https://github.com/o/r/actions/runs/46113570452".into(),
+            failed_in_a_row: 1,
+            running: None,
+        };
+        let f = keep_log(home.path(), &s, &log).unwrap();
+        assert_eq!(f, log_file(home.path(), "check"));
+        assert!(
+            f.ends_with("work/loop/github-failed-check.log"),
+            "{}",
+            f.display()
+        );
+        let text = std::fs::read_to_string(&f).unwrap();
+        assert!(text.starts_with("GitHub's check on main at 1c2cc41ab7d1, run 46113570452 (https://github.com/o/r/actions/runs/46113570452): gh run view 46113570452 --log-failed\n"), "{text}");
+        assert!(text.ends_with(&log));
+        assert_eq!(
+            log_file(home.path(), "chant release").file_name().unwrap(),
+            "github-failed-chant-release.log"
+        );
+
+        let steps = vec!["Run just check (job check)".to_owned()];
+        let why = why_lines(&log);
+        let Err((words, under)) = line(&s, &steps, &why, Some(&f)) else {
+            panic!("a failing check is a problem")
+        };
+        assert!(
+            words.ends_with(&format!(
+                "prints the whole failure. Its failed steps' log, read by health, is at {} (a worker's shell runs no gh; read it there).",
+                f.display()
+            )),
+            "{words}"
+        );
+        assert_eq!(under.len(), 7, "{under:?}");
+        assert_eq!(under[0], "           check-step: test 812.0 s (failed)");
+        assert_eq!(
+            under[6],
+            "           https://github.com/o/r/actions/runs/46113570452"
+        );
+        let Err((unkept, _)) = line(&s, &steps, &[], None) else {
+            panic!()
+        };
+        assert_eq!(crate::trouble::key(&words), crate::trouble::key(&unkept));
     }
 
     /// A failure with a newer run of its workflow still going is held back
