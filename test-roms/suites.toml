@@ -34,6 +34,16 @@
 # a timeout included, fails the run, and so does a known failure that starts
 # passing, so this list only ever shrinks on purpose.
 
+#
+# `check = "zex"` runs a CP/M program on gp-arcade's Z80 through its CP/M
+# harness (crates/gp-arcade/src/cpm.rs) and passes when the program ends by
+# jumping to 0000 having printed "Tests complete" and no "ERROR", as ZEXDOC
+# and ZEXALL report. `cycles` is the most Z80 cycles one program may run.
+# A suite with a `source` of its own is downloaded from there; until its
+# commit or a file's hash is pinned it reads "to-pin", nothing is run, and
+# `gp testroms fetch` says what to pin (a file's SHA-256, once the commit
+# is).
+
 [source]
 repo = "christopherpow/nes-test-roms"
 commit = "95d8f621ae55cee0d09b91519a8989ae0e64753b"
@@ -954,3 +964,20 @@ sha256 = "f714089b5d056a50d63854a8d13359914d20d6144d8b25e48f880116ae73d8fd"
 path = "mmc3_test/6-MMC6.nes"
 sha256 = "e6bdbadf46cc4bf7b26e496ecab44e60a8b1279c1b9cf16df090c9832adf6943"
 mmc3_revision = "a"
+
+[[suite]]
+name = "z80"
+check = "zex"
+about = "Z80 (gp-arcade's, MAME's core): ZEXDOC, every instruction group's documented flags against CRCs from a real Z80, and ZEXALL, the same with the undocumented flag bits 3 and 5, as CP/M programs on the CP/M harness"
+# Frank Cringle's exercisers as z80emu keeps them, pinned on 2026-11-27
+# (each file 8704 bytes).
+source = { repo = "anotherlin/z80emu", commit = "1c418fa0d719abab9273131113defbe276101d95" }
+cycles = 100_000_000_000
+
+[[suite.rom]]
+path = "testfiles/zexdoc.com"
+sha256 = "34923a7ed82285d3038b2d54bd64899e12173eebb61f9d07b4fc72e78af2ae8f"
+
+[[suite.rom]]
+path = "testfiles/zexall.com"
+sha256 = "6e2da55147a04f28d303d5da6a1e6b771557ac244653590a0f24a2d39c8537e8"

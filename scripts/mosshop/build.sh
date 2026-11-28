@@ -46,6 +46,16 @@ case "$version" in
 esac
 
 mkdir -p "$out"
-ca65 -g -I "$src" -o "$out/mosshop.o" "$src/mosshop.s" || exit 2
+# The level is authored data, templates/mosshop/level-data/level.toml (what
+# gp level edit changes and the model reads with no build): its rows become
+# OUT_DIR/level.inc, which mosshop.s includes.
+level="$repo/templates/mosshop/level-data/level.toml"
+sed -n 's/^  "\(.\{32\}\)", # \([0-9]\{1,2\}\)$/row\2: level_row "\1"/p' "$level" > "$out/level.inc"
+rows="$(grep -c '^row' "$out/level.inc" || true)"
+if [ "$rows" != 15 ]; then
+  echo "mosshop: $level has $rows rows of 32 cells, and the level is 15 rows" >&2
+  exit 2
+fi
+ca65 -g -I "$src" -I "$out" -o "$out/mosshop.o" "$src/mosshop.s" || exit 2
 ld65 -C "$src/nrom.cfg" -o "$out/mosshop.nes" --dbgfile "$out/mosshop.dbg" -Ln "$out/mosshop.labels" "$out/mosshop.o" || exit 2
 echo "mosshop: built $out/mosshop.nes ($version)"

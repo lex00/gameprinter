@@ -267,6 +267,7 @@ pub(crate) fn note(home: &Path, rec: &mut Value, log: &Path, now_ms: u64) {
         "try": rec["tries"],
         "state": rec["state"],
         "why": rec["why"],
+        "stopped_by": rec["stopped_by"],
         "log": log,
         "result": result,
     });

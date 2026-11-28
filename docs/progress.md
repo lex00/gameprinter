@@ -87,9 +87,9 @@ A new game's steps:
 | N3 See it play | The tools | Its pictures and levels aren't there, or it was never built to play | BUILD IT TO PLAY (`build_publish`) and PLAY IT |
 | N4 Change a stage | You | Until the person presses DONE WITH THE STAGE | SHOW THE STAGE (`gp level render`), CHECK THE STAGE (`gp level verify`), UNDO THE LAST CHANGE (`gp level undo`) |
 | N5 Give it a look | You | Until DONE WITH THE LOOK or SKIP | MAKE A THEME FOR IT: the theme journey on the new game |
-| N6 Play and share | You | Then | PLAY IT, and MAKE A SHARE LINK (`gp game share`): the game in the person's own registry on this computer, with the themes made for it, and the link that plays it, `/share/p?g=local/NAME&look=ID` |
+| N6 Play and share | You | Then | PLAY IT, and MAKE A SHARE LINK (`gp game share`): the game in the person's own registry on this computer, with the themes made for it, and the link that plays it, `/share/p?g=local/NAME&look=ID`. For anyone else, `gp game share --registry --namespace --source --page` writes the person's registry and a page that reads it at its https address, which they put online ([host-your-own.md](host-your-own.md#a-game-with-its-own-pictures)) |
 
-Not there yet, and said so on the page: a new game's share link opens on this computer only, until the person puts the page and their registry online together (the page says so in one sentence); and CHECK THE STAGE on a stage `gp level verify` can't play to its end answers NOT CHECKED with the reason (docs/level-kit.md, "Editing a stage", says which kinds it plays; Moss Hop's tile stage is one).
+Not there yet, and said so on the page: CHECK THE STAGE on a stage `gp level verify` can't play to its end answers NOT CHECKED with the reason (docs/level-kit.md, "Editing a stage", says which kinds it plays; Moss Hop's tile stage is one).
 
 ## The ladder
 

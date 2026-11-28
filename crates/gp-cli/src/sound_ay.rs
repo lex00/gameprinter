@@ -561,20 +561,13 @@ mod tests {
         assert_eq!(c["matched"], 1);
     }
 
-    /// With a real romset ($GP_GAME_DIR's first set): the log made from the event
-    /// stream holds the same register writes, frame by frame, as
-    /// milestone 3's AY write list (Mcr::ay_writes, held to MAME's).
-    /// Skipped without it.
+    /// On a made-up set whose sound program writes the AYs: the log made
+    /// from the event stream holds the same register writes, frame by
+    /// frame, as milestone 3's AY write list (Mcr::ay_writes, held to
+    /// MAME's).
     #[test]
-    fn the_events_give_milestone_3s_writes_on_a_real_set() {
-        let (_, zip) = match gp_arcade::romset::test_romset_path() {
-            Ok(p) => p,
-            Err(e) => {
-                eprintln!("skipped: {e}");
-                return;
-            }
-        };
-        let set = gp_arcade::Romset::load_zip(&zip).unwrap();
+    fn the_events_give_milestone_3s_writes() {
+        let set = gp_arcade::testrom::sounding();
         let mut t = gp_arcade::Mcr::power_on(&set);
         t.set_events(true);
         let mut latch = [None::<u8>; 2];

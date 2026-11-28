@@ -19,7 +19,7 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 use serde_json::{Value, json};
 
-use super::session::{read_queue, write_queue};
+use super::session::{read_queue, update_queue};
 
 /// How long a row stays done in the quest log before it is archived.
 pub(crate) const ARCHIVE_AFTER_MS: u64 = 60 * 60 * 1000;
@@ -80,32 +80,35 @@ pub(crate) fn sweep(
     beside: impl Fn(&str) -> Beside,
 ) -> Result<Vec<String>> {
     let qf = home.join("mechanics").join(game).join("queue.json");
-    let q = read_queue(&qf);
-    let mut keep = Vec::new();
-    let mut gone = Vec::new();
-    for r in q {
-        let name = r["mechanic"].as_str().unwrap_or("").to_owned();
-        let b = beside(&name);
-        if finished(&r, &b, now) {
-            gone.push(entry(home, game, r, b, now));
-        } else {
-            keep.push(r);
+    update_queue(&qf, |q| {
+        let mut keep = Vec::new();
+        let mut gone = Vec::new();
+        for r in std::mem::take(q) {
+            let name = r["mechanic"].as_str().unwrap_or("").to_owned();
+            let b = beside(&name);
+            if finished(&r, &b, now) {
+                gone.push(entry(home, game, r, b, now));
+            } else {
+                keep.push(r);
+            }
         }
-    }
-    if gone.is_empty() {
-        return Ok(Vec::new());
-    }
-    let names: Vec<String> = gone
-        .iter()
-        .filter_map(|r| r["mechanic"].as_str().map(str::to_owned))
-        .collect();
-    let mut a = read_archive(home, game);
-    a.retain(|r| !names.iter().any(|n| r["mechanic"] == json!(n)));
-    a.extend(gone);
-    // The archive first: a row is never in neither file.
-    write_archive(home, game, &a)?;
-    write_queue(&qf, &keep)?;
-    Ok(names)
+        *q = keep;
+        if gone.is_empty() {
+            return Ok(Vec::new());
+        }
+        let names: Vec<String> = gone
+            .iter()
+            .filter_map(|r| r["mechanic"].as_str().map(str::to_owned))
+            .collect();
+        let mut a = read_archive(home, game);
+        a.retain(|r| !names.iter().any(|n| r["mechanic"] == json!(n)));
+        a.extend(gone);
+        // The archive first: a row is never in neither file. A failed
+        // archive write leaves the log as it was (update_queue writes
+        // nothing on an error).
+        write_archive(home, game, &a)?;
+        Ok(names)
+    })
 }
 
 /// Row `r` as the archive keeps it.

@@ -26,6 +26,7 @@
 //! | `POST /api/handoff` | Hands a quest log row to the agent: its "Let's do" turn |
 //! | `GET /api/clips/N/review.json`, `/api/clips/N/review/NAME.png` | A clip on the model beside the original ([`super::review`]) |
 //! | `GET /api/clips/N.rebuild.json` | The same review as REVIEW REBUILD reads it: the pictures' addresses with the entities, what differs and the draws |
+//! | `GET /api/screen/sprite-runs?id=CLIP` | A corpus clip's sprite runs for the screen page ([`super::sprite_runs`]): `scanning` while the scan runs off the page's thread, then its runs, kept by the clip and the model's version |
 //! | `GET /api/clips/N.measure.json` | A clip's measurements, when `gp mechanic contacts` wrote them |
 //! | `POST /api/clips/stage` | Whether a clip about to be handed off spans a stage |
 //! | `GET /api/sealed`, `/api/sealed/ID.log` | The sealed runs, for the person alone; nothing is written |
@@ -44,7 +45,7 @@ use serde_json::{Value, json};
 
 use super::http::{self, Request, Response};
 use super::paths as clip_paths;
-use super::session::{Session, current, queue_file, read_queue, set_current, write_queue};
+use super::session::{Session, current, queue_file, read_queue, set_current, update_queue};
 use crate::Outcome;
 use crate::original::Platform;
 
@@ -705,6 +706,8 @@ pub(crate) struct Server {
     sets: Vec<Value>,
     /// Another set was chosen: the server is made again for it.
     reload: std::sync::atomic::AtomicBool,
+    /// The corpus clips' sprite runs being scanned for the screen page.
+    sprite_runs: Arc<super::sprite_runs::SpriteRuns>,
 }
 
 impl Server {
@@ -725,6 +728,7 @@ impl Server {
             set: String::new(),
             sets: Vec::new(),
             reload: std::sync::atomic::AtomicBool::new(false),
+            sprite_runs: Arc::default(),
         }
     }
 
@@ -892,7 +896,11 @@ impl Server {
 /// line on this row, so the pieces land together and aren't cut one by
 /// one. Returns the row as it is now.
 pub(crate) fn land_it(f: &Path, game: &str, m: &str) -> Result<Value> {
-    let mut q = read_queue(f);
+    update_queue(f, |q| land_it_rows(q, game, m))
+}
+
+/// [`land_it`] on the rows, under the quest log's lock.
+fn land_it_rows(q: &mut [Value], game: &str, m: &str) -> Result<Value> {
     let Some(r) = q.iter().find(|r| r["mechanic"] == json!(m)) else {
         bail!("{m} isn't in the quest log");
     };
@@ -908,7 +916,7 @@ pub(crate) fn land_it(f: &Path, game: &str, m: &str) -> Result<Value> {
         .collect();
     let now = gp_mcp::asks::now_ms();
     let mut with: Vec<String> = Vec::new();
-    for r in &mut q {
+    for r in q.iter_mut() {
         let name = r["mechanic"].as_str().unwrap_or("").to_owned();
         let Some(o) = r.as_object_mut() else { continue };
         if name == m {
@@ -974,9 +982,7 @@ pub(crate) fn land_it(f: &Path, game: &str, m: &str) -> Result<Value> {
             json!("You asked to land it: a worker puts it all on one card for your YES."),
         );
     }
-    let out = r.clone();
-    write_queue(f, &q)?;
-    Ok(out)
+    Ok(r.clone())
 }
 
 /// A quest-log row's name from the person's words: their first four words
@@ -1105,6 +1111,15 @@ fn handle(s: &Server, req: &Request) -> Result<Response> {
         }
         ("GET" | "HEAD", "/api/screen/clip") => screen_clip(s, req),
         ("GET" | "HEAD", "/api/screen/work-clip") => screen_work_clip(s, req),
+        // A corpus clip's sprite runs, scanned off this thread and kept
+        // by the clip and the model's version (super::sprite_runs).
+        ("GET" | "HEAD", "/api/screen/sprite-runs") => super::sprite_runs::route(
+            &s.sprite_runs,
+            &s.paths,
+            &s.game,
+            s.rebuild.as_ref(),
+            req.param("id"),
+        ),
         // A picture the agent proposes for the person's theme (issue #4).
         ("GET" | "HEAD", "/picture-card.js") => {
             page("picture-card.js", "text/javascript; charset=utf-8")
@@ -1449,16 +1464,17 @@ fn handle(s: &Server, req: &Request) -> Result<Response> {
                 return Ok(Response::error(400, "say what the item is"));
             }
             let f = s.queue_file()?;
-            let mut q = read_queue(&f);
-            let base = row_name(&text);
-            let mut name = base.clone();
-            let mut k = 2;
-            while q.iter().any(|r| r["mechanic"] == json!(name)) {
-                name = format!("{base}-{k}");
-                k += 1;
-            }
-            q.push(json!({"mechanic": name, "status": "next", "note": text, "by": "person"}));
-            write_queue(&f, &q)?;
+            let name = update_queue(&f, |q| {
+                let base = row_name(&text);
+                let mut name = base.clone();
+                let mut k = 2;
+                while q.iter().any(|r| r["mechanic"] == json!(name)) {
+                    name = format!("{base}-{k}");
+                    k += 1;
+                }
+                q.push(json!({"mechanic": name, "status": "next", "note": text, "by": "person"}));
+                Ok(name)
+            })?;
             Ok(Response::json(&json!({"mechanic": name})))
         }
         ("POST", "/api/handoff") => {
@@ -2203,8 +2219,8 @@ mod tests {
     /// A corpus clip whose presses name NES buttons comes to an arcade page
     /// as the board's log, the same bits on the same frames, so its LOOK AT
     /// IT plays (it was "an NES input log can't play on an arcade board");
-    /// on an NES page it stays an NES log. The arcade half needs the game's
-    /// oracle set on this machine and is skipped without it.
+    /// on an NES page it stays an NES log. The arcade page plays a made-up
+    /// set's zip.
     #[test]
     fn a_corpus_clip_in_nes_buttons_plays_on_an_arcade_page() {
         let d = tempfile::tempdir().unwrap();
@@ -2249,18 +2265,26 @@ mod tests {
         };
         let nes = clip(&srv);
         assert!(nes.arcade.is_none());
-        let (set_name, zip) = match gp_arcade::romset::test_oracle_set_path() {
-            Ok(p) => p,
-            Err(e) => {
-                eprintln!("skipped the arcade page: {e}");
-                return;
+        // A made-up set's zip, its set known as a games checkout's roms.toml
+        // would list it.
+        let files = gp_arcade::testrom::known_made_up_set("madeupcab");
+        let zip = {
+            use std::io::Write as _;
+            let mut out = std::io::Cursor::new(Vec::new());
+            let mut z = zip::ZipWriter::new(&mut out);
+            for (name, bytes) in &files {
+                z.start_file(name.as_str(), zip::write::SimpleFileOptions::default())
+                    .unwrap();
+                z.write_all(bytes).unwrap();
             }
+            z.finish().unwrap();
+            out.into_inner()
         };
-        srv.rom = Arc::new(fs::read(zip).unwrap());
+        srv.rom = Arc::new(zip);
         let arcade = clip(&srv);
         assert_eq!(
             arcade.arcade.as_ref().map(|a| a.system.as_str()),
-            Some(set_name)
+            Some("madeupcab")
         );
         assert_eq!(arcade.controllers, 1);
         let bits = |l: &gp_evidence::InputLog| -> Vec<u32> {
@@ -2281,6 +2305,116 @@ mod tests {
         rom.extend(prg);
         rom.extend(vec![0u8; 0x2000]);
         rom
+    }
+
+    /// A corpus clip's sprite runs for the screen page: the first ask starts
+    /// the scan off the page's thread and says so; then the runs come, each
+    /// with its first and last frame and the missing sprites' boxes. Asked
+    /// again it scans no more, and a changed model scans again. A made-up
+    /// game and scan, its lines as `gp picture --sprites` writes them.
+    #[test]
+    fn the_screen_page_gets_a_clips_sprite_runs_with_their_first_frames() {
+        use super::super::sprite_runs::{Asked, SpriteRuns};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let d = tempfile::tempdir().unwrap();
+        let mut srv = server(d.path());
+        let game = d.path().join("rooftop");
+        fs::create_dir_all(game.join("inputs")).unwrap();
+        fs::write(
+            game.join("corpus.toml"),
+            "[corpus]\nformat = \"1.0.0\"\nname = \"rooftop\"\nversion = \"0.1.0\"\nrecipes = \"b3:0\"\n\n\
+             [target]\ngame = \"rooftop\"\nrom = \"00\"\n\n\
+             [[clip]]\nid = \"rooftop.run.001\"\nname = \"a run\"\nsource = \"played\"\n\
+             start = \"inputs/a.start.presses\"\npresses = \"inputs/a.presses\"\nframes = 10\n",
+        )
+        .unwrap();
+        fs::write(
+            game.join("inputs/a.start.presses"),
+            "gp-presses 0\nframes 20\n",
+        )
+        .unwrap();
+        fs::write(game.join("inputs/a.presses"), "gp-presses 0\nframes 10\n").unwrap();
+        fs::write(game.join(gp_model::MODEL_FILE), "the first model").unwrap();
+        srv.rebuild = Some(super::super::review::Rebuild {
+            game: game.clone(),
+            module: None,
+            follows: false,
+            rom: None,
+            assets: None,
+        });
+        let scans = Arc::new(AtomicUsize::new(0));
+        let n = scans.clone();
+        srv.sprite_runs = Arc::new(SpriteRuns::with(Arc::new(
+            move |_: &Paths, a: &Asked| -> Result<()> {
+                n.fetch_add(1, Ordering::SeqCst);
+                assert_eq!(a.id, "rooftop.run.001");
+                let line = |f: u64, missing: Value, extra: Value| {
+                    json!({"frame": f, "original": [[0x2a, [8, 16, 16, 16]]], "model": [],
+                    "missing": missing, "extra": extra})
+                    .to_string()
+                };
+                let lines = [
+                    line(1, json!([]), json!([])),
+                    line(2, json!([[0x2a, [8, 16, 16, 16]]]), json!([])),
+                    line(3, json!([[0x2a, [9, 16, 16, 16]]]), json!([])),
+                    line(4, json!([]), json!([["bird", [40, 20, 16, 16]]])),
+                    line(6, json!([]), json!([["bird", [42, 20, 16, 16]]])),
+                ];
+                fs::write(&a.out, lines.join("\n") + "\n")?;
+                Ok(())
+            },
+        )));
+        let ask = |srv: &Server| -> Value {
+            let (s, body) = get(srv, "/api/screen/sprite-runs?id=rooftop.run.001");
+            assert_eq!(s, 200, "{body}");
+            serde_json::from_str(&body).unwrap()
+        };
+        let done = |srv: &Server| -> Value {
+            for _ in 0..500 {
+                let v = ask(srv);
+                if v["state"] != "scanning" {
+                    return v;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            panic!("the scan never ended");
+        };
+        assert_eq!(ask(&srv)["state"], "scanning");
+        let v = done(&srv);
+        assert_eq!(
+            (&v["state"], &v["frames"]),
+            (&json!("done"), &json!(5)),
+            "{v}"
+        );
+        let runs = v["runs"].as_array().unwrap();
+        let frames: Vec<(u64, u64)> = runs
+            .iter()
+            .map(|r| (r["from"].as_u64().unwrap(), r["to"].as_u64().unwrap()))
+            .collect();
+        assert_eq!(frames, [(2, 3), (4, 4), (6, 6)], "{v}");
+        assert_eq!(
+            runs[0]["missing"],
+            json!([{"code": "02a", "box": [8, 16, 16, 16]}])
+        );
+        assert_eq!(
+            runs[0]["boxes"],
+            json!([[[8, 16, 16, 16]], [[9, 16, 16, 16]]])
+        );
+        assert_eq!(runs[1]["extra"][0]["kind"], "bird");
+        assert_eq!(runs[1]["missing"], json!([]));
+        // Opened again: the runs kept, no second scan.
+        assert_eq!(ask(&srv)["runs"], v["runs"]);
+        assert_eq!(scans.load(Ordering::SeqCst), 1);
+        // Another model version scans again.
+        fs::write(game.join(gp_model::MODEL_FILE), "the second model").unwrap();
+        assert_eq!(ask(&srv)["state"], "scanning");
+        assert_eq!(done(&srv)["state"], "done");
+        assert_eq!(scans.load(Ordering::SeqCst), 2);
+        assert_eq!(
+            get(&srv, "/api/screen/sprite-runs?id=rooftop.nope.001").0,
+            404
+        );
+        assert_eq!(get(&srv, "/api/screen/sprite-runs").0, 400);
     }
 
     /// A server over a temp home with the session `walk` open and a quest

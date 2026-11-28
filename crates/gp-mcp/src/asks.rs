@@ -120,6 +120,37 @@ fn write(home: &Path, v: &Value) -> Result<(), String> {
         .map_err(|e| format!("writing {}: {e}", f.display()))
 }
 
+/// The one way an ask that is there changes: takes the lock beside its
+/// file (an flock on `ID.lock`, which [`all`] doesn't list), reads it, runs
+/// `change` on it and writes it back through a temp file and a rename. An
+/// error from `change` writes nothing. The page's answer, the runner's
+/// claim and its marks can't then write over each other.
+pub fn update<R>(
+    home: &Path,
+    id: &str,
+    change: impl FnOnce(&mut Value) -> Result<R, String>,
+) -> Result<R, String> {
+    let f = file(home, id).ok_or_else(|| format!("{id:?} isn't an ask's id"))?;
+    if !f.is_file() {
+        return Err(format!("there's no ask {id}"));
+    }
+    let lock = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(f.with_extension("lock"))
+        .map_err(|e| format!("opening the lock of ask {id}: {e}"))?;
+    lock.lock().map_err(|e| format!("locking ask {id}: {e}"))?;
+    let mut v =
+        read(home, id).ok_or_else(|| format!("ask {id} doesn't parse; it is left as it is"))?;
+    let was = v.clone();
+    let r = change(&mut v)?;
+    if v != was {
+        write(home, &v)?;
+    }
+    Ok(r)
+}
+
 /// Every ask, newest first.
 pub fn all(home: &Path) -> Vec<Value> {
     let mut out: Vec<Value> = std::fs::read_dir(dir(home))
@@ -192,21 +223,21 @@ pub fn not_the_patch(out: &[u8]) -> Option<String> {
 /// (false), writing nothing, once it was put back [`KEPT_TRIES`] times: the
 /// failure then uses it, as any other does.
 pub fn keep_yes(home: &Path, id: &str, why: &str) -> Result<bool, String> {
-    let mut v = read(home, id).ok_or_else(|| format!("there's no ask {id}"))?;
-    let n = v["kept"].as_u64().unwrap_or(0);
-    if n >= KEPT_TRIES {
-        return Ok(false);
-    }
-    v["state"] = json!("yes");
-    v["kept"] = json!(n + 1);
-    v["kept_why"] = json!(why);
-    v["kept_until_ms"] = json!(now_ms() + KEPT_WAIT_MS);
-    if let Some(o) = v.as_object_mut() {
-        o.remove("ran");
-        o.remove("used_ms");
-    }
-    write(home, &v)?;
-    Ok(true)
+    update(home, id, |v| {
+        let n = v["kept"].as_u64().unwrap_or(0);
+        if n >= KEPT_TRIES {
+            return Ok(false);
+        }
+        v["state"] = json!("yes");
+        v["kept"] = json!(n + 1);
+        v["kept_why"] = json!(why);
+        v["kept_until_ms"] = json!(now_ms() + KEPT_WAIT_MS);
+        if let Some(o) = v.as_object_mut() {
+            o.remove("ran");
+            o.remove("used_ms");
+        }
+        Ok(true)
+    })
 }
 
 /// The asks a person may still answer, and the yeses not yet used: what
@@ -238,24 +269,24 @@ pub const WORDS_MAX: usize = 2000;
 /// when there are any): what is wrong with what the card showed, or what to
 /// keep in mind with a yes.
 pub fn answer_with(home: &Path, id: &str, a: Answer, words: &str) -> Result<Value, String> {
-    let mut v = read(home, id).ok_or_else(|| format!("there's no ask {id}"))?;
-    let words: String = words.trim().chars().take(WORDS_MAX).collect();
-    if !words.is_empty() {
-        v["words"] = json!(words);
-    }
-    if !is_open(&v, now_ms()) {
-        return Err(format!(
-            "this ask was answered already, or is too old ({})",
-            v["state"].as_str().unwrap_or("?")
-        ));
-    }
-    v["state"] = json!(match a {
-        Answer::Yes => "yes",
-        Answer::No => "no",
-    });
-    v["answered_ms"] = json!(now_ms());
-    write(home, &v)?;
-    Ok(v)
+    update(home, id, |v| {
+        let words: String = words.trim().chars().take(WORDS_MAX).collect();
+        if !words.is_empty() {
+            v["words"] = json!(words);
+        }
+        if !is_open(v, now_ms()) {
+            return Err(format!(
+                "this ask was answered already, or is too old ({})",
+                v["state"].as_str().unwrap_or("?")
+            ));
+        }
+        v["state"] = json!(match a {
+            Answer::Yes => "yes",
+            Answer::No => "no",
+        });
+        v["answered_ms"] = json!(now_ms());
+        Ok(v.clone())
+    })
 }
 
 /// What the runner finds for a call that needs a yes.
@@ -288,10 +319,18 @@ pub fn find(home: &Path, id: Option<&str>, key: &str) -> Found {
             .filter(|v| v["key"] == json!(key))
             .collect(),
     };
-    if let Some(mut v) = candidates.iter().find(|v| is_yes(v, now)).cloned() {
-        v["state"] = json!("used");
-        v["used_ms"] = json!(now);
-        if write(home, &v).is_ok() {
+    if let Some(c) = candidates.iter().find(|v| is_yes(v, now)) {
+        // Used under the card's lock, so a yes the runner claimed since is
+        // not used twice.
+        let used = update(home, c["id"].as_str().unwrap_or_default(), |v| {
+            if !is_yes(v, now) {
+                return Err("used already".to_owned());
+            }
+            v["state"] = json!("used");
+            v["used_ms"] = json!(now);
+            Ok(v.clone())
+        });
+        if let Ok(v) = used {
             return Found::Yes(v);
         }
     }
@@ -336,10 +375,11 @@ pub fn held_key(command: &str, argv: &[String]) -> String {
 /// Marks an open ask used, when the call it asks for goes ahead on the
 /// agent's confirmed_by_person with no page open.
 pub fn mark_used(home: &Path, v: &Value) -> Result<(), String> {
-    let mut v = v.clone();
-    v["state"] = json!("used");
-    v["used_ms"] = json!(now_ms());
-    write(home, &v)
+    update(home, v["id"].as_str().unwrap_or_default(), |v| {
+        v["state"] = json!("used");
+        v["used_ms"] = json!(now_ms());
+        Ok(())
+    })
 }
 
 /// How long a call the runner ran on a yes still shows on the page once
@@ -361,15 +401,20 @@ pub const CUT_OFF_TRIES: u64 = 3;
 /// by the next one ([`end_dead_runs`]). None when it isn't a yes still to
 /// use, or puts a held change back (gp_run's own road).
 pub fn claim_for_runner(home: &Path, id: &str) -> Option<Value> {
-    let mut v = read(home, id)?;
-    if !is_yes(&v, now_ms()) || v.get("held").is_some_and(|h| !h.is_null()) {
-        return None;
-    }
-    let now = now_ms();
-    v["state"] = json!("running");
-    v["ran"] = json!({"by": "runner", "state": "running", "at_ms": now, "pid": std::process::id()});
-    write(home, &v).ok()?;
-    Some(v)
+    // Under the card's lock: two runners (or a runner and the page) that
+    // both see the yes claim it once between them.
+    update(home, id, |v| {
+        if !is_yes(v, now_ms()) || v.get("held").is_some_and(|h| !h.is_null()) {
+            return Ok(None);
+        }
+        let now = now_ms();
+        v["state"] = json!("running");
+        v["ran"] =
+            json!({"by": "runner", "state": "running", "at_ms": now, "pid": std::process::id()});
+        Ok(Some(v.clone()))
+    })
+    .ok()
+    .flatten()
 }
 
 /// The files the runner's run of ask `id` writes its output and errors
@@ -383,9 +428,10 @@ pub fn run_files(home: &Path, id: &str) -> (PathBuf, PathBuf) {
 /// The pid of the command the runner started for a yes (`ran.child`), so
 /// a server that starts after this one stopped can wait for it.
 pub fn set_child(home: &Path, id: &str, pid: u32) -> Result<(), String> {
-    let mut v = read(home, id).ok_or_else(|| format!("there's no ask {id}"))?;
-    v["ran"]["child"] = json!(pid);
-    write(home, &v)
+    update(home, id, |v| {
+        v["ran"]["child"] = json!(pid);
+        Ok(())
+    })
 }
 
 /// What a run of a yes came to from its output, with its last lines: `ok`
@@ -440,7 +486,7 @@ pub fn end_dead_runs(home: &Path, live: impl Fn(&str) -> bool) -> Vec<String> {
     let me = u64::from(std::process::id());
     let now = now_ms();
     let mut out = Vec::new();
-    for mut v in all(home) {
+    for v in all(home) {
         let id = v["id"].as_str().unwrap_or("").to_owned();
         let ran = &v["ran"];
         if ran["by"] != json!("runner")
@@ -471,23 +517,30 @@ pub fn end_dead_runs(home: &Path, live: impl Fn(&str) -> bool) -> Vec<String> {
             let (state, mut lines) = outcome(None, &said, &err);
             lines.push("(it ended while gp serve was stopped)".into());
             set_ran(home, &id, state, &lines)
-        } else if n >= CUT_OFF_TRIES {
-            v["cut_off"] = json!(n);
-            v["state"] = json!("used");
-            v["used_ms"] = json!(now);
-            v["ran"]["state"] = json!("failed");
-            v["ran"]["done_ms"] = json!(at);
-            v["ran"]["lines"] = json!([format!("{DIED} ({n} times)")]);
-            write(home, &v)
         } else {
-            v["cut_off"] = json!(n);
-            v["state"] = json!("yes");
-            v["answered_ms"] = json!(now);
-            if let Some(o) = v.as_object_mut() {
-                o.remove("ran");
-                o.remove("used_ms");
-            }
-            write(home, &v)
+            // Read again under the card's lock: a run that ended since it
+            // was listed is left as it ended.
+            update(home, &id, |v| {
+                if v["ran"]["state"] != json!("running") || !v["ran"]["done_ms"].is_null() {
+                    return Err(format!("ask {id} isn't running any more"));
+                }
+                v["cut_off"] = json!(n);
+                if n >= CUT_OFF_TRIES {
+                    v["state"] = json!("used");
+                    v["used_ms"] = json!(now);
+                    v["ran"]["state"] = json!("failed");
+                    v["ran"]["done_ms"] = json!(at);
+                    v["ran"]["lines"] = json!([format!("{DIED} ({n} times)")]);
+                } else {
+                    v["state"] = json!("yes");
+                    v["answered_ms"] = json!(now);
+                    if let Some(o) = v.as_object_mut() {
+                        o.remove("ran");
+                        o.remove("used_ms");
+                    }
+                }
+                Ok(())
+            })
         };
         if wrote.is_ok() {
             let _ = std::fs::remove_file(&out_f);
@@ -501,14 +554,15 @@ pub fn end_dead_runs(home: &Path, live: impl Fn(&str) -> bool) -> Vec<String> {
 /// What the runner's run of a yes came to: `landed`, `passed` or
 /// `failed`, with its last lines. The yes is now used.
 pub fn set_ran(home: &Path, id: &str, state: &str, lines: &[String]) -> Result<(), String> {
-    let mut v = read(home, id).ok_or_else(|| format!("there's no ask {id}"))?;
-    let now = now_ms();
-    v["state"] = json!("used");
-    v["used_ms"] = json!(now);
-    v["ran"]["state"] = json!(state);
-    v["ran"]["done_ms"] = json!(now);
-    v["ran"]["lines"] = json!(lines);
-    write(home, &v)
+    update(home, id, |v| {
+        let now = now_ms();
+        v["state"] = json!("used");
+        v["used_ms"] = json!(now);
+        v["ran"]["state"] = json!(state);
+        v["ran"]["done_ms"] = json!(now);
+        v["ran"]["lines"] = json!(lines);
+        Ok(())
+    })
 }
 
 /// Closes an open gate card whose change is on main already (`why`, with
@@ -523,36 +577,37 @@ pub fn settle_on_main(
     commit: Option<&str>,
     words: &str,
 ) -> Result<Value, String> {
-    let mut v = read(home, id).ok_or_else(|| format!("there's no ask {id}"))?;
-    let now = now_ms();
-    if !is_open(&v, now) {
-        return Err(format!(
-            "this ask was answered already, or is too old ({})",
-            v["state"].as_str().unwrap_or("?")
-        ));
-    }
-    let words: String = words.trim().chars().take(WORDS_MAX).collect();
-    if !words.is_empty() {
-        v["words"] = json!(words);
-        v["answered_ms"] = json!(now);
-    }
-    v["state"] = json!("used");
-    v["used_ms"] = json!(now);
-    v["ran"] =
-        json!({"by": "main", "state": "landed", "at_ms": now, "done_ms": now, "lines": [why]});
-    if let Some(c) = commit {
-        v["landed"] = json!(c);
-    }
-    write(home, &v)?;
-    Ok(v)
+    update(home, id, |v| {
+        let now = now_ms();
+        if !is_open(v, now) {
+            return Err(format!(
+                "this ask was answered already, or is too old ({})",
+                v["state"].as_str().unwrap_or("?")
+            ));
+        }
+        let words: String = words.trim().chars().take(WORDS_MAX).collect();
+        if !words.is_empty() {
+            v["words"] = json!(words);
+            v["answered_ms"] = json!(now);
+        }
+        v["state"] = json!("used");
+        v["used_ms"] = json!(now);
+        v["ran"] =
+            json!({"by": "main", "state": "landed", "at_ms": now, "done_ms": now, "lines": [why]});
+        if let Some(c) = commit {
+            v["landed"] = json!(c);
+        }
+        Ok(v.clone())
+    })
 }
 
 /// Sets one field of an ask (the runner's `row_settled`, once the card's
 /// quest-log row has followed it).
 pub fn mark(home: &Path, id: &str, key: &str, value: Value) -> Result<(), String> {
-    let mut v = read(home, id).ok_or_else(|| format!("there's no ask {id}"))?;
-    v[key] = value;
-    write(home, &v)
+    update(home, id, |v| {
+        v[key] = value;
+        Ok(())
+    })
 }
 
 /// The asks the page shows: [`pending`], the yeses the runner is running
@@ -1052,6 +1107,59 @@ mod tests {
         assert!(a["ran"]["lines"][0].as_str().unwrap().starts_with(DIED));
         // Once ended, it isn't ended again.
         assert!(end_dead_runs(home, |id| id == "c-3").is_empty());
+    }
+
+    /// A card's read, change and write goes through its lock: two threads
+    /// that each change it 100 times leave all 200 changes, a yes is claimed
+    /// by one of many claimers, and a card that doesn't parse is left as it is.
+    #[test]
+    fn a_cards_changes_go_through_its_lock() {
+        let d = tempfile::tempdir().unwrap();
+        let home = d.path().to_path_buf();
+        write(&home, &json!({"id": "t-1", "made_ms": 1, "state": "open"})).unwrap();
+        let bumpers: Vec<_> = ["a", "b"]
+            .into_iter()
+            .map(|k| {
+                let home = home.clone();
+                std::thread::spawn(move || {
+                    for _ in 0..100 {
+                        update(&home, "t-1", |v| {
+                            v[k] = json!(v[k].as_u64().unwrap_or(0) + 1);
+                            Ok(())
+                        })
+                        .unwrap();
+                    }
+                })
+            })
+            .collect();
+        for b in bumpers {
+            b.join().unwrap();
+        }
+        let v = read(&home, "t-1").unwrap();
+        assert_eq!((v["a"].as_u64(), v["b"].as_u64()), (Some(100), Some(100)));
+        // Many claimers of one yes: one takes it.
+        let yes = json!({"id": "y-1", "made_ms": 1, "state": "yes", "answered_ms": now_ms()});
+        write(&home, &yes).unwrap();
+        let claimers: Vec<_> = (0..8)
+            .map(|_| {
+                let home = home.clone();
+                std::thread::spawn(move || claim_for_runner(&home, "y-1").is_some())
+            })
+            .collect();
+        let took = claimers
+            .into_iter()
+            .map(|c| c.join().unwrap())
+            .filter(|t| *t)
+            .count();
+        assert_eq!(took, 1);
+        // A card that doesn't parse is an error and isn't written over.
+        let f = file(&home, "t-1").unwrap();
+        std::fs::write(&f, "{\"id\": \"t-1\", \"sta").unwrap();
+        assert!(mark(&home, "t-1", "row_settled", json!(true)).is_err());
+        assert_eq!(
+            std::fs::read_to_string(&f).unwrap(),
+            "{\"id\": \"t-1\", \"sta"
+        );
     }
 
     /// A gate that couldn't land for a cause outside its patch keeps the

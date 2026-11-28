@@ -185,7 +185,7 @@ mod tests {
     #[test]
     fn game_ids_are_one_safe_segment() {
         let p = |g: &str| Params::from([("game", g.to_owned())]);
-        assert!(game(&p("smb1-ntsc-prg0")).is_ok());
+        assert!(game(&p("rooftop-ntsc-prg0")).is_ok());
         for bad in ["", "..", "a/b", "A", "x.y", &"a".repeat(65)] {
             assert!(game(&p(bad)).is_err(), "{bad:?}");
         }

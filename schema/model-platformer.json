@@ -5614,7 +5614,7 @@
           "type": "string"
         },
         "in": {
-          "description": "A pinned download the file is in rather than the repo, as\n`<name>@<revision>`, such as `smbdis@7e8e9777`: `at` is then a path\nwithin it.",
+          "description": "A pinned download the file is in rather than the repo, as\n`<name>@<revision>`, such as `rooftopdis@7e8e9777`: `at` is then a path\nwithin it.",
           "type": [
             "string",
             "null"

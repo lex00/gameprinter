@@ -1168,6 +1168,7 @@ async function showClipLog(c, f) {
     key: c.key, n, mechanic, work: c.work, loop: null, note: c.note, start, frames: length, log, pads, polled, upTo, snaps, f: 0, pos: length, playing: false, path: null,
     draws: clipDraws, frameDraws, soft: c.draws ? softOf(c.draws) : softLines(sites),
   };
+  spriteRunsFor();
   $("clip-scrub").max = String(length - 1);
   $("clip-name").textContent = clipName(c.name, log);
   $("clipbar").hidden = false;
@@ -1212,6 +1213,121 @@ function playClip(on) {
 function backToClipless() {
   clip = null;
   model.on = false;
+  spriteRunsFor();
+}
+
+// A corpus clip's sprite runs ------------------------------------------
+//
+// SPRITE RUNS on a corpus clip's bar lists, beside the clip, the runs of
+// frames where the original shows a sprite the model doesn't draw
+// (missing) or the model draws one the original doesn't (extra), from the
+// scan gp picture --sprites makes (api/screen/sprite-runs, which scans off
+// the server's thread once for a clip and model version). A run clicked
+// stands both games at its first frame; while the clip stands in a run,
+// the missing sprites are boxed on the original's side.
+
+const RUN_BOX = "rgb(255,0,255)";
+const sprites = { id: null, open: false, runs: null, at: -1, loading: null };
+
+/** The list follows the clip shown: SPRITE RUNS on a corpus clip only,
+ * the list closed and forgotten when another clip comes. */
+function spriteRunsFor() {
+  const id = clip?.work ?? null;
+  $("clip-runs").hidden = !id;
+  if (sprites.id === id) return;
+  Object.assign(sprites, { id, runs: null, at: -1 });
+  $("sprite-runs-list").replaceChildren();
+  showSpriteRuns(false);
+}
+
+function showSpriteRuns(on) {
+  sprites.open = on && !!sprites.id;
+  $("sprite-runs").hidden = !sprites.open;
+  $("clip-runs").textContent = sprites.open ? "HIDE SPRITE RUNS" : "SPRITE RUNS";
+  if (sprites.open && !sprites.runs) void loadSpriteRuns(sprites.id);
+}
+
+/** Asks for clip `id`'s runs until the scan ends: its list, or why not. */
+async function loadSpriteRuns(id) {
+  if (sprites.loading === id) return;
+  sprites.loading = id;
+  const says = $("sprite-runs-says");
+  says.textContent = `Scanning the sprites of ${id} on the model as it is now: the list comes when the scan ends.`;
+  try {
+    for (;;) {
+      if (sprites.id !== id) return;
+      let v;
+      try { v = await api(`api/screen/sprite-runs?id=${encodeURIComponent(id)}`); } catch (e) {
+        if (sprites.id === id) says.textContent = `The sprite runs of ${id} couldn't be read: ${e.message ?? e}`;
+        return;
+      }
+      if (sprites.id !== id) return;
+      if (v.state === "done") { sprites.runs = v.runs ?? []; drawSpriteRuns(v); return; }
+      if (v.state === "failed") { says.textContent = `The scan of ${id}'s sprites failed: ${v.error}`; return; }
+      await new Promise((r) => setTimeout(r, 1500));
+    }
+  } finally { if (sprites.loading === id) sprites.loading = null; }
+}
+
+/** A run in words: its frames and what differs on its first frame. */
+function runWords(r) {
+  const frames = r.to > r.from ? `FRAMES ${r.from} TO ${r.to}` : `FRAME ${r.from}`;
+  const parts = [];
+  if (r.missing?.length) parts.push(`MISSING FROM THE MODEL: ${r.missing.length} (${[...new Set(r.missing.map((m) => m.code))].join(" ")})`);
+  if (r.extra?.length) parts.push(`DRAWN BY THE MODEL ONLY: ${r.extra.length} (${[...new Set(r.extra.map((x) => x.kind))].join(", ")})`);
+  return `${frames}: ${parts.join("; ")}`;
+}
+
+function drawSpriteRuns(v) {
+  const runs = sprites.runs;
+  $("sprite-runs-says").textContent = runs.length
+    ? `${runs.length} runs of frames where the original and the model differ on sprites (model version ${v.model}). A click stands the clip at a run's first frame, the missing sprites boxed on the original.`
+    : `No sprite runs: on each of the ${v.frames} frames scanned the model draws the sprites the original shows, and no others (model version ${v.model}).`;
+  $("sprite-runs-list").replaceChildren(...runs.map((r) => {
+    const li = el("li");
+    const b = el("button", "sprite-run", runWords(r));
+    b.type = "button";
+    b.dataset.from = String(r.from);
+    b.addEventListener("click", (e) => {
+      e.currentTarget.blur();
+      if (!clip || clip.work !== sprites.id) return;
+      show.by = "person";
+      clip.loop = null;
+      playClip(false);
+      seekClip(r.from);
+      markSpriteRun();
+    });
+    li.append(b);
+    return li;
+  }));
+  sprites.at = -1;
+}
+
+/** The run the clip stands in, or -1. */
+function spriteRunAt() {
+  if (!clip || !sprites.runs || clip.work !== sprites.id) return -1;
+  return sprites.runs.findIndex((r) => clip.f >= r.from && clip.f <= r.to);
+}
+
+function markSpriteRun(i = spriteRunAt()) {
+  sprites.at = i;
+  [...$("sprite-runs-list").children].forEach((li, k) => li.classList.toggle("at", k === i));
+}
+
+/** The missing sprites of the frame the clip stands at, boxed on the
+ * original's side, while the list is open. */
+function drawSpriteBoxes() {
+  if (!sprites.open) return;
+  const i = spriteRunAt();
+  if (i !== sprites.at) markSpriteRun(i);
+  if (i < 0 || show.view === "solo") return;
+  const r = sprites.runs[i];
+  const g = $("a").getContext("2d");
+  g.save();
+  g.strokeStyle = RUN_BOX;
+  g.lineWidth = 1;
+  for (const [x, y, w, h] of r.boxes?.[clip.f - r.from] ?? []) g.strokeRect(x + 0.5, y + 0.5, Math.max(1, w - 1), Math.max(1, h - 1));
+  g.restore();
 }
 
 /** Back to playing the game live, where it was. */
@@ -1220,6 +1336,7 @@ function backToLive() {
   if (mode === "live") return;
   mode = "live";
   clip = null;
+  spriteRunsFor();
   // Live play is main's model.
   toMainModel();
   $("clipbar").hidden = true;
@@ -3355,6 +3472,7 @@ function frame(now) {
     }
     const have = grabModel();
     drawPair(have);
+    drawSpriteBoxes();
     usualLine();
     showLastPress();
     document.body.dataset.frame = String(mode === "live" ? player.frame(0) : clip?.f ?? 0);
@@ -3442,6 +3560,7 @@ function wire() {
   $("clip-scrub").addEventListener("input", (e) => { playClip(false); seekClip(Number(e.target.value), true); });
   $("clip-scrub").addEventListener("change", (e) => { e.target.blur(); show.by = "person"; report(); });
   $("clip-live").addEventListener("click", (e) => { e.currentTarget.blur(); show.by = "person"; backToLive(); drawClips(); });
+  $("clip-runs").addEventListener("click", (e) => { e.currentTarget.blur(); showSpriteRuns(!sprites.open); });
   // BEFORE: main's model at the card's clip; AFTER: the card's change again.
   $("clip-before").addEventListener("click", (e) => {
     e.currentTarget.blur();

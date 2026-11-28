@@ -221,33 +221,4 @@ mod tests {
         p2.extend(z.finish().unwrap());
         assert!(parse(&p2, 10_000).unwrap_err().contains("frame 1"));
     }
-
-    /// With a recording MAME made on this machine (see docs/movies.md) and
-    /// a games checkout naming its set ($GP_GAMES_DIR): it reads, and its
-    /// first frames are idle.
-    #[test]
-    fn a_mame_recording_reads_when_present() {
-        let Some(home) = std::env::var_os("GP_HOME")
-            .map(std::path::PathBuf::from)
-            .or_else(|| {
-                std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".gameprinter"))
-            })
-        else {
-            return;
-        };
-        let path = home.join("work/oracle/port6-short-inp/short.inp");
-        let Ok(bytes) = std::fs::read(&path) else {
-            eprintln!("skipped: no MAME recording at {}", path.display());
-            return;
-        };
-        if crate::romset::known().is_empty() {
-            eprintln!("skipped: no arcade set known (set GP_GAMES_DIR to a games checkout)");
-            return;
-        }
-        let inp = parse(&bytes, 1_000_000).unwrap();
-        assert!(crate::romset::set(&inp.system).is_some());
-        assert!(inp.made_by.starts_with("MAME 0.276"));
-        assert_eq!(inp.frames[0], Controls::default());
-        assert!(inp.frames.iter().any(|c| c.coin));
-    }
 }

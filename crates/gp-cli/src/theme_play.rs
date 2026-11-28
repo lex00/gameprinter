@@ -21,7 +21,7 @@
 //!   from the gameprinter checkout as it is now, told the games checkout
 //!   holding the game ($GP_GAMES_DIR) for its `gp roms sets`; with no
 //!   checkout, the newest bundle that passed the release check in
-//!   `$GP_HOME/work/page-release` (`scripts/web/release-check.sh`). A gp
+//!   `$GP_HOME/work/page-release` (the games repo's release check). A gp
 //!   with no checkout and no bundle can't serve the page.
 //! - The game and its themes: `--registry`, else the page's own source
 //!   (page.json), read from a checkout of it beside the games checkout when

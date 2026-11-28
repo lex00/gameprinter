@@ -36,7 +36,7 @@ pub mod topdown;
 pub mod validate;
 
 pub use fixed::Fixed;
-pub use model::{CORE_SYSTEMS, CORE_VERSION, MAP_FORMAT_ALIASES, Model, map_format_name};
+pub use model::{CORE_SYSTEMS, CORE_VERSION, Model};
 pub use path::Path;
 pub use validate::Problem;
 

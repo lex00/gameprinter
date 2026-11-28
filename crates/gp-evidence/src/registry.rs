@@ -18,7 +18,7 @@ pub enum SourceStatus {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct KnownSource {
-    /// Stable ID used in recordings and templates, e.g. `smb1-ntsc-prg0`.
+    /// Stable ID used in recordings and templates, e.g. `rooftop-ntsc-prg0`.
     pub id: String,
     pub title: String,
     /// `nes` or `arcade`.

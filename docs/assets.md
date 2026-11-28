@@ -309,23 +309,9 @@ A metatiles asset may set `tile_order = "columns"` when the ROM stores each meta
 
 The formats `byte-rows`, `blobs`, `ppu-strings` and `sprite-set` are format modules. Each is one file in `crates/gp-assets/src/` that implements the `Module` trait (`format.rs`) for everything its format does. A new format is a module of its own, registered with a variant of `Asset` and one line in `Asset::module`.
 
-### Renamed formats
+### NES object, music and set formats
 
-Some formats were first named for the game they were written for. They now have names that say what the format is, and a map that still uses an old name reads as the new one (`gp_model::MAP_FORMAT_ALIASES`):
-
-| Old name | Name |
-|---|---|
-| `smb-area-objects` | `nes-area-objects-v1` |
-| `smb2-level-objects` | `nes-area-objects-v2` |
-| `mm2-screens` | `nes-screens-v1` |
-| `mm2-overlay-sets` | `nes-overlay-sets-v1` |
-| `smb-enemy-objects` | `nes-spawn-objects-v1` |
-| `smb2-enemy-objects` | `nes-spawn-objects-v2` |
-| `mm2-spawns` | `nes-spawn-objects-v3` |
-| `smb-music` | `nes-music-v1` |
-| `mm2-chr-uploads` | `nes-chr-uploads-v1` |
-| `mm2-palettes` | `nes-palette-sets-v1` |
-| `mm2-metatiles` | `nes-metatiles-4x4-v1` |
+These formats are named for what they hold: `nes-area-objects-v1`, `nes-area-objects-v2`, `nes-screens-v1`, `nes-overlay-sets-v1`, `nes-spawn-objects-v1` to `-v3`, `nes-music-v1`, `nes-chr-uploads-v1`, `nes-palette-sets-v1` and `nes-metatiles-4x4-v1`. They were once named for the game each was first written for; those older names were dropped on 2026-11-27 (no map used them), and a format that says one lifts into no slot.
 
 gp-assets decodes none of these today: a slot's kind takes them, and a runtime refuses one it has no builder for (docs/model.md, "Asset slots").
 

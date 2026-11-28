@@ -9,7 +9,10 @@
 //! leaves with fewer assertions, must be named with `--removes-test`, or
 //! the gate fails. A patch that names one, or that touches a file that
 //! steers workers ([`STEERING`]), is not landed on the gate's own answer:
-//! its card waits for the person (serve/runner.rs, run_yeses).
+//! its card waits for the person (serve/runner.rs, run_yeses). The one
+//! steering change the gate answers itself is new rows of the permission
+//! table for commands it doesn't have yet (issue 58): the guard holds only
+//! what loosens, and a new command's row loosens no rule there is.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -271,11 +274,175 @@ pub(crate) fn unnamed(weak: &[Weak], named: &[String]) -> Option<String> {
     ))
 }
 
+/// The permission table: gp_run's rule for each command ([`STEERING`]).
+pub(crate) const TABLE_FILE: &str = "crates/gp-mcp/src/policy.rs";
+
+/// The rows a table entry is written with (`r(` and `laya(`, policy.rs).
+const ROW_CALLS: &[&str] = &["r(", "laya("];
+
+/// The commands whose rows a patch adds to the permission table, when that
+/// is all it changes there (issue 58): every line it changes in
+/// [`TABLE_FILE`] is an added one, the added lines, comments aside, are
+/// whole rows (`r("PATH", ...),` or `laya("PATH", ...),`), and no row's
+/// PATH is a command `has` says the table already holds, or one the patch
+/// adds twice. Else why not, naming the first line or command that isn't.
+/// A patch that doesn't touch the table adds none.
+pub(crate) fn new_rows(diff: &str, has: &dyn Fn(&str) -> bool) -> Result<Vec<String>, String> {
+    let mut in_table = false;
+    // The added lines of the table, each run of them (between context or
+    // hunk headers) read as one piece.
+    let mut runs: Vec<String> = Vec::new();
+    let mut run = String::new();
+    let end = |run: &mut String, runs: &mut Vec<String>| {
+        if !run.trim().is_empty() {
+            runs.push(std::mem::take(run));
+        }
+        run.clear();
+    };
+    for l in diff.lines() {
+        if l.starts_with("diff ") {
+            end(&mut run, &mut runs);
+            in_table = false;
+            continue;
+        }
+        if let Some(p) = l
+            .strip_prefix("--- a/")
+            .or_else(|| l.strip_prefix("+++ b/"))
+        {
+            end(&mut run, &mut runs);
+            in_table = p.trim() == TABLE_FILE;
+            continue;
+        }
+        if l.starts_with("--- ") || l.starts_with("+++ ") || l.starts_with("index ") {
+            continue;
+        }
+        if !in_table {
+            continue;
+        }
+        if l.starts_with("@@") || l.starts_with(' ') || l.is_empty() {
+            end(&mut run, &mut runs);
+            continue;
+        }
+        if let Some(body) = l.strip_prefix('-') {
+            return Err(format!(
+                "it changes or removes a line of the permission table: {}",
+                body.trim()
+            ));
+        }
+        if let Some(body) = l.strip_prefix('+') {
+            let t = body.trim();
+            if !t.starts_with("//") {
+                run.push_str(t);
+                run.push(' ');
+            }
+            continue;
+        }
+        if l.starts_with('\\') {
+            continue;
+        }
+        return Err(format!("it changes the permission table: {}", l.trim()));
+    }
+    end(&mut run, &mut runs);
+    let mut out: Vec<String> = Vec::new();
+    for r in runs {
+        for path in rows_of(&r)? {
+            if has(&path) {
+                return Err(format!(
+                    "it adds a row for {path}, a command the permission table already has"
+                ));
+            }
+            if out.contains(&path) {
+                return Err(format!("it adds two rows for {path}"));
+            }
+            out.push(path);
+        }
+    }
+    Ok(out)
+}
+
+/// The command paths of `text`, when it is nothing but table rows, each
+/// `r(` or `laya(` with a string first, its parentheses closed and a comma
+/// after. Else why not.
+fn rows_of(text: &str) -> Result<Vec<String>, String> {
+    let mut out = Vec::new();
+    let mut rest = text.trim();
+    while !rest.is_empty() {
+        let Some(call) = ROW_CALLS.iter().find(|c| rest.starts_with(**c)) else {
+            return Err(format!(
+                "it adds to the permission table what is not a row: {rest}"
+            ));
+        };
+        let args = rest[call.len()..].trim_start();
+        let Some(quoted) = args.strip_prefix('"') else {
+            return Err(format!("it adds a row with no command: {rest}"));
+        };
+        let Some(q) = quoted.find('"') else {
+            return Err(format!("it adds a row with no command: {rest}"));
+        };
+        let path = &quoted[..q];
+        if path.is_empty() || path.contains('\\') {
+            return Err(format!("it adds a row with no command: {rest}"));
+        }
+        // Close the call's parentheses, strings read whole.
+        let (mut depth, mut in_str, mut esc, mut close) = (1usize, false, false, None);
+        let from = rest.len() - args.len();
+        for (i, c) in rest[from..].char_indices() {
+            if in_str {
+                match c {
+                    _ if esc => esc = false,
+                    '\\' => esc = true,
+                    '"' => in_str = false,
+                    _ => {}
+                }
+                continue;
+            }
+            match c {
+                '"' => in_str = true,
+                '(' => depth += 1,
+                ')' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        close = Some(from + i);
+                        break;
+                    }
+                }
+                '{' | '}' | ';' => {
+                    return Err(format!(
+                        "it adds to the permission table what is not a row: {rest}"
+                    ));
+                }
+                _ => {}
+            }
+        }
+        let Some(close) = close else {
+            return Err(format!("it adds a row that isn't closed: {rest}"));
+        };
+        let Some(after) = rest[close + 1..].trim_start().strip_prefix(',') else {
+            return Err(format!("it adds a row with no comma after it: {rest}"));
+        };
+        out.push(path.to_owned());
+        rest = after.trim_start();
+    }
+    Ok(out)
+}
+
 /// Why a tool gate card's patch is the person's to answer and not the
 /// gate's own (the runner's land_tools): it names a test it removes
 /// (`removes_test` not empty), or it changes a file that steers later
-/// workers. None for any other patch.
+/// workers, except a patch whose only change to one is new rows of the
+/// permission table for commands it doesn't have yet (issue 58: the guard
+/// holds only what loosens). None for any other patch.
 pub(crate) fn needs_person(diff: &str, removes_test: &[String]) -> Option<String> {
+    needs_person_with(diff, removes_test, &|p| gp_mcp::policy::row(p).is_some())
+}
+
+/// [`needs_person`], with `has` telling the commands the permission table
+/// already holds (gp_mcp's table as this gp was built: main's).
+fn needs_person_with(
+    diff: &str,
+    removes_test: &[String],
+    has: &dyn Fn(&str) -> bool,
+) -> Option<String> {
     if !removes_test.is_empty() {
         return Some(format!(
             "it takes out of the checks: {}",
@@ -283,12 +450,23 @@ pub(crate) fn needs_person(diff: &str, removes_test: &[String]) -> Option<String
         ));
     }
     let steers = steering(&files_of(diff));
-    (!steers.is_empty()).then(|| {
-        format!(
-            "it changes what steers later workers: {}",
-            steers.join(", ")
-        )
-    })
+    if steers.is_empty() {
+        return None;
+    }
+    let table = if steers.iter().any(|f| f == TABLE_FILE) {
+        match new_rows(diff, has) {
+            Ok(rows) if steers.len() == 1 && !rows.is_empty() => return None,
+            Ok(_) => None,
+            Err(why) => Some(why),
+        }
+    } else {
+        None
+    };
+    Some(format!(
+        "it changes what steers later workers: {}{}",
+        steers.join(", "),
+        table.map(|w| format!(" ({w})")).unwrap_or_default()
+    ))
 }
 
 #[cfg(test)]
@@ -420,5 +598,88 @@ mod tests {
         assert!(needs_person(gone, &[]).is_some());
         let plain = "--- a/docs/loop.md\n+++ b/docs/loop.md\n@@ -1 +1 @@\n-a\n+b\n";
         assert_eq!(needs_person(plain, &[]), None);
+    }
+
+    /// A patch of the permission table, with `hunk` its hunk's lines.
+    fn table(hunk: &str) -> String {
+        format!(
+            "diff --git a/{TABLE_FILE} b/{TABLE_FILE}\nindex 111..222 100644\n--- a/{TABLE_FILE}\n+++ b/{TABLE_FILE}\n@@ -300,4 +300,6 @@ pub const TABLE: &[Row] = &[\n     r(\"corpus show\", J, Read),\n{hunk}     r(\"corpus verify\", J, Write),\n"
+        )
+    }
+
+    /// Issue 58: the guard holds only what loosens. A patch whose only
+    /// change to a steering file is new rows of the permission table for
+    /// commands it doesn't have is the gate's to answer; a row changed or
+    /// removed, a row for a command the table has, anything in the table
+    /// that isn't a row, or a new row beside a change to the runner, the
+    /// gate or the guard is the person's.
+    #[test]
+    fn only_a_new_row_for_a_new_command_is_not_held() {
+        let has = |p: &str| ["corpus show", "corpus verify", "rooftop sweep"].contains(&p);
+        let held = |d: &str| needs_person_with(d, &[], &has);
+        // Added: one line, several lines, a comment, and laya( rows.
+        let added = table("+    r(\"hilltop climb\", S, Read),\n");
+        assert_eq!(new_rows(&added, &has), Ok(vec!["hilltop climb".into()]));
+        assert_eq!(held(&added), None);
+        let multi = table(
+            "+    // It climbs (a comment).\n+    r(\n+        \"hilltop climb\",\n+        D,\n+        Rule::Refuse(\"only the person (here) climbs.\"),\n+    ),\n+    laya(\"hilltop look\", S, Read, Laya::With(\"open\")),\n",
+        );
+        assert_eq!(
+            new_rows(&multi, &has),
+            Ok(vec!["hilltop climb".into(), "hilltop look".into()])
+        );
+        assert_eq!(held(&multi), None);
+        // With a plain file beside it, still the gate's.
+        let beside_docs = format!(
+            "{added}diff --git a/docs/loop.md b/docs/loop.md\n--- a/docs/loop.md\n+++ b/docs/loop.md\n@@ -1 +1 @@\n-a\n+b\n"
+        );
+        assert_eq!(held(&beside_docs), None);
+        // Changed: a row's rule loosened.
+        let changed = format!(
+            "--- a/{TABLE_FILE}\n+++ b/{TABLE_FILE}\n@@ -300,3 +300,3 @@\n     r(\"corpus show\", J, Read),\n-    r(\"corpus verify\", J, Rule::Refuse(\"no\")),\n+    r(\"corpus verify\", J, Write),\n"
+        );
+        let why = held(&changed).unwrap();
+        assert!(
+            why.contains(TABLE_FILE) && why.contains("changes or removes"),
+            "{why}"
+        );
+        // Removed: a row taken out.
+        let removed = format!(
+            "--- a/{TABLE_FILE}\n+++ b/{TABLE_FILE}\n@@ -300,3 +300,2 @@\n     r(\"corpus show\", J, Read),\n-    r(\"corpus verify\", J, Write),\n"
+        );
+        assert!(held(&removed).unwrap().contains("corpus verify"));
+        // A row for a command the table has, as a second row to shadow it,
+        // or the same new command twice.
+        let again = table("+    r(\"rooftop sweep\", J, Write),\n");
+        assert!(held(&again).unwrap().contains("already has"));
+        let twice =
+            table("+    r(\"hilltop climb\", S, Read),\n+    r(\"hilltop climb\", S, Write),\n");
+        assert!(held(&twice).unwrap().contains("two rows"));
+        // Added lines that aren't whole rows: an argument into a row the
+        // table has, a const, a row with no comma after it.
+        for hunk in [
+            "+        &[\"dry-run\"],\n",
+            "+const CLIMB: &str = \"climbs\";\n",
+            "+    r(\"hilltop climb\", S, Read)\n",
+            "+    r(\"hilltop climb\", S, { Read }),\n",
+        ] {
+            assert!(held(&table(hunk)).is_some(), "{hunk}");
+        }
+        // A new row beside the runner, the gate or the guard is held.
+        for f in [
+            "crates/gp-cli/src/serve/runner.rs",
+            "crates/gp-cli/src/tool_gate.rs",
+            "crates/gp-cli/src/tool_guard.rs",
+        ] {
+            let d = format!(
+                "{added}diff --git a/{f} b/{f}\n--- a/{f}\n+++ b/{f}\n@@ -1 +1,2 @@\n a\n+b\n"
+            );
+            let why = held(&d).unwrap();
+            assert!(why.contains(f) && why.contains(TABLE_FILE), "{why}");
+        }
+        // A named test removal is the person's whatever it changes.
+        assert!(needs_person_with(&added, &["it_adds".into()], &has).is_some());
+        // Read against this gp's own table: a command it has is held.
+        assert!(needs_person(&table("+    r(\"corpus show\", J, Write),\n"), &[]).is_some());
     }
 }

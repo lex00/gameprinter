@@ -747,6 +747,46 @@ fn a_proposed_sound_waits_for_the_person_then_its_answer_for_the_agent() {
     );
 }
 
+/// When gp serve's background couldn't open the model, the fault is gp's
+/// own: the step touches tools, runs the tool gate and is listed as the
+/// tools' work, read from the background's state file as `gp loop steps`
+/// reads it. With steps_required on, a tool gate citing it runs and one
+/// citing the port's other open step is refused.
+#[test]
+fn a_tool_fault_is_a_step_of_the_tools_own() {
+    let fx = Fx::new();
+    fx.game("rooftop", &[]);
+    let said = "couldn't open the model: a made-up fault";
+    write(
+        &fx.home().join("work/serve/rooftop/background/state.json"),
+        &json!({"live": {"on": false, "pid": 1, "error": said}}).to_string(),
+    );
+    let f = fx.facts(Some("rooftop"));
+    assert_eq!(f.background.error.as_deref(), Some(said));
+    let a = answer(&f);
+    let s = &a.next;
+    assert!(s.says.contains(said), "{}", s.says);
+    assert_eq!(s.who, Who::Agent);
+    assert_eq!(s.touches, ["tools"]);
+    assert_eq!(s.commands, ["tool gate"]);
+    let open: Vec<Value> = a.open.iter().map(|o| crate::steps::listed(&a, o)).collect();
+    assert_eq!(open[0]["repo"], "tools", "{}", open[0]);
+    let other = open
+        .iter()
+        .find(|o| o["repo"].is_null())
+        .expect("the port's own step is open beside it");
+    let id = |s: &Value| s["id"].as_str().unwrap().to_owned();
+    assert!(crate::steps::step_allows(&open, &id(&open[0]), "tool gate"));
+    assert!(!crate::steps::step_allows(&open, &id(other), "tool gate"));
+    // With no error the port has no step of the tool's.
+    write(
+        &fx.home().join("work/serve/rooftop/background/state.json"),
+        &json!({"live": {"on": false, "pid": 1}}).to_string(),
+    );
+    let a = fx.answer(Some("rooftop"));
+    assert!(a.open.iter().all(|s| !s.touches.contains(&"tools".into())));
+}
+
 #[test]
 fn a_proposed_sprite_waits_for_the_person_then_its_answer_for_the_agent() {
     let mut p = json!({"id": "my_hop-3", "copy": "my_hop", "seq": 3, "subject": "hero",

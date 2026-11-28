@@ -71,7 +71,7 @@ fn arcade_wasm(ctx: &Ctx, _req: &Request, _params: &Params) -> Result<Response, 
         ctx,
         "GP_ARCADE_PLAY_WASM",
         "gp_arcade_play.wasm",
-        "scripts/web/build-play.sh --arcade (just play-web-arcade)",
+        "scripts/web/build-play.sh --arcade (just play-arcade-wasm)",
     )
 }
 

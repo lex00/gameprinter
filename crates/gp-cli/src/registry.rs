@@ -1210,6 +1210,31 @@ pub fn publish_cmd(
     how: Writing,
 ) -> Result<Outcome> {
     let paths = gp_evidence::Paths::from_env()?;
+    publish_with(
+        &paths,
+        target,
+        dir,
+        (name, version),
+        (kind, title),
+        for_games,
+        key,
+        how,
+    )
+}
+
+/// [`publish_cmd`] with the home and ROM folder given rather than read from
+/// the environment (`gp game share` passes its own).
+#[allow(clippy::too_many_arguments)]
+pub fn publish_with(
+    paths: &gp_evidence::Paths,
+    target: &str,
+    dir: &Path,
+    (name, version): (&str, &str),
+    (kind, title): (&str, &str),
+    for_games: &[String],
+    key: Option<&Path>,
+    how: Writing,
+) -> Result<Outcome> {
     let compared = if Repo::at(target).is_some() {
         no_rom_bytes(dir, &paths.roms)?
     } else {

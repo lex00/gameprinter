@@ -412,22 +412,6 @@ pub fn test_game() -> Result<std::path::PathBuf, String> {
     Ok(dir)
 }
 
-/// The known set `name`, loaded from its zip on this machine
-/// ([`local_romset`]); Err says why not.
-pub fn test_set(name: &str) -> Result<Romset, String> {
-    let _ = test_game();
-    if set(name).is_none() {
-        return Err(format!("no set {name} is known ({})", NO_SETS));
-    }
-    let path = local_romset(name).ok_or_else(|| {
-        format!(
-            "no {name}.zip on this machine ($GP_ARCADE_{}, $GP_ROM_DIR/arcade)",
-            name.to_uppercase()
-        )
-    })?;
-    Romset::load_zip(&path).map_err(|e| e.to_string())
-}
-
 /// The first set of [`test_game`] (in its roms.toml's order) whose zip is
 /// on this machine: its name and its zip's path. Err says why there is
 /// none.

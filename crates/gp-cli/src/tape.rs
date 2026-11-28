@@ -952,65 +952,6 @@ mod tests {
         }
     }
 
-    /// An arcade original's tape: its RAM record answers the RAM
-    /// selectors, the other selectors are kept as asked, and its pictures
-    /// come back as they were drawn, sprite mask included. Needs the
-    /// real romset ($GP_GAME_DIR's first oracle set); skipped without it.
-    #[test]
-    fn an_arcade_tape_replays_its_reads_and_pictures() {
-        let (_, zip) = match gp_arcade::romset::test_oracle_set_path() {
-            Ok(p) => p,
-            Err(e) => {
-                eprintln!("skipped: {e}");
-                return;
-            }
-        };
-        let rom = std::fs::read(zip).unwrap();
-        let o = OriginalRuntime::of_rom(&rom).unwrap();
-        let sels = [
-            "ram[0xe000..0xe800]",
-            "ram[0xe800..0xea00]",
-            "sound_ram[*]",
-            "palette[0..4]",
-            "ports[*]",
-            "ram[0x100]",
-            // One byte as `ram_text` writes it: from the record at 0xE000
-            // up, kept by its selector below.
-            "ram[0x0100]",
-            "ram[0xe012]",
-            "ram[0xe9ff]",
-            "ram[0xf3a0]",
-            "ram[0xfc00]",
-        ];
-        let run = |o: &mut Original| {
-            let mut out = Vec::new();
-            for k in 0..120u32 {
-                let b = if (60..66).contains(&k) { 1 } else { 0 };
-                o.step(&[InputFrame::pads([b, 0, 0, 0])]).unwrap();
-                for s in sels {
-                    out.push(format!("{:?}", o.query(s)));
-                }
-                if k % 30 == 0 {
-                    let f = o.picture();
-                    out.push(format!(
-                        "{:?} {:?}",
-                        blake3::hash(&f.rgb.concat()),
-                        f.sprite.iter().filter(|x| **x).count()
-                    ));
-                }
-            }
-            out
-        };
-        let mut live = Original::recording(o);
-        let seen = run(&mut live);
-        assert!(!live.missed());
-        let tape = Tape::from_bytes(&live.into_tape().unwrap().to_bytes()).unwrap();
-        assert!(tape.arcade);
-        let mut again = Original::replay(tape);
-        assert_eq!(run(&mut again), seen);
-        assert!(!again.missed());
-    }
-
     /// A tape put in a folder reads back the same; past the cap the least
     /// recently used files go first, and a file being written (a dot
     /// file) stays.

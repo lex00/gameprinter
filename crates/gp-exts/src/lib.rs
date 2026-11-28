@@ -30,7 +30,7 @@ pub const ENTRIES: &[Entry] = &[Entry {
 pub struct Hooks {
     pub exts: Exts,
     /// The crate's path, its version and the first 12 hex digits of its
-    /// code's hash, such as `templates/smb1-ntsc-prg0/ext 0.1.0 1f2e3d4c5b6a`.
+    /// code's hash, such as `templates/rooftop-ntsc-prg0/ext 0.1.0 1f2e3d4c5b6a`.
     pub label: String,
 }
 

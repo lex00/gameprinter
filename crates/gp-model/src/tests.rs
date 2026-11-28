@@ -824,7 +824,7 @@ confidence = 50
 [evidence.counters]
 source = "stated"
 confidence = 100
-refs = [{ at = "SMBDIS.ASM:1", in = "smbdis@7e8e9777", quote = "anything" }]
+refs = [{ at = "ROOFTOP.ASM:1", in = "rooftopdis@7e8e9777", quote = "anything" }]
 "#;
 
 fn shaped_edit(from: &str, to: &str) -> String {
@@ -1006,7 +1006,11 @@ fn core_two_finds_broken_parts() {
             "walk = { speed = \"-0.5\" }",
             "walk.speed",
         ),
-        ("in = \"smbdis@7e8e9777\"", "in = \"smbdis\"", "refs[0].in"),
+        (
+            "in = \"rooftopdis@7e8e9777\"",
+            "in = \"rooftopdis\"",
+            "refs[0].in",
+        ),
         (
             "[entities.hero.machine]",
             "sprite = { slot = \"areas\", frame = { slot = \"areas\", row = 0 }, width = 2, palette = 0 }\n\n[entities.hero.machine]",
@@ -1097,9 +1101,9 @@ fn refs_in_a_pinned_download_are_read_from_its_root() {
     let m = Model::parse(SHAPED).unwrap();
     let dir = std::env::temp_dir().join(format!("gp-model-pinned-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join("SMBDIS.ASM"), "nothing here\n").unwrap();
+    std::fs::write(dir.join("ROOFTOP.ASM"), "nothing here\n").unwrap();
     let (p, skipped) = check_refs_in(&m, |within, _| match within {
-        Some("smbdis@7e8e9777") => RefRoot::Dir(dir.clone()),
+        Some("rooftopdis@7e8e9777") => RefRoot::Dir(dir.clone()),
         _ => RefRoot::Bad("unexpected".into()),
     });
     assert_eq!(skipped, 0);
@@ -1108,7 +1112,7 @@ fn refs_in_a_pinned_download_are_read_from_its_root() {
             .any(|p| p.message.contains("doesn't contain `anything`")),
         "{p:?}"
     );
-    std::fs::write(dir.join("SMBDIS.ASM"), "anything at all\n").unwrap();
+    std::fs::write(dir.join("ROOFTOP.ASM"), "anything at all\n").unwrap();
     let (p, _) = check_refs_in(&m, |_, _| RefRoot::Dir(dir.clone()));
     assert_eq!(p, Vec::new());
     let (p, _) = check_refs_in(&m, |_, _| RefRoot::Bad("no such download".into()));
@@ -2306,31 +2310,13 @@ fn no_extension_reuses_another_extensions_names() {
 }
 
 #[test]
-fn a_renamed_map_format_reads_by_its_old_name_and_its_new() {
-    use crate::model::{AssetKind, MAP_FORMAT_ALIASES, map_format_name};
-    let kinds = [
-        AssetKind::LevelObjects,
-        AssetKind::SpawnObjects,
-        AssetKind::Songs,
-        AssetKind::SoundEffects,
-    ];
-    for (old, new) in MAP_FORMAT_ALIASES {
-        assert_eq!(map_format_name(old), *new);
-        assert_eq!(map_format_name(new), *new);
-        for k in kinds {
-            assert_eq!(k.takes(old), k.takes(new), "{old} {new}");
-        }
-    }
-    assert!(AssetKind::LevelObjects.takes("smb-area-objects"));
+fn a_map_format_lifts_into_its_kinds_of_slot_by_its_name() {
+    use crate::model::AssetKind;
     assert!(AssetKind::LevelObjects.takes("nes-area-objects-v1"));
-    assert!(AssetKind::SpawnObjects.takes("mm2-spawns"));
     assert!(AssetKind::SpawnObjects.takes("nes-spawn-objects-v3"));
-    assert!(AssetKind::Songs.takes("smb-music"));
     assert!(AssetKind::Songs.takes("nes-music-v1"));
-    assert!(!AssetKind::Songs.takes("smb-area-objects"));
-    assert_eq!(map_format_name("chr-2bpp"), "chr-2bpp");
-    // No new name is any game's.
-    for (_, new) in MAP_FORMAT_ALIASES {
-        assert!(new.starts_with("nes-"), "{new}");
-    }
+    assert!(AssetKind::SoundEffects.takes("nes-music-v1"));
+    assert!(!AssetKind::Songs.takes("nes-area-objects-v1"));
+    // A name the format doesn't have lifts into no slot.
+    assert!(!AssetKind::LevelObjects.takes("rooftop-area-objects"));
 }

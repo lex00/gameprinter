@@ -17,7 +17,7 @@ A Rust workspace (toolchain 1.99.1) of 38 crates, 4 hook crates and one vendored
 | Hooks | `gp-exts` links every game's hook crate into gp. Donkey Kong's is `templates/donkey-kong-oe/ext` (11,300 lines, 17 hooks) |
 | Games | 11 template folders. Each has model, mapping, clips, evidence, kits, themes, and hooks for some |
 | Public page | Static files built by `scripts/web/build-page.sh`, deployed by `scripts/web/deploy.sh` with wrangler 4.157.0 to the Worker `rivet-rodeo`. 268 files, 13.0 MB. `gp_web.wasm` is 3,594,830 bytes and `gp-web-lift.wasm` 3,875,990 |
-| Checks | `just check` (about 40 steps), `just check-cycle`, `just check-release`, `just check-roms`. The page has `scripts/web/release-check.sh` |
+| Checks | `just check` (about 40 steps), `just check-cycle`, `just check-release`; a game's checks against its ROM are the games repo's (`just check-game` in a game's folder). The page has `scripts/web/release-check.sh` |
 | Merge gate and agents | `.githooks/merge-gate` needs a pass record from `scripts/merge-check.sh`. `gp model gate` lands template patches in a gate home (`$GP_HOME/gate`). Workers use `gp worker env`. The gate publishes `$GP_HOME/bin/gp` |
 | Hosting | No git remote and no hosted CI today. Every check runs on this machine |
 

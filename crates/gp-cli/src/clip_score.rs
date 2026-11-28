@@ -353,13 +353,8 @@ fn log_cmd(
     rom: Option<&Path>,
 ) -> Result<Outcome> {
     let session = spec.contains(':') || corpus_clip(game, spec).is_err();
-    let (log, start, name) = if session && crate::clip_session::is_session_spec(spec) {
-        let name = crate::clip_session::game_name(game)?;
-        let mut clips = crate::clip_session::clips(paths, &name, spec)?;
-        if !spec.contains(':') || clips.len() != 1 {
-            bail!("a clip is SESSION:N or a corpus clip's ID, not {spec}");
-        }
-        let c = clips.remove(0);
+    let (log, start, name) = if let Some(c) = crate::clip_session::one(paths, game, spec, !session)?
+    {
         // Checks the start against the clip's state hash.
         c.check_start(&paths.home, &rom_of(paths, game, rom)?)?;
         let (log, start) = c.log(&paths.home)?;

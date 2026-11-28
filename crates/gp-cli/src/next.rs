@@ -774,6 +774,32 @@ fn set_up_step(f: &Facts) -> Step {
     .cli(p.line(&ng.rel))
 }
 
+/// How a step of the tool's own lands: the fix made in a gameprinter
+/// worktree, through the tool gate.
+pub(crate) const TOOL_FIX_CLI: &str =
+    "gp tool gate --patch FILE -m MSG, with the fix made in a worktree of gameprinter";
+
+/// The step when gp serve's background scoring stopped with an error (it
+/// couldn't open the model): a game's model lands only through the model
+/// gate, which opens it to score the clips, and one that plays wrong shows
+/// as a clip's score, so the fault is in gp's own work (the server's
+/// build, the loader) and the step is the tool's own. It
+/// touches `tools`, which one such step holds at a time (the same error on
+/// two games is most often one cause), and runs the tool gate.
+fn tool_fault_step(error: &str) -> Step {
+    step(
+        Who::Agent,
+        format!(
+            "The tools stopped scoring: {}. Your agent can find why in Game Printer itself and fix it there.",
+            cut(error, 120)
+        ),
+    )
+    .page("REFINE")
+    .cli(TOOL_FIX_CLI)
+    .act(Act::Tab { tab: "refine" })
+    .touch("tools")
+}
+
 /// The tools' quest-log step: free, so the page's LET THE TOOLS TRY starts
 /// it (serve/jobs.rs, `triage`) and the agent may start it unasked.
 fn triage_step(g: &str, what: &str) -> Step {
@@ -872,17 +898,7 @@ pub(crate) fn answer(f: &Facts) -> Answer {
         ));
     }
     if let Some(e) = &f.background.error {
-        steps.push(
-            step(
-                Who::Agent,
-                format!(
-                    "The tools stopped scoring: {}. Your agent can look at why.",
-                    cut(e, 120)
-                ),
-            )
-            .page("REFINE")
-            .act(Act::Tab { tab: "refine" }),
-        );
+        steps.push(tool_fault_step(e));
     }
     // 2. A step that costs money or publishes: the agent's asks first.
     for a in &f.asks {
@@ -1952,6 +1968,8 @@ pub(crate) fn gather(
         let l = &read_json(&rdir.join("background").join("state.json"))["live"];
         Background {
             on: l["on"] == json!(true) && l["pid"].as_u64().is_some_and(alive),
+            // The error that stopped it, kept until the queue starts again.
+            error: l["error"].as_str().map(str::to_owned),
             ..Background::default()
         }
     });

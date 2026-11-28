@@ -51,7 +51,15 @@
       <!-- A gate card's LOOK AT IT plays the card's change (the model as
            its patch would leave it); this goes between it and main's. -->
       <button type="button" id="clip-before" hidden title="The model on main, before this change">BEFORE</button>
+      <!-- A corpus clip's sprite runs (api/screen/sprite-runs): the frames
+           where the original shows a sprite the model doesn't, or the model
+           one the original doesn't. -->
+      <button type="button" id="clip-runs" hidden title="The frames where the original and the model differ on sprites, each a click from its first frame">SPRITE RUNS</button>
       <button type="button" id="clip-live" title="Esc: back to playing the game">BACK TO PLAYING</button>
+    </div>
+    <div id="sprite-runs" hidden>
+      <p id="sprite-runs-says"></p>
+      <ol id="sprite-runs-list"></ol>
     </div>
     <p id="line" aria-live="polite"></p>
     <p id="keys"></p>

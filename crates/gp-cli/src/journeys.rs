@@ -908,6 +908,16 @@ fn start(action: &'static str) -> Act {
     Act::Start { action }
 }
 
+/// What the agent runs to make a theme's pictures (the theme-generation
+/// skill's commands) and check them: every write is named, so a call
+/// citing the step isn't refused with steps_required on (docs/loop.md).
+/// `theme generate` spends money and still asks the person first.
+fn make_pictures_cli(dir: &impl std::fmt::Display, g: &str) -> String {
+    format!(
+        "the theme-generation skill: gp theme kit {g}, gp theme look sheet {g}, gp theme look where {g}, gp theme sheet {g}, gp theme generate, gp theme look cut, gp theme fit {g}, then gp theme look check {dir} --game {g}"
+    )
+}
+
 fn theme_answer(f: &ThemeFacts) -> (u8, String, Vec<Step>) {
     let n = theme_stage(f);
     let t = &f.title;
@@ -965,9 +975,7 @@ fn theme_answer(f: &ThemeFacts) -> (u8, String, Vec<Step>) {
                         "Your agent can make the pictures in your style. Making them with an image model costs money, so it asks you first on a card. Or bring your own pictures: put them in {dir}/theme/art and tell your agent."
                     ),
                 )
-                .cli(format!(
-                    "the theme-generation skill, then gp theme look check {dir} --game {g}"
-                )),
+                .cli(make_pictures_cli(&dir, &g)),
             );
         }
         3 => match f.check.as_ref().filter(|c| c.at_ms >= f.changed_ms) {
@@ -979,7 +987,7 @@ fn theme_answer(f: &ThemeFacts) -> (u8, String, Vec<Step>) {
                         n_of(c.problems, "picture", "pictures")
                     ),
                 )
-                .cli(format!("gp theme look check {dir} --game {g}")),
+                .cli(make_pictures_cli(&dir, &g)),
             ),
             Some(c) => steps.push(
                 step(
@@ -989,7 +997,7 @@ fn theme_answer(f: &ThemeFacts) -> (u8, String, Vec<Step>) {
                         c.first.as_deref().unwrap_or("see the list on this page")
                     ),
                 )
-                .cli(format!("gp theme look check {dir} --game {g}")),
+                .cli(make_pictures_cli(&dir, &g)),
             ),
             None => steps.push(
                 step(
@@ -1024,7 +1032,7 @@ fn theme_answer(f: &ThemeFacts) -> (u8, String, Vec<Step>) {
                     "Your agent can propose a new picture for anything the person wants changed.",
                 )
                 .cli(format!(
-                    "gp theme picture propose {dir} --game {g} --picture ART --png FILE --why WORDS"
+                    "gp theme generate, gp theme look cut or gp theme fit {g} for the new picture, then gp theme picture propose {dir} --game {g} --picture ART --png FILE --why WORDS"
                 )),
             );
         }
@@ -1113,7 +1121,7 @@ fn new_answer(f: &NewFacts) -> (u8, String, Vec<Step>) {
                             said.lines().last().unwrap_or("").trim()
                         ),
                     )
-                    .cli(format!("gp level show {name}, then gp level edit {name} --op ...")),
+                    .cli(format!("gp level show {name}, then gp level edit {name} --op ... (or gp level undo {name}), then gp level verify {name}")),
                 ),
                 v if f.edits > 0
                     && f.no_check.is_none()

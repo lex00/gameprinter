@@ -181,7 +181,7 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let mut r = Resolver::new(home.path());
         assert!(matches!(
-            r.root(Some("smbdis@7e8e9777"), "SMBDIS.ASM", Path::new("/repo")),
+            r.root(Some("rooftopdis@7e8e9777"), "ROOFTOP.ASM", Path::new("/repo")),
             RefRoot::Bad(m) if m.contains("no pinned download")
         ));
     }

@@ -19,7 +19,7 @@ gp gaps all mosshop --recording ab5050be --listing target/mosshop/mosshop.dbg
 | `--frames` | Frames to read, as for `gp track` (default all). A run over part of the recording records no metrics and writes its reports under `partial/ID-FIRST-LAST/` in the reports folder, so the scorecard, which reads the latest `gaps.<template>.*` metrics and the reports at the folder's top, never takes a part's counts for the game's |
 | `--focus` | A window to explain (repeat for more): what the detectors found in those frames, with the routines and RAM rare elsewhere, written as `focus.json` |
 | `--labels` | The game's labels file ([labels](formats/labels.md)), instead of `truth/labels.toml` in the template's folder (the names its truth set uses), `labels.toml` there, this repo's `games/<source>/labels.toml` (Moss Hop's), or the one beside the games checkout's roms.toml that lists the source |
-| `--listing` | An ld65 debug file. Its constants name sound effects; its code labels name routines for a board with 32KB of PRG or less when the labels file has none |
+| `--listing` | An ld65 debug file. Its constants name sound effects; its code labels name routines for a board with 32KB of PRG or less when the labels file has none. Without it, a `.dbg` or `.lst` beside the labels file, else the one the game's own checks.toml names: `[gaps] listing = "PATH"`, from the game's folder, or from the home as `$GP_HOME/work/...` |
 | `--dir` | The folder holding the templates (default `templates/`, then the games checkout) |
 | `--truth` | A labelled reference set to score against, instead of the game's own `truth/gaps.toml` or the template's in `crates/gp-gaps/truth/` |
 | `--oam-lag` | Frames the sprite table lags RAM, as for `gp track` (default 1) |

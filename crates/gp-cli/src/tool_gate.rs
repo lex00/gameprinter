@@ -1725,6 +1725,77 @@ mod tests {
         assert!(!docs_only("justfile"));
     }
 
+    /// The tool's recipes and check scripts read no game's own files (row
+    /// game-checks-out-of-tools): the checks that ran on each game of the
+    /// games checkout live in the games repo, calling an installed gp. Fails
+    /// while the justfile or scripts/check names one of those files, defines
+    /// one of the recipes that read them, or a doc tells you to run one.
+    #[test]
+    fn the_tools_checks_read_no_games_files() {
+        let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let read = |p: &Path| std::fs::read_to_string(p).unwrap_or_default();
+        let mut left = Vec::new();
+        let mut scripts = vec![repo.join("justfile")];
+        if let Ok(dir) = std::fs::read_dir(repo.join("scripts/check")) {
+            scripts.extend(dir.flatten().map(|e| e.path()));
+        }
+        for f in &scripts {
+            let text = read(f).to_lowercase();
+            for file in ["corpus.toml", "mame-captures", "checks.toml", "bench.toml"] {
+                if text.contains(file) {
+                    left.push(format!("{} names {file}", f.display()));
+                }
+            }
+        }
+        let gone = [
+            "check-all",
+            "play-web-arcade",
+            "check-roms",
+            "check-profiles-roms",
+            "check-clip-agree-roms",
+            "_game-module",
+            "_rom-tier",
+            "web-parity-arcade",
+        ];
+        let justfile = read(&repo.join("justfile"));
+        for line in justfile.lines() {
+            for r in gone {
+                if line
+                    .strip_prefix(r)
+                    .is_some_and(|rest| rest.starts_with([' ', ':']))
+                {
+                    left.push(format!("the justfile defines {r}"));
+                }
+            }
+        }
+        let mut docs = vec![repo.join("README.md"), repo.join("ARCHITECTURE.md")];
+        let mut dirs = vec![repo.join("docs")];
+        while let Some(d) = dirs.pop() {
+            for e in std::fs::read_dir(&d).into_iter().flatten().flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    dirs.push(p);
+                } else if p.extension().is_some_and(|x| x == "md") {
+                    docs.push(p);
+                }
+            }
+        }
+        for doc in &docs {
+            let text = read(doc);
+            for r in gone {
+                let said = format!("just {r}");
+                let named = text.match_indices(&said).any(|(i, _)| {
+                    !text[i + said.len()..]
+                        .starts_with(|c: char| c.is_ascii_alphanumeric() || c == '-')
+                });
+                if named {
+                    left.push(format!("{} names {said}", doc.display()));
+                }
+            }
+        }
+        assert!(left.is_empty(), "left in the tool:\n{}", left.join("\n"));
+    }
+
     #[test]
     fn the_failed_tests_are_read_from_cargos_output() {
         let out = "running 3 tests\ntest a::b ... ok\ntest serve::agent::tests::slow ... FAILED\ntest c ... FAILED\n\nfailures:\n";
@@ -1962,6 +2033,46 @@ date +%s > '{times}/just.end'
         );
     }
 
+    /// The real name check (scripts/check/no-game-names.sh) fails on an old
+    /// game's disassembly name and on its hooks' prefix, which aren't a
+    /// ported game's folder, and passes a file with neither (row
+    /// old-disassembly-names-in-tests). The words are built here from parts,
+    /// so this file doesn't trip the check itself.
+    #[test]
+    fn the_name_check_finds_old_disassembly_names() {
+        let old = concat!("sm", "b");
+        let check = |body: &str| -> (i32, String) {
+            let dir = tempfile::tempdir().unwrap();
+            let at = dir.path().join("scripts/check/no-game-names.sh");
+            script(&at, include_str!("../../../scripts/check/no-game-names.sh"));
+            fs::create_dir_all(dir.path().join("crates/gp-x/src")).unwrap();
+            fs::write(dir.path().join("crates/gp-x/src/lib.rs"), body).unwrap();
+            git_in(dir.path(), &["init", "-q", "-b", "main"]);
+            let o = Command::new("bash")
+                .arg(&at)
+                .env_remove("GP_GAMES_DIR")
+                .output()
+                .unwrap();
+            let text = format!(
+                "{}{}",
+                String::from_utf8_lossy(&o.stdout),
+                String::from_utf8_lossy(&o.stderr)
+            );
+            (o.status.code().unwrap_or(-1), text)
+        };
+        for body in [
+            format!("// Cited as {old}dis@7e8e9777.\n"),
+            format!("// At {}DIS.ASM:12.\n", old.to_uppercase()),
+            format!("// The hook {old}_crow keeps it.\n"),
+        ] {
+            let (rc, text) = check(&body);
+            assert_eq!(rc, 1, "{body}: {text}");
+            assert!(text.contains("crates/gp-x/src/lib.rs:1:"), "{text}");
+        }
+        let (rc, text) = check("// Cited as rooftopdis@7e8e9777, hook rooftop_crow.\n");
+        assert_eq!(rc, 0, "{text}");
+    }
+
     fn dry_run(c: &Cx, patch: &Patch) -> Outcome {
         gate(c, patch, true)
     }
@@ -2014,6 +2125,53 @@ date +%s > '{times}/just.end'
         let at = |s: &str| steps.iter().position(|n| n == s).unwrap();
         assert!(at(r#""names""#) < at(r#""fmt""#), "{steps:?}");
         assert!(at(r#""fmt""#) < at(r#""build""#), "{steps:?}");
+    }
+
+    /// The name check knows the games the tools were first written for
+    /// (row no-old-game-names): it passes on this repo, and fails on a tree
+    /// whose crates/ names one of them, the short name as a word of its
+    /// own, but not on a longer word that only starts with its letters.
+    /// The names are put together here so this file names none.
+    #[test]
+    fn no_old_game_names_in_crates() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let run = |tree: &Path| {
+            std::process::Command::new("bash")
+                .arg(tree.join("scripts/check/no-game-names.sh"))
+                .env_remove("GP_GAMES_DIR")
+                .output()
+                .unwrap()
+        };
+        let o = run(&root);
+        assert!(
+            o.status.success(),
+            "the repo names an old game:\n{}{}",
+            String::from_utf8_lossy(&o.stdout),
+            String::from_utf8_lossy(&o.stderr)
+        );
+        let check = fs::read_to_string(root.join("scripts/check/no-game-names.sh")).unwrap();
+        for (line, named) in [
+            (concat!("// as sm", "b1 did it"), true),
+            (concat!("// the SM", "B way"), true),
+            (concat!("// a sm", "b-music list"), true),
+            (concat!("// m", "m2 spawns"), true),
+            (concat!("// the sm", "bdis labels"), true),
+            ("// as rooftop did it", false),
+        ] {
+            let t = tempfile::tempdir().unwrap();
+            fs::create_dir_all(t.path().join("scripts/check")).unwrap();
+            fs::create_dir_all(t.path().join("crates/gp-x/src")).unwrap();
+            fs::write(t.path().join("scripts/check/no-game-names.sh"), &check).unwrap();
+            fs::write(t.path().join("crates/gp-x/src/lib.rs"), format!("{line}\n")).unwrap();
+            let o = run(t.path());
+            assert_eq!(
+                o.status.code(),
+                Some(if named { 1 } else { 0 }),
+                "{line}:\n{}{}",
+                String::from_utf8_lossy(&o.stdout),
+                String::from_utf8_lossy(&o.stderr)
+            );
+        }
     }
 
     /// Before the gate touches its tree it checks it can land: git's

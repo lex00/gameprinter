@@ -158,18 +158,10 @@ mod tests {
         toml::from_str(&text).unwrap()
     }
 
-    /// The games checkout's game folders and gameprinter's own templates,
-    /// with their models and slots, the page's game first.
+    /// gameprinter's own templates, with their models and slots.
     fn games() -> Vec<(PathBuf, Model, ModelSlots)> {
-        let mut dirs: Vec<PathBuf> = crate::theme_template::test_page_game()
+        crate::theme_template::test_game_dirs()
             .into_iter()
-            .collect();
-        for d in crate::theme_template::test_game_dirs() {
-            if !dirs.contains(&d) {
-                dirs.push(d);
-            }
-        }
-        dirs.into_iter()
             .filter_map(|d| {
                 let (m, _) = crate::theme::read_model(&d).ok()?;
                 let s = slots_of(&d, &m);

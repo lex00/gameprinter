@@ -9,7 +9,9 @@
 //!
 //! The release's build job can't run this on the bare archive: its runner
 //! has no ROM, so no game to gate (docs/release.md). Needs cc65, like
-//! just check.
+//! just check: the game's code and pictures are assembled. Its level is
+//! authored data (templates/mosshop/level-data), and the built ROM's lift
+//! is held to it here.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -117,6 +119,32 @@ fn a_one_line_model_patch_to_moss_hop_passes_the_model_gate_from_a_fresh_home() 
     std::fs::create_dir_all(r.roms.join("nes")).unwrap();
     let rom = r.roms.join("nes/mosshop.nes");
     std::fs::copy(root.join("mosshop.nes"), &rom).unwrap();
+
+    // The level is authored data (templates/mosshop/level-data, which the
+    // build assembled the ROM's level from and gp level reads with no
+    // build): the ROM's lift gives back those files, byte for byte.
+    let lift = root.join("lift");
+    ok(
+        r.gp(&[
+            "assets",
+            "lift",
+            rom.to_str().unwrap(),
+            "--map",
+            repo().join("assets/mosshop.toml").to_str().unwrap(),
+            "-o",
+            lift.to_str().unwrap(),
+        ]),
+        "gp assets lift",
+    );
+    for f in ["level.toml", "metatiles.toml", "slugs.toml"] {
+        let authored =
+            std::fs::read_to_string(repo().join("templates/mosshop/level-data").join(f)).unwrap();
+        let lifted = std::fs::read_to_string(lift.join(f)).unwrap();
+        assert_eq!(
+            lifted, authored,
+            "the built ROM's {f} isn't templates/mosshop/level-data/{f}"
+        );
+    }
 
     // The games repo: its hook first, as every commit runs it.
     r.git(&["init", "-q", "-b", "main"]);

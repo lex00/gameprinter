@@ -4,8 +4,9 @@
 #   scripts/web/pages.sh PAGE_DIR OUT
 #
 # PAGE_DIR is a page a release check passed on as it is now (the same
-# digest record deploy.sh needs: $GP_HOME/work/page-release/passed/DIGEST;
-# release-check.sh --no-roms makes one without ROMs). OUT is the folder of
+# digest record the games repo's page/deploy.sh needs:
+# $GP_HOME/work/page-release/passed/DIGEST; its page/release-check.sh
+# --no-roms makes one without ROMs). OUT is the folder of
 # the repo that will publish it, made if it isn't there; its site/ must be
 # missing or empty. OUT gets:
 #   site/                         the page's files, with p.html (a copy of
@@ -32,7 +33,8 @@
 # a <meta> covers what the page loads, but not frame-ancestors (any site
 # may frame it), and Pages caches each file for ten minutes, so for a while
 # after a push a visitor can get a new page.js beside an old file. Use
-# Cloudflare (deploy.sh) for a page that plays games with modules.
+# Cloudflare (the games repo's page/deploy.sh) for a page that plays games
+# with modules.
 #
 # Exit codes: 0 written, 1 no release check passed on PAGE_DIR as it is
 # now, 2 couldn't run.
@@ -51,7 +53,7 @@ for f in index.html page.json _headers game/module-host.js; do
 done
 digest="$(python3 -I "$repo/scripts/web/page-digest.py" "$page")" || exit 2
 if [ ! -f "$passed/$digest" ]; then
-  echo "pages: no release check passed on this page as it is now (digest $digest; passes are recorded in $passed). Run scripts/web/release-check.sh (--no-roms without ROMs); nothing written." >&2
+  echo "pages: no release check passed on this page as it is now (digest $digest; passes are recorded in $passed). Run the games repo's just page-release (--no-roms without ROMs); nothing written." >&2
   exit 1
 fi
 site="$out/site"
@@ -134,5 +136,5 @@ echo "  3. in the repo's Settings, Pages, set Source to \"GitHub Actions\"; the 
 echo "  4. the page is then at https://OWNER.github.io/REPO/ (and /p?g=GAME for a game by its name)"
 echo
 echo "On Pages the page has no isolation headers, so a game with its own module (one with hooks, as every"
-echo "ported game has) is refused; only a game with no hooks plays. Cloudflare (scripts/web/deploy.sh)"
+echo "ported game has) is refused; only a game with no hooks plays. Cloudflare (the games repo's just page-deploy)"
 echo "serves the headers the page needs."

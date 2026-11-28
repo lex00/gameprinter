@@ -96,35 +96,3 @@ pub(crate) fn add_trace(trace: &[Trace], map: &mut CodeMap) {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// With a real romset ($GP_GAME_DIR's first oracle set): attract mode runs main-CPU code and
-    /// branches both ways, the sound CPU's features land in the extra
-    /// range, and a covered frame ends where an uncovered one does.
-    #[test]
-    fn an_arcade_frame_covers_both_cpus_and_changes_nothing() {
-        let (_, zip) = match gp_arcade::romset::test_oracle_set_path() {
-            Ok(p) => p,
-            Err(e) => {
-                eprintln!("skipped: {e}");
-                return;
-            }
-        };
-        let rom = std::fs::read(zip).unwrap();
-        let mut a = OriginalRuntime::of_rom(&rom).unwrap();
-        let mut b = a.clone();
-        let mut map = CodeMap::new();
-        for _ in 0..60 {
-            step_covered(&mut a, &InputFrame::default(), &mut map).unwrap();
-            gp_runtime::Runtime::step(&mut b, &[InputFrame::default()]).unwrap();
-        }
-        assert_eq!(a.state_hex().unwrap(), b.state_hex().unwrap());
-        assert!(map.count_in(EXEC..TAKEN) > 100, "{map:?}");
-        assert!(map.count_in(TAKEN..FELL) > 0);
-        assert!(map.count_in(FELL..gp_nes::coverage::EXTRA) > 0);
-        assert!(map.count_in(gp_nes::coverage::EXTRA..gp_nes::coverage::SIZE) > 0);
-    }
-}

@@ -513,21 +513,15 @@ mod tests {
         assert!(rt.load_state(&[]).is_err());
     }
 
-    /// `ay_events` turns the AY write events on; with a real romset
-    /// (romset::test_romset), the sound board's start-up writes come out
-    /// as events. Skipped without one.
+    /// `ay_events` turns the AY write events on; with a made-up set whose
+    /// sound program writes the AYs, the sound board's writes come out as
+    /// events.
     #[test]
     fn ay_events_carry_the_sound_cpus_writes() {
         let mut rt = ArcadeRuntime::load(&looping());
         assert!(rt.set("ay_events", Value::Flag(true)).is_ok());
         assert!(rt.set("volume", Value::Int(3)).is_err());
-        let rom = match crate::romset::test_romset() {
-            Ok(r) => r,
-            Err(e) => {
-                eprintln!("skipped: {e}");
-                return;
-            }
-        };
+        let rom = crate::testrom::sounding();
         let mut rt = ArcadeRuntime::load(&rom);
         rt.set("ay_events", Value::Flag(true)).unwrap();
         let ev = rt.step(&vec![InputFrame::default(); 30]).unwrap();

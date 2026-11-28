@@ -450,7 +450,7 @@ pub(crate) fn code_cited(model: &Model, path: &str) -> Option<Vec<String>> {
 }
 
 /// A ref to a line of the game's code, in words: `games/mosshop/mosshop.s:31`,
-/// `SMBDIS.ASM:6033 (smbdis@7e8e9777)`.
+/// `ROOFTOP.ASM:6033 (rooftopdis@7e8e9777)`.
 fn code_ref(r: &gp_model::model::Ref) -> Option<String> {
     let line = r.at.rsplit_once(':').is_some_and(|(f, n)| {
         f.contains('.') && !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit())

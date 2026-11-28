@@ -232,6 +232,104 @@ fn a_new_game_walks_its_steps() {
     );
 }
 
+/// Each journey's agent step names the gp commands its work writes with,
+/// so with steps_required on they run citing it and are refused citing
+/// another step: a theme's pictures made (the theme-generation skill's
+/// commands, and the generate that asks first), its problems fixed, a
+/// picture proposed; a new game's pictures and levels made, its stage
+/// fixed or put back.
+#[test]
+fn each_journeys_agent_steps_name_the_commands_their_writes_run() {
+    let make = [
+        "theme kit",
+        "theme look sheet",
+        "theme look where",
+        "theme sheet",
+        "theme generate",
+        "theme look cut",
+        "theme fit",
+        "theme look check",
+    ];
+    let mut no_pictures = theme();
+    no_pictures.pictures = 0;
+    let mut problems = theme();
+    problems.check = checked(3, 1500);
+    let mut to_draw = theme();
+    to_draw.check = checked(2, 1500).map(|c| Check {
+        all_to_draw: true,
+        ..c
+    });
+    let mut seen = theme();
+    seen.check = checked(0, 1500);
+    seen.played_ms = Some(1600);
+    let mut no_assets = new_game();
+    no_assets.assets = false;
+    let mut failed = new_game();
+    failed.edits = 1;
+    failed.edited_ms = 3000;
+    failed.changed_ms = 3000;
+    failed.built_ms = Some(4000);
+    failed.verify = Some((3500, false, "it could NOT be finished".into()));
+    let cases: Vec<(Facts, &str, Vec<&str>)> = vec![
+        (Facts::Theme(no_pictures), "T2", make.to_vec()),
+        (Facts::Theme(problems), "T3", make.to_vec()),
+        (Facts::Theme(to_draw), "T3", make.to_vec()),
+        (
+            Facts::Theme(seen),
+            "T5",
+            vec![
+                "theme generate",
+                "theme look cut",
+                "theme fit",
+                "theme picture propose",
+            ],
+        ),
+        (
+            Facts::New(no_assets),
+            "N3",
+            vec!["template build", "assets lift"],
+        ),
+        (
+            Facts::New(failed),
+            "N4",
+            vec!["level show", "level edit", "level undo", "level verify"],
+        ),
+    ];
+    for (f, stage, wants) in cases {
+        let a = of(f);
+        assert_eq!(a.stage.id, stage);
+        let s = std::iter::once(&a.next)
+            .chain(&a.also)
+            .find(|s| s.who == Who::Agent)
+            .unwrap_or_else(|| panic!("{stage}: no agent step"));
+        for w in &wants {
+            assert!(
+                s.commands.iter().any(|c| c == w),
+                "{stage}: {w} not in {:?}",
+                s.commands
+            );
+        }
+        let open: Vec<Value> = a.open.iter().map(|o| crate::steps::listed(&a, o)).collect();
+        let mine = open
+            .iter()
+            .find(|o| o["id"] == json!(s.id))
+            .unwrap_or_else(|| panic!("{stage}: the agent's step isn't open"));
+        // A step of the person's on another copy, which runs none of them.
+        let other = json!({"id": "s000000000000", "who": "person", "commands": []});
+        let with_other = [open.clone(), vec![other]].concat();
+        for w in &wants {
+            assert!(
+                crate::steps::step_allows(&open, mine["id"].as_str().unwrap(), w),
+                "{stage}: {w} refused citing its own step"
+            );
+            assert!(
+                !crate::steps::step_allows(&with_other, "s000000000000", w),
+                "{stage}: {w} allowed citing another step"
+            );
+        }
+    }
+}
+
 #[test]
 fn a_picture_waiting_on_the_person_comes_first() {
     let mut f = theme();

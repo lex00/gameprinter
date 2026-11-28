@@ -122,7 +122,7 @@
           ]
         },
         "id": {
-          "description": "Stable ID used in recordings and templates, e.g. `smb1-ntsc-prg0`.",
+          "description": "Stable ID used in recordings and templates, e.g. `rooftop-ntsc-prg0`.",
           "type": "string"
         },
         "ines_sha1": {

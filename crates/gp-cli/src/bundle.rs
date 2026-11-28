@@ -176,4 +176,100 @@ mod tests {
         assert!(!has_kit());
         assert!(Carried::own().files.is_empty());
     }
+
+    /// The row page-deploy-out-of-tools: the public page's release check
+    /// with ROMs and its deploy live in the games repo, not here. The tools
+    /// keep build-page.sh, the page check and pages.sh; no wrangler config,
+    /// no deploy script and no recipe that reads a ROM to check the page.
+    /// A failure lists what is left.
+    #[test]
+    fn the_page_deploy_is_out_of_the_tools() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let mut left = Vec::new();
+        for f in [
+            "scripts/web/release-check.sh",
+            "scripts/web/deploy.sh",
+            "scripts/web/deploy-old.sh",
+            "scripts/web/test-deploy.sh",
+            "scripts/web/wrangler-upload.py",
+            "scripts/web/deploy",
+            "scripts/web/deploy-old",
+        ] {
+            if root.join(f).exists() {
+                left.push(format!("{f} is still in the repo"));
+            }
+        }
+        fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
+            let Ok(rd) = fs::read_dir(dir) else { return };
+            for e in rd.flatten() {
+                let p = e.path();
+                let name = e.file_name();
+                let name = name.to_string_lossy();
+                if p.is_dir() {
+                    if !["target", "node_modules", ".git"].contains(&name.as_ref()) {
+                        walk(&p, out);
+                    }
+                } else {
+                    out.push(p);
+                }
+            }
+        }
+        let mut files = Vec::new();
+        for d in [
+            "scripts", "crates", "mechanic", "plugin", "docs", "site/src",
+        ] {
+            walk(&root.join(d), &mut files);
+        }
+        for f in ["README.md", "ARCHITECTURE.md", "justfile"] {
+            files.push(root.join(f));
+        }
+        let at = |f: &Path| f.strip_prefix(&root).unwrap_or(f).display().to_string();
+        for f in &files {
+            if f.file_name().is_some_and(|n| n == "wrangler.toml") {
+                left.push(format!("{} is a wrangler config", at(f)));
+            }
+        }
+        let justfile = fs::read_to_string(root.join("justfile")).unwrap();
+        for line in justfile.lines() {
+            if line.starts_with("web-page-release") || line.starts_with("web-page-deploy") {
+                left.push(format!("the justfile has the recipe {line}"));
+            }
+        }
+        let names = fs::read_to_string(root.join("scripts/check/no-game-names.sh")).unwrap();
+        if names.contains("deploy-old") {
+            left.push("scripts/check/no-game-names.sh still leaves out deploy-old".into());
+        }
+        // This file names them to look for them; the changelog and
+        // docs/evaluation.md (the older repo as it was on 2026-11-08) are
+        // records of what was.
+        let own = root.join("crates/gp-cli/src/bundle.rs");
+        for f in &files {
+            if f.ends_with("CHANGELOG.md") || f.ends_with("docs/evaluation.md") || *f == own {
+                continue;
+            }
+            let Ok(text) = fs::read_to_string(f) else {
+                continue;
+            };
+            for name in [
+                "scripts/web/release-check.sh",
+                "scripts/web/deploy.sh",
+                "scripts/web/deploy-old.sh",
+                "scripts/web/test-deploy.sh",
+                "scripts/web/wrangler-upload.py",
+                "scripts/web/deploy/",
+                "scripts/web/deploy-old/",
+                "just web-page-release",
+                "just web-page-deploy",
+            ] {
+                if text.contains(name) {
+                    left.push(format!("{} names {name}", at(f)));
+                }
+            }
+        }
+        assert!(
+            left.is_empty(),
+            "the page's deploy is still in the tools:\n{}",
+            left.join("\n")
+        );
+    }
 }

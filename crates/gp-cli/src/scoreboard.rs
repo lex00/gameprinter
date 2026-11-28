@@ -1488,9 +1488,9 @@ pub(crate) fn close_rows(home: &Path, games: &Path, game: &str) -> Vec<String> {
         return Vec::new();
     };
     let f = home.join("mechanics").join(game).join("queue.json");
-    let mut q = crate::mechanic::session::read_queue(&f);
+    crate::mechanic::session::update_queue(&f, |q| {
     let mut changed = Vec::new();
-    for r in &mut q {
+    for r in q.iter_mut() {
         if r["status"] == json!("done") {
             continue;
         }
@@ -1537,10 +1537,9 @@ pub(crate) fn close_rows(home: &Path, games: &Path, game: &str) -> Vec<String> {
         }
         changed.push(r["mechanic"].as_str().unwrap_or("").to_owned());
     }
-    if !changed.is_empty() {
-        let _ = crate::mechanic::session::write_queue(&f, &q);
-    }
-    changed
+    Ok(changed)
+    })
+    .unwrap_or_default()
 }
 
 /// How much of a line's frames its background and its sprites each match
@@ -1576,8 +1575,8 @@ pub(crate) fn ask_looks(home: &Path, games: &Path, game: &str) -> Vec<String> {
         return Vec::new();
     };
     let f = home.join("mechanics").join(game).join("queue.json");
-    let mut q = crate::mechanic::session::read_queue(&f);
     let looks = crate::approved::read(&games.join(game)).unwrap_or_default();
+    crate::mechanic::session::update_queue(&f, |q| {
     let mut added = Vec::new();
     for l in b["lines"].as_array().into_iter().flatten() {
         if l["own_draws"] == json!(true)
@@ -1643,10 +1642,9 @@ pub(crate) fn ask_looks(home: &Path, games: &Path, game: &str) -> Vec<String> {
         }));
         added.push(row);
     }
-    if !added.is_empty() {
-        let _ = crate::mechanic::session::write_queue(&f, &q);
-    }
-    added
+    Ok(added)
+    })
+    .unwrap_or_default()
 }
 
 #[cfg(test)]

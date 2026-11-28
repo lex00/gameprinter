@@ -166,7 +166,7 @@ There are two pages.
 
 | Page | Built from | Serves |
 |---|---|---|
-| The public page | `scripts/web/build-page.sh` with a game's package from the games checkout, deployed to Cloudflare Workers by `scripts/web/deploy.sh` after the release check ([docs/web.md](docs/web.md)) | Donkey Kong played from a ROM the visitor loads, its files and module from the registry, the clay theme `lex00/turnips` beside it |
+| The public page | `scripts/web/build-page.sh` with a game's package from the games checkout, deployed to Cloudflare Workers by the games repo's `page/deploy.sh` after its release check ([docs/web.md](docs/web.md)) | Donkey Kong played from a ROM the visitor loads, its files and module from the registry, the clay theme `lex00/turnips` beside it |
 | `gp serve` | `mechanic/` and `editor/`, served at `http://127.0.0.1:7710/` ([docs/mechanic-page.md](docs/mechanic-page.md)) | A game's tabs CLIPS, REFINE, PLAY and THEMES, with the agent's log beside them |
 
 The page holds no game data. A game's module runs in a Worker (`page/module-host.js`), under the limits in [docs/modules.md](docs/modules.md).
@@ -255,6 +255,6 @@ Moss Hop, the test game the tool owns, stays in this repo: its source in `games/
 
 ## Checks and gates
 
-`just check` builds gp, assembles Moss Hop with cc65, and runs formatting, clippy, the workspace tests, the CLI.md check, the baselines, the asset round trip, the model checks, the interpreter on Moss Hop, the browser players against their native replays (`play-web`, and `play-web-arcade` on each arcade game whose romset is on the machine), the editor's tests, the mechanic page, web parity, the template check, the hook's self-test and the ROM guard's tests.
+`just check` builds gp, assembles Moss Hop with cc65, and runs formatting, clippy, the workspace tests, the CLI.md check, the baselines, the asset round trip, the model checks, the interpreter on Moss Hop, the browser players against their native replays (`play-web`, on Moss Hop; a game's arcade player is checked by the games repo's play-web-arcade recipe, run in the game's folder), the editor's tests, the mechanic page, web parity, the template check, the hook's self-test and the ROM guard's tests.
 
 Nothing lands on `main` except through a gate. `gp tool gate` builds the patched tool, runs `just check` (which holds Moss Hop, built from source with no ROM, to its baselines, the interpreter, web parity and the page's players, all through the patched gp) and the whole test suite; it then publishes the new build to `$GP_HOME/bin`. `gp model gate` does the same for a game, on its corpus. Workers each have a worktree, an output folder and a target folder of their own ([docs/workers.md](docs/workers.md)).

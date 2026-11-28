@@ -115,6 +115,48 @@ pub enum LoopCmd {
         #[arg(long)]
         agent: Option<String>,
     },
+    /// A worker's last call on a row marked for the train (its iterating
+    /// words name the train; docs/loop.md, "The train"): keeps the patch
+    /// and its message under $GP_HOME/work/loop/train/ with the row, its
+    /// repo, the tip it was made on and the time, and sets the row in line,
+    /// handed in. gp loop train gates it with the other rows' patches. A
+    /// row handed in again replaces its earlier patch.
+    HandIn {
+        /// The game whose quest log has the row ("rooftop").
+        game: String,
+        /// The row.
+        row: String,
+        /// The patch: git diff output from the worker's worktree.
+        #[arg(long)]
+        patch: std::path::PathBuf,
+        /// What it changes, as a gate's commit message says it.
+        #[arg(long, short)]
+        message: String,
+        /// A test the patch takes out of the checks on purpose (repeatable):
+        /// the train passes it to the tool gate.
+        #[arg(long = "removes-test", value_name = "NAME")]
+        removes_test: Vec<String>,
+    },
+    /// Gate the handed-in patches together (docs/loop.md, "The train"):
+    /// stacks them in the order they came on a scratch worktree of the tip
+    /// with git apply --3way, keeping both where two only added lines at
+    /// the same place, and drops any that doesn't apply or fails the name
+    /// check, its row back to next with why; then one gp tool gate for the
+    /// tools' patches and one gp model gate for each game's. A failing
+    /// stack is tried once more, then split in halves (dry runs) to find
+    /// the patch at fault, whose row goes back to next with the gate's
+    /// words while the rest land. Each landed row is set done with the
+    /// commit. One line a row. Only the person runs it.
+    Train {
+        /// Print the order, what applies and which gate would take it, and
+        /// gate nothing.
+        #[arg(long)]
+        dry_run: bool,
+        /// The gameprinter checkout the tool gate lands in (default: the one
+        /// gp was built from).
+        #[arg(long)]
+        repo: Option<std::path::PathBuf>,
+    },
     /// Set aside the games checkout's local changes under GAME/ (the files
     /// gp loop health names under its problem), so a landing there can go
     /// on: they go into a git stash of the checkout named for the game and
@@ -172,6 +214,21 @@ pub enum LoopCmd {
         /// row gets a worker.
         #[arg(long, value_parser = ["on", "off"])]
         measure_required: Option<String>,
+        /// How many failed tries of one step's workers make it a trouble row
+        /// of the loop's own (default 3): its row then waits on that row, and
+        /// the runner starts no worker on it until it is set next again; 0
+        /// for no limit.
+        #[arg(long, value_name = "N")]
+        fail_tries: Option<u32>,
+        /// The most all the workers' runs of a day spend, in dollars, from
+        /// the runs ledger: past it the runner starts no worker until the
+        /// next day (UTC); 0 for no cap (the default).
+        #[arg(long, value_name = "DOLLARS")]
+        day_spend: Option<f64>,
+        /// The machine's 1-minute load over which the runner starts no new
+        /// worker; 0 for the machine's cores (the default).
+        #[arg(long, value_name = "N")]
+        max_load: Option<f64>,
         /// The games whose quest-log items the loop works on, by name,
         /// comma-separated ("rooftop"); "all" for every game's.
         #[arg(long)]
@@ -302,6 +359,28 @@ fn hold_text(s: &gp_mcp::steps::Settings) -> Option<String> {
     ))
 }
 
+/// The runner's limits over all its workers (serve/runner_limits.rs).
+fn limits_text(r: &gp_mcp::steps::Runner) -> String {
+    format!(
+        "a step becomes a trouble row after {}; the day's runs: {}; new workers wait over a load of {}",
+        if r.fail_tries > 0 {
+            format!("{} failed tries", r.fail_tries)
+        } else {
+            "no number of failed tries".to_owned()
+        },
+        if r.day_spend_usd > 0.0 {
+            format!("at most {} dollars", r.day_spend_usd)
+        } else {
+            "no cap on dollars".to_owned()
+        },
+        if r.max_load > 0.0 {
+            r.max_load.to_string()
+        } else {
+            "the machine's cores".to_owned()
+        }
+    )
+}
+
 fn settings_text(s: &gp_mcp::steps::Settings) -> String {
     let w = |b: bool| if b { "on" } else { "off" };
     let cap = |n: f64, unit: &str| {
@@ -324,6 +403,7 @@ fn settings_text(s: &gp_mcp::steps::Settings) -> String {
             "with or without a measure"
         }
     );
+    let limits = format!("{limits}\n{}", limits_text(&s.runner));
     format!(
         "steps required by gp_run: {}\nquest-log items of: {}{}\nrunner: {}, at most {} workers, model {}, effort {}{}{limits}",
         w(s.steps_required),
@@ -615,6 +695,23 @@ pub(crate) fn run(cmd: &LoopCmd, paths: &gp_evidence::Paths) -> Result<Outcome> 
             Ok(Outcome::ok(v, text))
         }
         LoopCmd::Hook { event } => crate::loop_hook::run(*event, paths),
+        LoopCmd::HandIn {
+            game,
+            row,
+            patch,
+            message,
+            removes_test,
+        } => {
+            let v = crate::loop_train::hand_in(paths, game, row, patch, message, removes_test)?;
+            let text = format!(
+                "{game}/{row} handed in to the train ({}); the row is in line until gp loop train gates it.",
+                v["id"].as_str().unwrap_or("")
+            );
+            Ok(Outcome::ok(v, text))
+        }
+        LoopCmd::Train { dry_run, repo } => {
+            crate::loop_train::run_train(paths, repo.as_deref(), *dry_run)
+        }
         LoopCmd::Steps => {
             let v = steps_json(paths, None);
             let text = steps_text(&v);
@@ -630,6 +727,9 @@ pub(crate) fn run(cmd: &LoopCmd, paths: &gp_evidence::Paths) -> Result<Outcome> 
             max_turns,
             max_spend,
             measure_required,
+            fail_tries,
+            day_spend,
+            max_load,
             games,
             hold,
             go_on,
@@ -688,6 +788,20 @@ pub(crate) fn run(cmd: &LoopCmd, paths: &gp_evidence::Paths) -> Result<Outcome> 
             if let Some(v) = measure_required {
                 s.runner.measure_required = v == "on";
             }
+            if let Some(n) = fail_tries {
+                s.runner.fail_tries = *n;
+            }
+            for (flag, v, to) in [
+                ("--day-spend", day_spend, &mut s.runner.day_spend_usd),
+                ("--max-load", max_load, &mut s.runner.max_load),
+            ] {
+                if let Some(d) = v {
+                    if !d.is_finite() || *d < 0.0 {
+                        anyhow::bail!("{flag} is 0 or more (got {d})");
+                    }
+                    *to = *d;
+                }
+            }
             if let Some(g) = games {
                 s.games = if g.trim() == "all" {
                     Vec::new()
@@ -709,7 +823,10 @@ pub(crate) fn run(cmd: &LoopCmd, paths: &gp_evidence::Paths) -> Result<Outcome> 
                 || effort.is_some()
                 || max_turns.is_some()
                 || max_spend.is_some()
-                || measure_required.is_some();
+                || measure_required.is_some()
+                || fail_tries.is_some()
+                || day_spend.is_some()
+                || max_load.is_some();
             if changed {
                 gp_mcp::steps::save(home, &s).map_err(anyhow::Error::msg)?;
             }
@@ -1148,6 +1265,13 @@ fn checks(paths: &gp_evidence::Paths, games_dir: Option<&std::path::Path>) -> Va
     }
     if let Some(t) = hold_text(&s) {
         lines.push(format!("HELD     {t}"));
+    }
+    // The day's spend cap and the load ceiling (serve/runner_limits.rs):
+    // a hold the person set, said, not a problem to file.
+    if s.runner.on
+        && let Some(why) = crate::serve::runner_limits::held_now(home)
+    {
+        lines.push(format!("HELD     the runner starts no worker: {why}"));
     }
     if s.runner.max_workers == 0 {
         bad(

@@ -33,23 +33,109 @@ pub(crate) fn queue_file(paths: &Paths, game: &str) -> Result<PathBuf> {
     Ok(game_dir(paths, game)?.join("queue.json"))
 }
 
-/// A game's quest log; empty when there's none yet.
+/// A game's quest log, for a caller that only reads it; empty when there's
+/// none yet, and empty too when the file doesn't parse (a caller that
+/// changes the log goes through [`update_queue`], which refuses that file).
 pub(crate) fn read_queue(f: &Path) -> Vec<Value> {
-    fs::read_to_string(f)
-        .ok()
-        .and_then(|t| serde_json::from_str(&t).ok())
-        .unwrap_or_default()
+    try_read_queue(f).unwrap_or_default()
+}
+
+/// A game's quest log: empty when there's no file yet, an error when there
+/// is one that doesn't parse as a list of rows.
+pub(crate) fn try_read_queue(f: &Path) -> Result<Vec<Value>> {
+    let t = match fs::read_to_string(f) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(e).with_context(|| format!("reading {}", f.display())),
+    };
+    serde_json::from_str(&t).with_context(|| {
+        format!(
+            "{} doesn't parse as a quest log; it is left as it is",
+            f.display()
+        )
+    })
+}
+
+/// The lock file beside a quest log: `queue.json.lock`.
+fn queue_lock_file(f: &Path) -> PathBuf {
+    let mut n = f.file_name().unwrap_or_default().to_os_string();
+    n.push(".lock");
+    f.with_file_name(n)
+}
+
+thread_local! {
+    /// The quest logs this thread holds the lock of, so that a change that
+    /// calls [`update_queue`] on the same log again fails at once in place
+    /// of waiting on itself.
+    static HELD: std::cell::RefCell<Vec<PathBuf>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// The one way the quest log changes: takes the lock beside the file (an
+/// flock on `queue.json.lock`, held by whichever gp process or thread is in
+/// here), reads the log, runs `change` on its rows and writes them back
+/// through a temp file and a rename, then lets the lock go. A log that
+/// doesn't parse is an error and isn't written over. `change` is the read,
+/// change and write only: work that is slow (scoring clips, running a
+/// command) is done before, and the rows it needs are read again in here.
+pub(crate) fn update_queue<R>(
+    f: &Path,
+    change: impl FnOnce(&mut Vec<Value>) -> Result<R>,
+) -> Result<R> {
+    if let Some(d) = f.parent() {
+        fs::create_dir_all(d)?;
+    }
+    let key = f.to_path_buf();
+    if HELD.with(|h| h.borrow().contains(&key)) {
+        bail!(
+            "{} is changed again inside its own change (update_queue called within update_queue)",
+            f.display()
+        );
+    }
+    let lock = fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(queue_lock_file(f))
+        .with_context(|| format!("opening the lock beside {}", f.display()))?;
+    lock.lock()
+        .with_context(|| format!("locking {}", f.display()))?;
+    HELD.with(|h| h.borrow_mut().push(key.clone()));
+    let out = (|| {
+        let old = try_read_queue(f)?;
+        let mut q = old.clone();
+        let r = change(&mut q)?;
+        if q != old {
+            write_rows(f, &old, &q)?;
+        }
+        Ok(r)
+    })();
+    HELD.with(|h| h.borrow_mut().retain(|p| p != &key));
+    drop(lock);
+    out
+}
+
+/// Puts `q` in place of the quest log, under its lock: for a test's
+/// fixture, which writes a whole log. Code that changes the log goes
+/// through [`update_queue`].
+#[cfg(test)]
+pub(crate) fn write_queue(f: &Path, q: &[Value]) -> Result<()> {
+    update_queue(f, |old| {
+        *old = q.to_vec();
+        Ok(())
+    })?;
+    if !f.exists() {
+        fs::write(f, "[]")?;
+    }
+    Ok(())
 }
 
 /// Writes the quest log, stamping `changed_ms` on each row that is new or
 /// differs from the file's (a card that ended before it can't move it:
 /// the runner's `settle_card_rows`); a row as it was keeps its stamp. A row
-/// that goes in line gets `parked_ms` too.
-pub(crate) fn write_queue(f: &Path, q: &[Value]) -> Result<()> {
-    if let Some(d) = f.parent() {
-        fs::create_dir_all(d)?;
-    }
-    let old = read_queue(f);
+/// that goes in line gets `parked_ms` too. The rows go to a temp file
+/// beside the log, which is then renamed over it, so a reader never sees
+/// half a log. Only [`update_queue`] calls it, holding the lock.
+fn write_rows(f: &Path, old: &[Value], q: &[Value]) -> Result<()> {
     let bare = |r: &Value| {
         let mut r = r.clone();
         if let Some(o) = r.as_object_mut() {
@@ -90,7 +176,12 @@ pub(crate) fn write_queue(f: &Path, q: &[Value]) -> Result<()> {
             r
         })
         .collect();
-    fs::write(f, serde_json::to_string_pretty(&q)?)?;
+    let mut tmp = f.file_name().unwrap_or_default().to_os_string();
+    tmp.push(format!(".{}.tmp", std::process::id()));
+    let tmp = f.with_file_name(tmp);
+    fs::write(&tmp, serde_json::to_string_pretty(&q)?)
+        .with_context(|| format!("writing {}", tmp.display()))?;
+    fs::rename(&tmp, f).with_context(|| format!("renaming {} over its log", tmp.display()))?;
     Ok(())
 }
 
@@ -511,7 +602,6 @@ impl Session {
         // row left asking with nothing to see was set right by hand). Done
         // stays done.
         let qf = self.dir.with_file_name("queue.json");
-        let mut q = read_queue(&qf);
         let me = self.mechanic();
         let game = self
             .dir
@@ -520,13 +610,29 @@ impl Session {
             .and_then(|n| n.to_str())
             .unwrap_or("")
             .to_owned();
+        update_queue(&qf, |q| {
+            self.row_follows_turn(q, me, &game, by_player, &words);
+            Ok(())
+        })?;
+        Ok(n)
+    }
+
+    /// The row's status after a turn, for [`Self::append_turn`] (under the
+    /// quest log's lock).
+    fn row_follows_turn(
+        &self,
+        q: &mut [Value],
+        me: &str,
+        game: &str,
+        by_player: bool,
+        words: &str,
+    ) {
         if let Some(r) = q.iter_mut().find(|r| r["mechanic"] == json!(me))
             && r["status"] != json!("done")
         {
-            if by_player && self.home().is_some_and(|h| nobody_on(h, &game, r)) {
-                answered_row(r, &words);
-                write_queue(&qf, &q)?;
-                return Ok(n);
+            if by_player && self.home().is_some_and(|h| nobody_on(h, game, r)) {
+                answered_row(r, words);
+                return;
             }
             let st = if by_player {
                 Some("agent working")
@@ -549,10 +655,8 @@ impl Session {
                 && r["status"] != json!(st)
             {
                 r["status"] = json!(st);
-                write_queue(&qf, &q)?;
             }
         }
-        Ok(n)
     }
 
     /// A turn from the page, kept once: the person's turn saying the same
@@ -789,6 +893,97 @@ pub(crate) fn show_text(v: &Value) -> String {
 mod tests {
     use super::*;
     use crate::test_paths as paths;
+
+    #[test]
+    fn two_threads_adding_rows_through_the_lock_lose_none() {
+        let d = tempfile::tempdir().unwrap();
+        let f = d.path().join("mechanics/rooftop/queue.json");
+        let adders: Vec<_> = ["a", "b"]
+            .into_iter()
+            .map(|who| {
+                let f = f.clone();
+                std::thread::spawn(move || {
+                    for k in 0..200 {
+                        update_queue(&f, |q| {
+                            q.push(json!({"mechanic": format!("{who}-{k}"), "status": "next"}));
+                            Ok(())
+                        })
+                        .unwrap();
+                    }
+                })
+            })
+            .collect();
+        for a in adders {
+            a.join().unwrap();
+        }
+        assert_eq!(read_queue(&f).len(), 400);
+    }
+
+    #[test]
+    fn a_quest_log_that_does_not_parse_is_an_error_and_is_not_written_over() {
+        let d = tempfile::tempdir().unwrap();
+        let f = d.path().join("mechanics/rooftop/queue.json");
+        fs::create_dir_all(f.parent().unwrap()).unwrap();
+        fs::write(&f, "[{\"mechanic\": \"jump\", \"status\": \"ne").unwrap();
+        let e = update_queue(&f, |q| {
+            q.clear();
+            Ok(())
+        })
+        .unwrap_err();
+        assert!(format!("{e:#}").contains("doesn't parse"), "{e:#}");
+        assert!(try_read_queue(&f).is_err());
+        assert_eq!(
+            fs::read_to_string(&f).unwrap(),
+            "[{\"mechanic\": \"jump\", \"status\": \"ne"
+        );
+        // No file yet is an empty log, not an error.
+        assert!(
+            try_read_queue(&d.path().join("none.json"))
+                .unwrap()
+                .is_empty()
+        );
+        // A change inside its own change fails at once, not waiting on itself.
+        let g = d.path().join("mechanics/hilltop/queue.json");
+        let e = update_queue(&g, |_| update_queue(&g, |_| Ok(()))).unwrap_err();
+        assert!(format!("{e:#}").contains("inside its own change"), "{e:#}");
+    }
+
+    #[test]
+    fn the_quest_log_is_written_through_a_temp_file_and_a_rename() {
+        let d = tempfile::tempdir().unwrap();
+        let dir = d.path().join("mechanics/rooftop");
+        let f = dir.join("queue.json");
+        let long = "x".repeat(20_000);
+        let writer = {
+            let (f, long) = (f.clone(), long.clone());
+            std::thread::spawn(move || {
+                for k in 0..150 {
+                    update_queue(&f, |q| {
+                        q.push(json!({"mechanic": format!("r{k}"), "note": long}));
+                        Ok(())
+                    })
+                    .unwrap();
+                }
+            })
+        };
+        // A reader that doesn't take the lock never sees half a log.
+        let mut reads = 0;
+        while !writer.is_finished() {
+            if let Ok(t) = fs::read_to_string(&f) {
+                serde_json::from_str::<Vec<Value>>(&t).expect("a whole log");
+                reads += 1;
+            }
+        }
+        writer.join().unwrap();
+        assert!(reads > 0);
+        assert_eq!(read_queue(&f).len(), 150);
+        let left: Vec<String> = fs::read_dir(&dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|n| n.ends_with(".tmp"))
+            .collect();
+        assert!(left.is_empty(), "{left:?}");
+    }
 
     #[test]
     fn a_pointed_turn_says_where_in_show() {

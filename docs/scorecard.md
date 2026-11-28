@@ -62,7 +62,7 @@ Capture fills the model and the asset map, and the columns follow from the files
 - sound rises as `gp sound capture` runs on more of a game's recordings (`just sound`, ROM tier), and its agreement as capture's note and effect rules improve.
 - gaps falls as the model takes in what `gp gaps` finds (`just gaps`, ROM tier): a labelled byte, routine or sound effect the model cites leaves its list, and a kind drawn where the original draws it leaves the drawn count.
 - chunks grows as `gp chunks` (`just chunks`) reads more of a game's levels, and coverage rises as the catalog explains more of their cells.
-- validate and track rise as `just validate-*` and `just track-*` run with `--metrics`, and the commercial games need the ROM tier (`just check-roms`) for those.
+- validate and track rise as `just validate-*` and `just track-*` run with `--metrics`, and the commercial games need their checks against the ROM (the games repo's `just check-game`) for those.
 
 ## Limits
 

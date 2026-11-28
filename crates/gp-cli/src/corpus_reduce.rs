@@ -1842,47 +1842,6 @@ mod tests {
         assert_eq!(z80_hex(z80_va(1, 0x0276)), "sound:0276");
     }
 
-    /// The first known romset in $GP_ROM_DIR/arcade, idle for 200 frames:
-    /// one stretch on one stage, the main CPU's reset routine run, and
-    /// branches read both ways. Skips without one.
-    #[test]
-    fn a_romset_run_is_counted_by_z80_routine() {
-        let Some(dir) = std::env::var_os("GP_ROM_DIR") else {
-            return;
-        };
-        let mut zips: Vec<std::path::PathBuf> = fs::read_dir(Path::new(&dir).join("arcade"))
-            .into_iter()
-            .flatten()
-            .flatten()
-            .map(|e| e.path())
-            .filter(|p| p.extension().is_some_and(|x| x == "zip"))
-            .collect();
-        zips.sort();
-        let Some(set) = zips
-            .iter()
-            .filter_map(|p| fs::read(p).ok())
-            .find_map(|zip| gp_arcade::Romset::from_zip(&zip).ok())
-        else {
-            return;
-        };
-        let clip = crate::reach::ClipInput {
-            set: String::new(),
-            id: "idle".into(),
-            power_on: gp_evidence::manifest::PowerOn::default(),
-            inputs: vec![gp_evidence::input_log::InputFrame::default(); 200],
-        };
-        let runs = vec![(String::new(), 101, 200, 0)];
-        let (by_run, all) = count_arcade(&set, &[clip], &runs, None, false).expect("counted");
-        assert_eq!(by_run.len(), 1);
-        assert_eq!(by_run[0].len(), 1);
-        assert_eq!(by_run[0][0].levels.watched, 100);
-        let r = Reader::arcade(&set, &all);
-        let stats = arcade_stats(&by_run[0][0].levels);
-        assert!(r.routines().iter().any(|x| x.name == "main:0000"));
-        assert!(stats.keys().any(|v| r.is_branch(*v)));
-        assert!(stats.keys().all(|v| r.routine_of(*v).is_some()));
-    }
-
     /// A made-up program's compare log: port 1 (tap held reads $EF, else
     /// $FF) compared with a byte through (hl) holding $F0 and then with
     /// $EF, each followed by a jump. Tap held on every other frame flips

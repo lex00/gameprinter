@@ -411,39 +411,4 @@ mod tests {
         let s = select(&json!({}), &fp("k1", "h1"), &ids(), &recipes());
         assert_eq!(s.score.len(), 5);
     }
-    /// Each game of the games checkout ($GP_GAMES_DIR) with hook code is
-    /// read by hook: every hook its `exts()` registers gets a hash of its
-    /// own, and the hooks don't all share one. Skips without the checkout.
-    #[test]
-    fn the_games_hooks_are_read_by_hook() {
-        let Some(games) = std::env::var_os("GP_GAMES_DIR").map(std::path::PathBuf::from) else {
-            eprintln!("skipped: no GP_GAMES_DIR");
-            return;
-        };
-        let mut dirs: Vec<std::path::PathBuf> = std::fs::read_dir(&games)
-            .into_iter()
-            .flatten()
-            .flatten()
-            .map(|e| e.path())
-            .filter(|p| p.join("package.toml").is_file())
-            .collect();
-        dirs.sort();
-        for dir in dirs {
-            let g = dir
-                .file_name()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .into_owned();
-            let Ok(Some(ext)) = crate::package::hook_code(&dir) else {
-                continue;
-            };
-            if let Err(e) = crate::hook_closure::hook_hashes(&dir.join("ext")) {
-                panic!("{g}'s ext/ can't be read by hook: {e}");
-            }
-            let m = hook_hashes(&dir, &ext);
-            assert!(!m.is_empty(), "{g}");
-            let distinct: BTreeSet<&String> = m.values().collect();
-            assert!(m.len() < 2 || distinct.len() > 1, "{g}: {m:?}");
-        }
-    }
 }

@@ -508,32 +508,6 @@ pub enum AssetKind {
     BoardFont,
 }
 
-/// Asset map formats that were renamed, as (old name, name): the old
-/// names were the games each format was first written for, and a map that
-/// still says one reads as the new name.
-pub const MAP_FORMAT_ALIASES: &[(&str, &str)] = &[
-    ("smb-area-objects", "nes-area-objects-v1"),
-    ("smb2-level-objects", "nes-area-objects-v2"),
-    ("mm2-screens", "nes-screens-v1"),
-    ("mm2-overlay-sets", "nes-overlay-sets-v1"),
-    ("smb-enemy-objects", "nes-spawn-objects-v1"),
-    ("smb2-enemy-objects", "nes-spawn-objects-v2"),
-    ("mm2-spawns", "nes-spawn-objects-v3"),
-    ("smb-music", "nes-music-v1"),
-    ("mm2-chr-uploads", "nes-chr-uploads-v1"),
-    ("mm2-palettes", "nes-palette-sets-v1"),
-    ("mm2-metatiles", "nes-metatiles-4x4-v1"),
-];
-
-/// An asset map format's name: the new name for an old one
-/// ([`MAP_FORMAT_ALIASES`]), any other name as it is.
-pub fn map_format_name(format: &str) -> &str {
-    MAP_FORMAT_ALIASES
-        .iter()
-        .find(|(old, _)| *old == format)
-        .map_or(format, |(_, new)| new)
-}
-
 impl AssetKind {
     /// The asset map formats that lift into this kind of slot. Each object
     /// list format has a builder in the runtimes (docs/model.md, "Asset
@@ -570,10 +544,9 @@ impl AssetKind {
         }
     }
 
-    /// Whether an asset map format lifts into this kind of slot, by its
-    /// name or by the older name it had ([`map_format_name`]).
+    /// Whether an asset map format lifts into this kind of slot.
     pub fn takes(self, format: &str) -> bool {
-        self.map_formats().contains(&map_format_name(format))
+        self.map_formats().contains(&format)
     }
 
     /// The first of [`AssetKind::map_formats`], for messages.
@@ -3356,7 +3329,7 @@ impl Source {
 pub struct Ref {
     pub at: String,
     /// A pinned download the file is in rather than the repo, as
-    /// `<name>@<revision>`, such as `smbdis@7e8e9777`: `at` is then a path
+    /// `<name>@<revision>`, such as `rooftopdis@7e8e9777`: `at` is then a path
     /// within it.
     #[serde(default, rename = "in", skip_serializing_if = "Option::is_none")]
     pub within: Option<String>,

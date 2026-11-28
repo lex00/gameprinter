@@ -110,3 +110,13 @@ Every worker's log is kept in `$GP_HOME/work/loop/files/STEP/N.log`, one JSON li
 | followed the row's text | It took a note or a turn of the row's talk as an order |
 | gate not tried | It raised a card, or stopped, with no dry run |
 | redid landed work | It made again a change that was already on main or on a card |
+
+### Read by hand
+
+gp serve's runner stops a worker as it runs for what one line of its log shows for certain: a gp_run call citing another step, a gate run from its shell, a `git push`, and an Edit or Write of a file in the person's games checkout ([loop.md](loop.md), "The runner's limits"). These are still read here, since no single line shows them for certain:
+
+- A write without a plan: changing files before reading where the row stands (label no plan). The order of reads and edits needs the whole run.
+- A shell command that writes the games checkout by another way: `gp worker confined -- cp` or `python3` with a target there, or a redirect (`>`) into it. Confined writes are held to the worktree, so these fail, but the attempt is the label wrong tool.
+- A gp command run through gp_run that has a tool of its own for the same work (a hand-made patch where `gp theme fit` or `gp clip presses` writes one).
+- A `git commit` in the worktree: the brief allows it, so it isn't stopped, though a commit that lands nowhere is wasted work.
+- Work outside the row's files that the step's note names (label edited the wrong file).

@@ -1,0 +1,31 @@
+# A level, one character per metatile.
+# Lifted from Moss Hop by gp assets lift; gp assets pack writes it back (docs/assets.md).
+schema = 1
+asset = "level"
+# 32 metatiles wide and 15 high. The characters, from the map's legend:
+#   .  0 sky
+#   M  1 moss over soil
+#   S  2 soil
+#   B  3 stone block
+#   (  4 burrow, left half
+#   )  5 burrow, right half
+#   ?  6 ? block
+#   u  7 used block
+#   o  8 coin
+rows = [
+  "................................", # 0
+  "................................", # 1
+  "................................", # 2
+  "................................", # 3
+  "................................", # 4
+  "................................", # 5
+  "................................", # 6
+  "................................", # 7
+  "....?...........................", # 8
+  ".................ooo............", # 9
+  "............oo...BBB.....B......", # 10
+  "......B..................B...().", # 11
+  "MMMMMMMMMMMM..MMMMMMMMMMMMMMMMMM", # 12
+  "SSSSSSSSSSSS..SSSSSSSSSSSSSSSSSS", # 13
+  "SSSSSSSSSSSS..SSSSSSSSSSSSSSSSSS", # 14
+]

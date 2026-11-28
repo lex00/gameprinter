@@ -1,0 +1,14 @@
+# A table, one entry per row.
+# Lifted from Moss Hop by gp assets lift; gp assets pack writes it back (docs/assets.md).
+schema = 1
+asset = "slugs"
+
+# 0
+[[row]]
+start = 128
+end = 176
+
+# 1
+[[row]]
+start = 256
+end = 352

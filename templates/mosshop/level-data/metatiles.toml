@@ -1,0 +1,58 @@
+# Metatiles: four tile numbers each (top left, top right, bottom left, bottom right).
+# Lifted from Moss Hop by gp assets lift; gp assets pack writes it back (docs/assets.md).
+schema = 1
+asset = "metatiles"
+
+# 0: sky, level character "."
+[[metatile]]
+tiles = [0x00, 0x00, 0x00, 0x00]
+solid = 0
+kind = 0
+
+# 1: moss over soil, level character "M"
+[[metatile]]
+tiles = [0x01, 0x02, 0x03, 0x04]
+solid = 1
+kind = 0
+
+# 2: soil, level character "S"
+[[metatile]]
+tiles = [0x03, 0x04, 0x04, 0x03]
+solid = 1
+kind = 0
+
+# 3: stone block, level character "B"
+[[metatile]]
+tiles = [0x05, 0x06, 0x07, 0x08]
+solid = 1
+kind = 0
+
+# 4: burrow, left half, level character "("
+[[metatile]]
+tiles = [0x00, 0x09, 0x00, 0x0B]
+solid = 0
+kind = 0
+
+# 5: burrow, right half, level character ")"
+[[metatile]]
+tiles = [0x0A, 0x00, 0x0C, 0x00]
+solid = 0
+kind = 0
+
+# 6: ? block, level character "?"
+[[metatile]]
+tiles = [0x18, 0x19, 0x1A, 0x1B]
+solid = 1
+kind = 2
+
+# 7: used block, level character "u"
+[[metatile]]
+tiles = [0x1C, 0x1D, 0x1E, 0x1F]
+solid = 1
+kind = 0
+
+# 8: coin, level character "o"
+[[metatile]]
+tiles = [0x20, 0x21, 0x22, 0x23]
+solid = 0
+kind = 5

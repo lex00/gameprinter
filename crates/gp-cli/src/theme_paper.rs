@@ -3374,39 +3374,10 @@ mod tests {
         assert_eq!(gp_theme::pix::parse(&text).unwrap(), img);
     }
 
-    /// Every sound role of a template's kit can be a `.tune`: all 14 of
-    /// one game's are, in its paper theme, and each parses and renders. An
-    /// effect by parameters (`sfx`) is a `.tune` too.
+    /// An effect by parameters (`sfx`) is a `.tune`: it parses, lasts its
+    /// frames and renders.
     #[test]
-    fn every_sound_role_is_a_tune() {
-        // gameprinter: the kit is the games checkout's page game's (its
-        // page.toml), and the paper theme, taken out of the game on
-        // 2026-11-11, is one `gp theme paint` made for it ($GP_THEME_PAPER);
-        // skipped when either is absent.
-        let Some(game) = crate::theme_template::test_page_game() else {
-            return;
-        };
-        let kit_dir = game.join("themes");
-        let Some(paper) = std::env::var_os("GP_THEME_PAPER").map(std::path::PathBuf::from) else {
-            return;
-        };
-        if !paper.join("theme.toml").is_file() {
-            return;
-        }
-        let text = fs::read_to_string(kit_dir.join("kit/kit.toml")).unwrap();
-        let kit: Kit = toml::from_str(&text).unwrap();
-        let theme = gp_theme::Theme::load(&paper).unwrap();
-        // Exactly the roles the kit lists, one `[[sound]]` table each.
-        let listed = text.lines().filter(|l| l.trim() == "[[sound]]").count();
-        assert!(listed > 0);
-        assert_eq!(kit.sound.len(), listed);
-        for s in &kit.sound {
-            let r = theme.sound.iter().find(|x| x.role == s.role).unwrap();
-            assert!(r.file.ends_with(".tune"), "{}", s.role);
-            let t = gp_theme::tune::Tune::parse(&fs::read_to_string(paper.join(&r.file)).unwrap())
-                .unwrap();
-            assert!(!gp_theme::tune::render(&t).is_empty(), "{}", s.role);
-        }
+    fn an_effect_by_parameters_is_a_tune() {
         let zap = gp_theme::tune::Tune::parse(
             "tune 1\nstep 2\nsfx zap 0.5 wave=square freq=C6 slide=-36 decay=12\nsfx thud 0.6 wave=noise freq=80 decay=8 lowpass=0.3 at=2\n",
         )

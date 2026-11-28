@@ -29,7 +29,7 @@ A stage changes what is data. What the code fixes, a stage keeps to: change it a
 
 | | What | Rule | Slot | Source |
 |---|---|---|---|---|
-| data | The level | A grid of 32 by 15 cells, a character a cell from the legend .MSB()?uo (sky, moss over soil, soil, stone block, the burrow's two halves, a ? block, a used block, a coin). The used block `u` is never written: a bumped ? block becomes one | `level` | the asset map; games/mosshop/mosshop.s, level_row |
+| data | The level | A grid of 32 by 15 cells, a character a cell from the legend .MSB()?uo (sky, moss over soil, soil, stone block, the burrow's two halves, a ? block, a used block, a coin). The used block `u` is never written: a bumped ? block becomes one | `level` | the asset map; templates/mosshop/level-data/level.toml, the authored level the ROM's level_row lines are built from |
 | data | The metatiles | 9 metatiles of 4 tiles each, with a solid byte and a kind byte: solid cells stop the hero, kinds mark the ? block and coins | `metatiles` | the asset map |
 | data | The slugs | 2 slugs, each a start and an end x in pixels: it walks right from start to end and back, on row 176 | `slugs` | the asset map; the model's spawn table |
 | code | The level's size | 32 by 15 cells; the camera follows the hero across, never back past the level's left edge |  | the model's cameras.main and the asset map |
@@ -93,7 +93,7 @@ None yet (see Open).
 |---|---|
 | 1. Reachable | gp interp reach templates/mosshop: the goal reachable by the hero alone |
 | 2. The scenarios | gp host scenarios on a copy (templates/mosshop/AGENTS.md): a scenario that fails after the change names a behavior that moved |
-| 3. The ROM | Moss Hop builds from its source with cc65; a new level is written in games/mosshop/mosshop.s's level_row lines and the build's asset test checks the offsets |
+| 3. The ROM | A new level is templates/mosshop/level-data/level.toml (gp level edit on a copy writes the copy's), read by gp level with no build; the ROM is built from it with cc65 (scripts/mosshop/build.sh writes its rows as level.inc) and gate_mosshop holds the built ROM's lift to the file |
 
 ## Open
 

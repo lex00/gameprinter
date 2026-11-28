@@ -49,15 +49,9 @@ const arcadeRom = opt("arcade-rom"), arcadeWasm = opt("arcade-wasm");
 // Moss Hop run before them).
 // --only journeys: the first screen, the copies and their tabs alone.
 const only = process.argv.includes("--only") ? process.argv[process.argv.indexOf("--only") + 1] : null;
-// --arcade-game DIR: the arcade game's folder in the games checkout: its
-// roms.toml, package.toml, labels.toml and checks.toml say what to play
-// and check.
+// --arcade-game DIR: the arcade game's folder (the games repo's justfile
+// passes it): its name and roms.toml say what to play.
 const arcadeGame = opt("arcade-game");
-/** One fact of a game folder (scripts/check/game-facts.py), or null. */
-function fact(dir, ...what) {
-  const r = spawnSync("python3", ["-I", "-B", join(here, "..", "check", "game-facts.py"), dir, ...what], { encoding: "utf8" });
-  return r.status === 0 ? r.stdout.trim() : null;
-}
 // --shots DIR: a screenshot of each mode goes there (never a repo: they
 // show the game).
 const shots = opt("shots");
@@ -244,6 +238,62 @@ const pastTheEdge = (page) => page.evaluate(() => {
   return { off: off.slice(0, 8), page: document.documentElement.scrollWidth <= W + 1 };
 });
 
+/** The clip "a clip recorded and handed off" saved, by its number. */
+let recorded = null;
+
+/** A corpus clip's sprite runs on the screen page (api/screen/sprite-runs).
+ * The part that needs no scan: the scan plays the clip on the game's model
+ * and its scored set, so here the clip just recorded is played as the
+ * corpus clip a refine follows (api/screen's work, api/screen/work-clip)
+ * and the runs are made up, the first ask answered "scanning". SPRITE RUNS
+ * lists them; a run clicked stands the clip at its first frame, with its
+ * missing sprite boxed on the original's side. */
+async function spriteRuns(page, base, open) {
+  if (!recorded) fail("no clip was recorded to play as a corpus clip");
+  const api = `${base}mechanic/${GAME}/api/`;
+  const meta = await (await fetch(`${api}screen/clip?n=${recorded}&mechanic=${MECH}`)).json();
+  const log = await (await fetch(`${api}clips/${recorded}.log?mechanic=${MECH}`)).text();
+  const id = "check.walk.001", frames = meta.frames;
+  if (!(frames > 24)) fail(`clip ${recorded} has ${frames} frames, too few for the runs`);
+  const runs = [
+    { from: 3, to: 5, original: 2, model: 1, missing: [{ code: "02a", box: [40, 60, 16, 16] }], extra: [], boxes: [[[40, 60, 16, 16]], [[41, 60, 16, 16]], [[42, 60, 16, 16]]] },
+    { from: 20, to: 22, original: 1, model: 1, missing: [{ code: "031", box: [100, 120, 8, 8] }], extra: [{ kind: "slug", box: [10, 10, 16, 16] }], boxes: [[[100, 120, 8, 8]], [[100, 120, 8, 8]], [[100, 120, 8, 8]]] },
+  ];
+  let asked = 0;
+  const routes = [
+    [/\/api\/screen\/sprite-runs\?/, (r) => { asked += 1; return r.fulfill({ json: asked < 2 ? { id, model: "check", state: "scanning" } : { id, model: "check", state: "done", frames, runs } }); }],
+    [/\/api\/screen\/work-clip\?/, (r) => r.fulfill({ json: { id, name: "the clip just recorded", start: meta.start, frames, log, draws: null, draw_sites: null } })],
+    [/\/api\/screen$/, async (r) => {
+      if (r.request().method() !== "GET") return r.continue();
+      const res = await r.fetch();
+      const j = await res.json();
+      j.work = { live: true, clip: id, from: meta.start, to: meta.start + frames - 1, start: meta.start, frames, says: "the page check" };
+      return r.fulfill({ response: res, json: j });
+    }],
+  ];
+  for (const [url, f] of routes) await page.route(url, f);
+  try {
+    await open();
+    await page.click('#views button[data-view="side"]');
+    await until("the corpus clip on the screens, with SPRITE RUNS", async () => !(await page.isHidden("#clip-runs")), 60000);
+    await page.click("#clip-runs");
+    await until("the sprite runs listed", async () => (await page.$$("#sprite-runs-list button")).length === runs.length, 15000);
+    if (asked < 2) fail(`the list came without asking again after "scanning" (${asked} asks)`);
+    await page.click("#sprite-runs-list li:nth-child(2) button");
+    const at = await until("the clip at the run's first frame", async () => { const t = await text(page, "#clip-at"); return t.startsWith("frame 20 ") && t; }, 15000);
+    const boxed = await until("the missing sprite boxed on the original", async () => {
+      const px = await page.evaluate(() => [...document.getElementById("a").getContext("2d").getImageData(100, 120, 1, 1).data].slice(0, 3).join());
+      return px === "255,0,255" && px;
+    }, 5000);
+    const listed = await text(page, "#sprite-runs-list li:nth-child(2)");
+    if (!/FRAMES 20 TO 22/.test(listed) || !/031/.test(listed) || !/slug/.test(listed)) fail(`the second run reads: ${listed}`);
+    return `SPRITE RUNS on a corpus clip lists its runs once the scan ends ("${listed}"), and a run clicked stands the clip at its first frame (${at}), its missing sprite boxed on the original (${boxed} at 100, 120)`;
+  } finally {
+    for (const [url, f] of routes) await page.unroute(url, f);
+    await open();
+  }
+}
+
 /** The older page's list on the screen page, on Moss Hop under gp serve
  * (after main(): the game made, its walk row in the quest log). */
 async function onTheScreenPage() {
@@ -279,8 +329,12 @@ async function onTheScreenPage() {
     await until("frames recorded", async () => (await frame(page)) > before + 40, 15000);
     await page.click("#record");
     const said = await until("the clip in the row's talk", () => { const s = gpRun(["mechanic", "show", GAME, MECH]); return /Here is clip \d+\./.test(s) && s; }, 60000);
-    return `RECORD, then RECORD again, saves what was played on THE ORIGINAL as clip ${said.match(/Here is clip (\d+)\./)[1]} of ${MECH} and hands it to the row's talk`;
+    recorded = Number(said.match(/Here is clip (\d+)\./)[1]);
+    return `RECORD, then RECORD again, saves what was played on THE ORIGINAL as clip ${recorded} of ${MECH} and hands it to the row's talk`;
   });
+
+  ok(await spriteRuns(page, base, open));
+  if (errors.length) fail(`the screen page threw: ${errors.join("; ")}`);
 
   await older("REVIEW REBUILD", "the screen page has no REVIEW REBUILD: a clip clicked under CLIPS, or a card's LOOK AT IT, plays on both screens, the original beside the model");
 

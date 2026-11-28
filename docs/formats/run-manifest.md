@@ -30,7 +30,7 @@ Dotted, lowercase, most general part first: `check.test.native.duration`, `store
 
 ## Budgets
 
-`budgets.toml` at the repo root sets `max` or `min` for any metric. `gp metrics check` exits 1 if any budgeted metric is over, which fails `just check`. Two more files in the same format hold the budgets of checks outside `just check`: `budgets-cycle.toml` for `just check-open-platforms` and `budgets-roms.toml` for the ROM tier (`just check-roms`), each passed with `--budgets`.
+`budgets.toml` at the repo root sets `max` or `min` for any metric. `gp metrics check` exits 1 if any budgeted metric is over, which fails `just check`. Two more files in the same format hold the budgets of checks outside `just check`: `budgets-cycle.toml` for `just check-open-platforms` and `budgets-roms.toml` for the checks of a game against its ROM (the games repo's `just check-game`), each passed with `--budgets`.
 
 With a run group (`--group`, or `$GP_RUN_GROUP`, which `just` always sets), only values recorded in that group count, and a budgeted metric the group never recorded fails as missing. A step that silently stops running can't pass on an old value. Without a group, the latest value ever recorded is checked, and a metric that was never recorded is reported but doesn't fail.
 

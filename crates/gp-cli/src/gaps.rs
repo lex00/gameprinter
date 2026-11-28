@@ -783,7 +783,8 @@ pub(crate) fn labels(
     }
     // A listing: the one given, else an ld65 debug file or an assembler
     // listing beside the labels file (in its folder, or its build/ or
-    // listing/ folder), as the labels scripts leave them.
+    // listing/ folder), as the labels scripts leave them, else the one the
+    // game's own checks.toml names ([`own_listing`]).
     let beside = labels_dir.as_ref().and_then(|d| {
         [d.clone(), d.join("listing"), d.join("build")]
             .into_iter()
@@ -792,9 +793,11 @@ pub(crate) fn labels(
             .filter(|p| p.extension().is_some_and(|x| x == "dbg" || x == "lst"))
             .min_by_key(|p| p.extension().is_some_and(|x| x == "lst"))
     });
-    let listing = args.listing.clone().or(beside).or_else(|| {
-        (t.source == "smb1-ntsc-prg0").then(|| paths.home.join("work/smbdis/listing/smbdis.dbg"))
-    });
+    let listing = args
+        .listing
+        .clone()
+        .or(beside)
+        .or_else(|| own_listing(&t.dir, &paths.home));
     let asm_listing = listing
         .as_ref()
         .is_some_and(|p| p.extension().is_some_and(|x| x == "lst"));
@@ -827,6 +830,20 @@ pub(crate) fn labels(
         }
     }
     notes
+}
+
+/// The listing a game's own folder names for its gaps, in its checks.toml:
+/// `[gaps] listing = "PATH"`, from the game's folder, or from the home with
+/// `$GP_HOME/` before it (a listing a labels script built under work/).
+/// None when the folder names none.
+pub(crate) fn own_listing(dir: &Path, home: &Path) -> Option<PathBuf> {
+    let text = std::fs::read_to_string(dir.join("checks.toml")).ok()?;
+    let table = text.parse::<toml::Table>().ok()?;
+    let at = table.get("gaps")?.get("listing")?.as_str()?;
+    Some(match at.strip_prefix("$GP_HOME/") {
+        Some(rest) => home.join(rest),
+        None => dir.join(at),
+    })
 }
 
 /// The code labels of an ld65 debug file (`sym` lines of type `lab` in
@@ -1942,6 +1959,35 @@ fn drawn_text(t: &mut String, r: &gp_gaps::drawn::Report, n: usize) {
 mod tests {
     use super::*;
 
+    /// A game's listing comes from its own folder's checks.toml, from the
+    /// folder or from the home; a folder that names none has none.
+    #[test]
+    fn a_games_listing_is_the_one_its_checks_toml_names() {
+        let game = tempfile::tempdir().unwrap();
+        let home = Path::new("/home-of-rooftop");
+        assert_eq!(own_listing(game.path(), home), None);
+        std::fs::write(game.path().join("checks.toml"), "[autoplay]\nbin = \"x\"\n").unwrap();
+        assert_eq!(own_listing(game.path(), home), None);
+        std::fs::write(
+            game.path().join("checks.toml"),
+            "[gaps]\nlisting = \"listing/rooftop.dbg\"\n",
+        )
+        .unwrap();
+        assert_eq!(
+            own_listing(game.path(), home),
+            Some(game.path().join("listing/rooftop.dbg"))
+        );
+        std::fs::write(
+            game.path().join("checks.toml"),
+            "[gaps]\nlisting = \"$GP_HOME/work/rooftop/rooftop.dbg\"\n",
+        )
+        .unwrap();
+        assert_eq!(
+            own_listing(game.path(), home),
+            Some(home.join("work/rooftop/rooftop.dbg"))
+        );
+    }
+
     #[test]
     fn listing_symbols_are_code_labels_in_prg() {
         let text = "sym\tid=0,name=\"Start\",addrsize=absolute,scope=0,def=1,val=0x8000,seg=6,type=lab\n\
@@ -2167,11 +2213,11 @@ bookkeeping = ["Frame"]
     fn identifiers_are_tokens() {
         let mut s = BTreeSet::new();
         tokens(
-            "quote = \"Enemy_X_Position:\" at = SMBDIS.ASM:12 x1",
+            "quote = \"Enemy_X_Position:\" at = ROOFTOP.ASM:12 x1",
             &mut s,
         );
         assert!(s.contains("Enemy_X_Position"));
-        assert!(s.contains("SMBDIS"));
+        assert!(s.contains("ROOFTOP"));
         assert!(!s.contains("12"));
     }
 

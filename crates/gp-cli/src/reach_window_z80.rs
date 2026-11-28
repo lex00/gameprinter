@@ -534,7 +534,6 @@ pub(crate) fn run(rom: &[u8], a: &ReachArgs, paths: &Paths) -> Result<Outcome> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::reach::ClipInput;
 
     /// The templates' cites on a made-up program (gp_arcade::testrom::busy,
     /// no game's bytes): an address inside the reset routine's code is
@@ -555,51 +554,5 @@ mod tests {
         let all: Vec<u16> = c.values().flatten().copied().collect();
         assert_eq!(all, vec![0x0009], "{c:?}");
         assert_eq!(c.keys().next().map(|k| k.0), Some(0));
-    }
-
-    /// With a real romset ($GP_GAME_DIR's first oracle set): an idle run's later frames, by routine,
-    /// hold the interrupt handler, and against its first frames the diff
-    /// names what only one side ran. Skipped without it.
-    #[test]
-    fn a_window_reads_by_routine_of_both_cpus() {
-        let (_, zip) = match gp_arcade::romset::test_oracle_set_path() {
-            Ok(p) => p,
-            Err(e) => {
-                eprintln!("skipped: {e}");
-                return;
-            }
-        };
-        let set = Romset::from_zip(&std::fs::read(zip).unwrap()).unwrap();
-        let clip = ClipInput {
-            set: "t".into(),
-            id: "idle".into(),
-            power_on: Default::default(),
-            inputs: vec![Default::default(); 240],
-        };
-        let late =
-            crate::code_z80::run_clips(&set, std::slice::from_ref(&clip), (200, 240)).unwrap();
-        let early = crate::code_z80::run_clips(&set, &[clip], (1, 20)).unwrap();
-        assert_eq!(late.watched, 41);
-        let side = |l: &Levels| Side {
-            label: String::new(),
-            frames: l.watched,
-            ran: ran_of(l),
-        };
-        let maps = Maps::of(&set, &[&late, &early]);
-        let (rows, outside) = rows(&maps, &side(&late).ran);
-        assert!(outside.is_empty());
-        assert!(rows.values().any(|(_, why)| *why == "interrupt handler"));
-        assert!(
-            rows.keys().any(|(c, _)| *c == 1),
-            "the sound CPU's routines"
-        );
-        let (text, doc) = diff_report(&maps, &side(&late), &side(&early), None);
-        assert!(text.starts_with("A: "), "{text}");
-        assert!(
-            !doc["a_not_b"]["routines_only"]
-                .as_array()
-                .unwrap()
-                .is_empty()
-        );
     }
 }

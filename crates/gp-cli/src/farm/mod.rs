@@ -50,7 +50,7 @@ use support as m;
 
 #[derive(Args, Debug)]
 pub(crate) struct FarmArgs {
-    /// The game, as its template is named (smb1-ntsc-prg0); or `bench` to
+    /// The game, as its template is named (rooftop-ntsc-prg0); or `bench` to
     /// run the blind bench (bench/farm-blind.toml). Not needed with --blind.
     #[arg(required_unless_present = "blind")]
     pub game: Option<String>,

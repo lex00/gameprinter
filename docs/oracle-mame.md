@@ -127,7 +127,7 @@ The main board's ranges are mcr.cpp's `cpu_91490_map`; the sound board's is midw
 
 ## Captures the repo names
 
-A capture is derived from the ROM, so it is never in a repo. Each game's `oracle/mame-captures.toml`, in its folder of the games checkout, names the captures gp holds gp-arcade to on that game, with only what it takes to make each one again and the hash it must come out with. The tool knows no game by name, so it keeps no captures file of its own; `gp oracle golden --against NAME` looks in every game's, and `just check-all` plays every capture they name (`mame-NAME`). The game's `oracle/mame-controls.lua` holds the control table the capture script reads for its sets (columns, ports and RAM, from MAME's source), which `just mame-record` finds beside the log's game folder.
+A capture is derived from the ROM, so it is never in a repo. Each game's `oracle/mame-captures.toml`, in its folder of the games checkout, names the captures gp holds gp-arcade to on that game, with only what it takes to make each one again and the hash it must come out with. The tool knows no game by name, so it keeps no captures file of its own; `gp oracle golden --against NAME` looks in every game's, and the games repo's `just mame`, run in a game's folder, plays every capture it names on gp-arcade (with this repo's compare example, from `GAMEPRINTER`, else `../gameprinter`). The game's `oracle/mame-controls.lua` holds the control table the capture script reads for its sets (columns, ports and RAM, from MAME's source), which `just mame-record` finds beside the log's game folder.
 
 | Field | What |
 |---|---|

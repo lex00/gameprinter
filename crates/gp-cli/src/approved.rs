@@ -396,13 +396,16 @@ fn close_saved(o: &mut serde_json::Map<String, Value>, l: &Look, how: &str, now:
 /// offers no CONFIRM on it again (owner, confirmed-row-closes). A row a
 /// worker is at (agent working) is left to them. Returns the rows closed.
 pub(crate) fn settle_saved(qf: &Path, game: &str, looks: &[Look], now: u64) -> Result<Vec<String>> {
-    use crate::mechanic::session::{read_queue, write_queue};
     if looks.is_empty() {
         return Ok(Vec::new());
     }
-    let mut q = read_queue(qf);
+    crate::mechanic::session::update_queue(qf, |q| settle_saved_rows(q, game, looks, now))
+}
+
+/// [`settle_saved`] on the rows, under the quest log's lock.
+fn settle_saved_rows(q: &mut [Value], game: &str, looks: &[Look], now: u64) -> Result<Vec<String>> {
     let mut closed = Vec::new();
-    for r in &mut q {
+    for r in q {
         let status = r["status"].as_str().unwrap_or("");
         if matches!(status, "done" | "agent working") {
             continue;
@@ -413,9 +416,6 @@ pub(crate) fn settle_saved(qf: &Path, game: &str, looks: &[Look], now: u64) -> R
         let Some(o) = r.as_object_mut() else { continue };
         close_saved(o, &l, "Saved as right", now);
         closed.push(l.row);
-    }
-    if !closed.is_empty() {
-        write_queue(qf, &q)?;
     }
     Ok(closed)
 }
@@ -475,8 +475,18 @@ pub(crate) fn confirm(
     said: &str,
     typed: bool,
 ) -> Result<Value> {
-    use crate::mechanic::session::{read_queue, write_queue};
-    let mut q = read_queue(qf);
+    crate::mechanic::session::update_queue(qf, |q| confirm_row(q, game, looks, row, said, typed))
+}
+
+/// [`confirm`] on the rows, under the quest log's lock.
+fn confirm_row(
+    q: &mut [Value],
+    game: &str,
+    looks: &[Look],
+    row: &str,
+    said: &str,
+    typed: bool,
+) -> Result<Value> {
     let Some(r) = q.iter_mut().find(|r| r["mechanic"] == json!(row)) else {
         bail!("the quest log has no row {row}");
     };
@@ -504,9 +514,7 @@ pub(crate) fn confirm(
             "Already saved as right, so your yes changes nothing",
             now,
         );
-        let out = r.clone();
-        write_queue(qf, &q)?;
-        return Ok(out);
+        return Ok(r.clone());
     }
     // The yes's turn put its words on the row for a worker
     // (mechanic::session::answered_row): the runner locks it with none.
@@ -535,9 +543,7 @@ pub(crate) fn confirm(
     );
     o.insert("changed_ms".into(), json!(now));
     o.remove("worker");
-    let out = r.clone();
-    write_queue(qf, &q)?;
-    Ok(out)
+    Ok(r.clone())
 }
 
 /// `gp mechanic approve GAME ROW`: locks the row's clip, frames and look as

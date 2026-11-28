@@ -44,14 +44,15 @@ Cloudflare's command-line tool is called wrangler. There's nothing to install, s
 npx wrangler login
 ```
 
-It opens your browser for you to approve. Next, build your page in the gameprinter checkout with your registry as its registry of themes. Then upload it.
+It opens your browser for you to approve. Next, build your page in the games checkout with your registry as its registry of themes, using the gp you built in the gameprinter checkout beside it. Then upload it.
 
 ```sh
+GP=../gameprinter/target/debug/gp \
 GP_PAGE_THEMES_URL=https://raw.githubusercontent.com/acme/harbor-registry/main \
 GP_PAGE_CONTENT=acme/harbor-lights \
-  scripts/web/release-check.sh --no-roms --game ../games/donkey-kong
-scripts/web/deploy.sh --first --worker harbor-page --subdomain acme
-scripts/web/deploy.sh BUNDLE_DIR --no-roms --worker harbor-page --subdomain acme
+  page/release-check.sh --no-roms --game donkey-kong
+page/deploy.sh --first --worker harbor-page --subdomain acme
+page/deploy.sh BUNDLE_DIR --no-roms --worker harbor-page --subdomain acme
 ```
 
 - `--worker` is your page's name and `--subdomain` is your Cloudflare account's workers.dev subdomain. Cloudflare shows it under Workers. Your page's address is `https://WORKER.SUBDOMAIN.workers.dev`.

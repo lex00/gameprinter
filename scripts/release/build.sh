@@ -30,7 +30,7 @@
 #
 # PAGE_DIR is the built public page to carry: default the newest bundle that
 # passed the release check ($GP_HOME/work/page-release/passed), which
-# `just web-page-release` makes. A gp with no page still builds, and says
+# the games repo's `just page-release` makes. A gp with no page still builds, and says
 # in gp self check that it carries none.
 #
 # It publishes nothing: no tag, no upload, no push. The editor must be
@@ -129,7 +129,7 @@ if [ -n "$page" ]; then
   cp -R "$page" "$stage/page"
   echo "release: carrying the page $page"
 else
-  echo "release: no page that passed the release check here; the binary carries none (just web-page-release makes one)"
+  echo "release: no page that passed the release check here; the binary carries none (the games repo's just page-release makes one)"
 fi
 
 # zip_here ZIP PATH: PATH, under the current folder, into ZIP, with

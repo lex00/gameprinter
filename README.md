@@ -31,7 +31,6 @@ You need rustup (the repo pins Rust 1.99.1 and installs it on the first build), 
 ```sh
 just setup     # once per clone: the ROM-blocking git hook and the locked cargo
 just check     # what every change has to pass; needs no ROM
-just check-all # just check, then the checks that need ROMs, the games checkout or the network
 just publish   # an optimized gp in ~/.gameprinter/bin
 export PATH="$HOME/.gameprinter/bin:$PATH"
 gp --help
@@ -39,7 +38,7 @@ gp --help
 
 `just check` builds gp, assembles Moss Hop and runs formatting, clippy, the tests and the Moss Hop checks.
 
-`just check-all` (scripts/check/all.sh, most of an hour) runs `just check` and then the checks below, each one only when what it needs is on the machine. The tool knows no game by name, so it finds the games in the games checkout (`$GP_GAMES_DIR`, else `../games`) and reads what to check from each game's own files: each arcade game's model in the page's player against the native run (`just web-parity-arcade GAME`, step `web-parity-arcade-GAME`), the public page built and played headless with its lift's tests (`just web-page check`, which needs the games checkout beside the repo and the network) and its `share.test.mjs` and `theme-line.test.mjs`, `gp corpus score` on each game with a `corpus.toml` with every clip exact (`score-GAME`), each MAME capture a game's `oracle/mame-captures.toml` names on every frame (`mame-NAME`, gp-arcade's compare example, built in release), and `gp baseline check`. A check it can't run gets one line naming what's missing (`check-all: skipped score-GAME: no ROM GAME's corpus is for ...`), and with no games checkout the game checks are skipped in words. It exits 1 only when a check that ran failed; each check's output is in `target/check-all/`, and `CHECK_ALL_DRY=1` prints what it would run.
+The tool knows no game by name, and none of its recipes reads a game's files. The checks of a game against its ROM are the games repo's: its justfile runs them from a game's folder with an installed gp (or `GP=path`), each saying plainly when a ROM is missing: `just check-game` (the game's model checked and in canonical form, `gp corpus score` with every clip exact, each MAME capture its `oracle/mame-captures.toml` names on gp-arcade, the arcade player against the native replay, the model in the page's player against the native run), or its check-all recipe, run at its top, for every game. The few of those that run a script or example of this repo find it through `GAMEPRINTER` (else `../gameprinter`); `just play-arcade-wasm` here builds the arcade player and its native examples for them. What is left here of the old by-hand checks needs no game: `just web-page check` (the public page, played headless), `just page-tests` (its `share.test.mjs` and `theme-line.test.mjs`) and `gp baseline check`.
 
 Changes land on `main` only through `gp tool gate` ([docs/gate.md](docs/gate.md)).
 

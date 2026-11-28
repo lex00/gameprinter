@@ -37,7 +37,6 @@
 //! (crate::sealed).
 
 use std::fmt::Write as _;
-use std::fs;
 use std::path::PathBuf;
 
 use anyhow::{Context as _, Result, bail};
@@ -64,6 +63,7 @@ pub(crate) mod review;
 pub(crate) mod scores;
 pub(crate) mod server;
 pub(crate) mod session;
+pub(crate) mod sprite_runs;
 pub(crate) mod triage;
 pub(crate) mod waits;
 pub(crate) mod watch;
@@ -71,7 +71,9 @@ pub(crate) mod watch_page;
 
 use crate::Outcome;
 pub(crate) use session::name_ok;
-use session::{Session, current, queue_file, read_queue, show_text, write_queue};
+#[cfg(test)]
+use session::write_queue;
+use session::{Session, current, queue_file, read_queue, show_text, update_queue};
 
 #[derive(Subcommand)]
 pub enum MechanicCmd {
@@ -1437,17 +1439,18 @@ pub(crate) fn run(cmd: &MechanicCmd, paths: &Paths) -> Result<Outcome> {
             }
             if *add {
                 let f = paths.home.join("mechanics").join(game).join("queue.json");
-                let mut q = read_queue(&f);
-                let mut k = q.len();
-                for l in shown.iter().filter(|l| l["kind"] != json!("open")) {
-                    k += 1;
-                    let name = format!("lead-{k}");
-                    if q.iter().any(|r| r["mechanic"] == json!(name)) {
-                        continue;
+                update_queue(&f, |q| {
+                    let mut k = q.len();
+                    for l in shown.iter().filter(|l| l["kind"] != json!("open")) {
+                        k += 1;
+                        let name = format!("lead-{k}");
+                        if q.iter().any(|r| r["mechanic"] == json!(name)) {
+                            continue;
+                        }
+                        q.push(json!({"mechanic": name, "status": "next", "note": l["lead"]}));
                     }
-                    q.push(json!({"mechanic": name, "status": "next", "note": l["lead"]}));
-                }
-                fs::write(&f, serde_json::to_string_pretty(&q)?)?;
+                    Ok(())
+                })?;
                 text.push_str("added to the queue as next\n");
             }
             Ok(Outcome::ok(
@@ -1762,7 +1765,6 @@ fn clip_words(cl: &Value) -> String {
 
 fn queue(paths: &Paths, game: &str, mechanic: Option<&str>, c: &RowChange) -> Result<Outcome> {
     let f = queue_file(paths, game)?;
-    let mut q = read_queue(&f);
     let mut hint: Option<String> = None;
     let board = c
         .games
@@ -1816,214 +1818,218 @@ fn queue(paths: &Paths, game: &str, mechanic: Option<&str>, c: &RowChange) -> Re
         if !name_ok(m) {
             bail!("a mechanic name is lower-case letters, digits and dashes: {m}");
         }
-        if !q.iter().any(|r| r["mechanic"] == json!(m)) {
-            if c.status.is_none() {
-                bail!("{m} isn't in the quest log: give it a --status");
-            }
-            // An archived row taken up again comes back with its history.
-            let back = archive::bring_back(&paths.home, game, |r| r["mechanic"] == json!(m))?;
-            q.push(back.unwrap_or_else(|| json!({"mechanic": m})));
-        }
-        let r = q
-            .iter_mut()
-            .find(|r| r["mechanic"] == json!(m))
-            .expect("just added");
-        // A worker doesn't close a row whose clips the gate's last scores
-        // hold short of the bars: the game isn't published until every clip
-        // is exact on state, and a closed row is one nothing takes up again.
-        if c.status == Some("done") && std::env::var_os("GP_WORKER").is_some() {
-            let short = scores::short_clips(&paths.home, game, Some(m));
-            if !short.is_empty() {
-                let ids: Vec<&str> = short.iter().map(|(id, _)| id.as_str()).collect();
-                bail!(
-                    "{m} can't be marked done: {} of its clips don't meet the bars on the gate's last scores ({}), and {game} isn't published until every clip does. Leave it next with what is known, or park it in line with why",
-                    ids.len(),
-                    ids.join(", ")
-                );
-            }
-        }
-        if let Some(st) = c.status {
-            // A row the person wrote on the page keeps their words (asked)
-            // when the agent's note takes its place, so the page can say
-            // who wrote which.
-            if r["by"] == json!("person")
-                && r.get("asked").is_none()
-                && let Some(o) = r.as_object_mut()
-            {
-                let said = o.get("note").cloned().unwrap_or(json!(""));
-                o.insert("asked".into(), said);
-            }
-            r["status"] = json!(st);
-            // Set in line, the row is parked from now: the person's words
-            // before this don't give it a worker, words after do
-            // (crate::steps::row_steps).
-            if st == "in line" {
-                r["parked_ms"] = json!(gp_mcp::asks::now_ms());
-            }
-            // The note stays unless a new one is given: a status alone
-            // doesn't wipe what the row knows.
-            if let Some(n) = c.note {
-                r["note"] = json!(n);
-            }
-            // A deliberate park says why in front of the note, and is kept
-            // as `parked` so a later park replaces its words; another status,
-            // or a new note, ends it (and takes its words off a kept note).
-            match c.parked.filter(|_| st == "in line") {
-                Some(why) => park_row(r, why),
-                None if st != "in line" || c.note.is_some() => {
-                    if c.note.is_none() {
-                        let bare = unparked_note(r);
-                        r["note"] = json!(bare);
-                    }
-                    if let Some(o) = r.as_object_mut() {
-                        o.remove("parked");
-                    }
+        update_queue(&f, |q| {
+            if !q.iter().any(|r| r["mechanic"] == json!(m)) {
+                if c.status.is_none() {
+                    bail!("{m} isn't in the quest log: give it a --status");
                 }
-                None => {}
+                // An archived row taken up again comes back with its history.
+                let back = archive::bring_back(&paths.home, game, |r| r["mechanic"] == json!(m))?;
+                q.push(back.unwrap_or_else(|| json!({"mechanic": m})));
+            }
+            let r = q
+                .iter_mut()
+                .find(|r| r["mechanic"] == json!(m))
+                .expect("just added");
+            // A worker doesn't close a row whose clips the gate's last scores
+            // hold short of the bars: the game isn't published until every clip
+            // is exact on state, and a closed row is one nothing takes up again.
+            if c.status == Some("done") && std::env::var_os("GP_WORKER").is_some() {
+                let short = scores::short_clips(&paths.home, game, Some(m));
+                if !short.is_empty() {
+                    let ids: Vec<&str> = short.iter().map(|(id, _)| id.as_str()).collect();
+                    bail!(
+                        "{m} can't be marked done: {} of its clips don't meet the bars on the gate's last scores ({}), and {game} isn't published until every clip does. Leave it next with what is known, or park it in line with why",
+                        ids.len(),
+                        ids.join(", ")
+                    );
+                }
+            }
+            if let Some(st) = c.status {
+                // A row the person wrote on the page keeps their words (asked)
+                // when the agent's note takes its place, so the page can say
+                // who wrote which.
+                if r["by"] == json!("person")
+                    && r.get("asked").is_none()
+                    && let Some(o) = r.as_object_mut()
+                {
+                    let said = o.get("note").cloned().unwrap_or(json!(""));
+                    o.insert("asked".into(), said);
+                }
+                r["status"] = json!(st);
+                // Set in line, the row is parked from now: the person's words
+                // before this don't give it a worker, words after do
+                // (crate::steps::row_steps).
+                if st == "in line" {
+                    r["parked_ms"] = json!(gp_mcp::asks::now_ms());
+                }
+                // The note stays unless a new one is given: a status alone
+                // doesn't wipe what the row knows.
+                if let Some(n) = c.note {
+                    r["note"] = json!(n);
+                }
+                // A deliberate park says why in front of the note, and is kept
+                // as `parked` so a later park replaces its words; another status,
+                // or a new note, ends it (and takes its words off a kept note).
+                match c.parked.filter(|_| st == "in line") {
+                    Some(why) => park_row(r, why),
+                    None if st != "in line" || c.note.is_some() => {
+                        if c.note.is_none() {
+                            let bare = unparked_note(r);
+                            r["note"] = json!(bare);
+                        }
+                        if let Some(o) = r.as_object_mut() {
+                            o.remove("parked");
+                        }
+                    }
+                    None => {}
+                }
+                if let Some(o) = r.as_object_mut() {
+                    match c.worker.filter(|_| st == "agent working") {
+                        Some(w) => o.insert("worker".into(), json!(w)),
+                        None => o.remove("worker"),
+                    };
+                }
+            }
+            for (k, v) in [("known", c.known), ("read", c.reads), ("open", c.opens)] {
+                if !v.is_empty() {
+                    r[k] = json!(v);
+                }
             }
             if let Some(o) = r.as_object_mut() {
-                match c.worker.filter(|_| st == "agent working") {
-                    Some(w) => o.insert("worker".into(), json!(w)),
-                    None => o.remove("worker"),
-                };
-            }
-        }
-        for (k, v) in [("known", c.known), ("read", c.reads), ("open", c.opens)] {
-            if !v.is_empty() {
-                r[k] = json!(v);
-            }
-        }
-        if let Some(o) = r.as_object_mut() {
-            match c.repo {
-                Some("tools") => {
-                    o.insert("repo".into(), json!("tools"));
-                }
-                Some(_) => {
-                    o.remove("repo");
-                }
-                None => {}
-            }
-            if let Some(why) = c.out_of_scope {
-                o.insert("scope".into(), json!("out"));
-                o.insert("scope_why".into(), json!(why));
-            }
-            if c.in_scope {
-                o.remove("scope");
-                o.remove("scope_why");
-            }
-            if let Some(cl) = c.clip {
-                o.insert("clip".into(), cl.clone());
-            }
-            if c.no_clip {
-                o.remove("clip");
-            }
-            if let Some(t) = c.target {
-                o.insert("target".into(), json!(t.trim()));
-                o.remove("measure_needed");
-            }
-            if c.no_target {
-                o.remove("target");
-                o.remove("awaiting_measure");
-            }
-            if let Some(w) = c.measure_needed {
-                o.insert("measure_needed".into(), json!(w.trim()));
-            }
-            match c.plain.map(str::trim) {
-                Some("") => {
-                    o.remove("plain");
-                }
-                Some(p) => {
-                    o.insert("plain".into(), json!(p));
-                }
-                None => {}
-            }
-            // Iterating: no worker gates it until the person says to
-            // (gp_mcp::iterating). A status doesn't end it; --no-iterating
-            // or the row's LAND IT does.
-            if let Some(why) = c.iterating {
-                let why = why.trim();
-                if why.is_empty() {
-                    bail!("an iterating row says why (--iterating WHY)");
-                }
-                o.insert("iterating".into(), json!(why));
-                let on: Vec<&str> = c
-                    .iterating_on
-                    .iter()
-                    .map(|p| p.trim().trim_matches('/'))
-                    .filter(|p| !p.is_empty())
-                    .collect();
-                if on.is_empty() {
-                    o.remove("iterating_on");
-                } else {
-                    o.insert("iterating_on".into(), json!(on));
-                }
-            }
-            if c.no_iterating {
-                o.remove("iterating");
-                o.remove("iterating_on");
-            }
-            // A status set without a wait ends the row's wait.
-            match &wait {
-                Some(w) => {
-                    if o.get("waits_on") != Some(&json!(w)) {
-                        o.insert("waits_since".into(), json!(gp_mcp::asks::now_ms()));
+                match c.repo {
+                    Some("tools") => {
+                        o.insert("repo".into(), json!("tools"));
                     }
-                    o.insert("waits_on".into(), json!(w));
+                    Some(_) => {
+                        o.remove("repo");
+                    }
+                    None => {}
                 }
-                None if c.status.is_some() || c.no_wait => {
-                    o.remove("waits_on");
-                    o.remove("waits_since");
+                if let Some(why) = c.out_of_scope {
+                    o.insert("scope".into(), json!("out"));
+                    o.insert("scope_why".into(), json!(why));
                 }
-                None => {}
+                if c.in_scope {
+                    o.remove("scope");
+                    o.remove("scope_why");
+                }
+                if let Some(cl) = c.clip {
+                    o.insert("clip".into(), cl.clone());
+                }
+                if c.no_clip {
+                    o.remove("clip");
+                }
+                if let Some(t) = c.target {
+                    o.insert("target".into(), json!(t.trim()));
+                    o.remove("measure_needed");
+                }
+                if c.no_target {
+                    o.remove("target");
+                    o.remove("awaiting_measure");
+                }
+                if let Some(w) = c.measure_needed {
+                    o.insert("measure_needed".into(), json!(w.trim()));
+                }
+                match c.plain.map(str::trim) {
+                    Some("") => {
+                        o.remove("plain");
+                    }
+                    Some(p) => {
+                        o.insert("plain".into(), json!(p));
+                    }
+                    None => {}
+                }
+                // Iterating: no worker gates it until the person says to
+                // (gp_mcp::iterating). A status doesn't end it; --no-iterating
+                // or the row's LAND IT does.
+                if let Some(why) = c.iterating {
+                    let why = why.trim();
+                    if why.is_empty() {
+                        bail!("an iterating row says why (--iterating WHY)");
+                    }
+                    o.insert("iterating".into(), json!(why));
+                    let on: Vec<&str> = c
+                        .iterating_on
+                        .iter()
+                        .map(|p| p.trim().trim_matches('/'))
+                        .filter(|p| !p.is_empty())
+                        .collect();
+                    if on.is_empty() {
+                        o.remove("iterating_on");
+                    } else {
+                        o.insert("iterating_on".into(), json!(on));
+                    }
+                }
+                if c.no_iterating {
+                    o.remove("iterating");
+                    o.remove("iterating_on");
+                }
+                // A status set without a wait ends the row's wait.
+                match &wait {
+                    Some(w) => {
+                        if o.get("waits_on") != Some(&json!(w)) {
+                            o.insert("waits_since".into(), json!(gp_mcp::asks::now_ms()));
+                        }
+                        o.insert("waits_on".into(), json!(w));
+                    }
+                    None if c.status.is_some() || c.no_wait => {
+                        o.remove("waits_on");
+                        o.remove("waits_since");
+                    }
+                    None => {}
+                }
             }
-        }
-        // A row with a target is done only when the measure gets there: a
-        // worker's word doesn't close it.
-        let r = q
-            .iter()
-            .find(|r| r["mechanic"] == json!(m))
-            .expect("just changed");
-        if c.status == Some("done")
-            && let Some(t) = r["target"].as_str()
-        {
-            crate::scoreboard::may_close(board.as_ref(), t)
-                .map_err(|e| anyhow::anyhow!("{m}: {e}"))?;
-        }
-        if c.under_step
-            && c.status == Some("done")
-            && let Some(why) = unlocked_look(game, r, c.games)
-        {
-            bail!("{m}: {why}");
-        }
-        if r["status"] != json!("done")
-            && r.get("target").is_none()
-            && r.get("measure_needed").is_none()
-        {
-            hint = Some(format!(
-                "{m} has no target: give it one on a line of the scoreboard (--target \"LINE sprites at least N of M\"), or say what would measure it (--measure-needed WORDS)"
-            ));
-        }
-        // A question for the person with nothing to look at: say how to
-        // give it one, since the page sets the clip up from the row.
-        let r = q
-            .iter()
-            .find(|r| r["mechanic"] == json!(m))
-            .expect("just changed");
-        let card = (c.under_step && r["status"] == json!("asking you") && r.get("clip").is_none())
+            // A row with a target is done only when the measure gets there: a
+            // worker's word doesn't close it.
+            let r = q
+                .iter()
+                .find(|r| r["mechanic"] == json!(m))
+                .expect("just changed");
+            if c.status == Some("done")
+                && let Some(t) = r["target"].as_str()
+            {
+                crate::scoreboard::may_close(board.as_ref(), t)
+                    .map_err(|e| anyhow::anyhow!("{m}: {e}"))?;
+            }
+            if c.under_step
+                && c.status == Some("done")
+                && let Some(why) = unlocked_look(game, r, c.games)
+            {
+                bail!("{m}: {why}");
+            }
+            if r["status"] != json!("done")
+                && r.get("target").is_none()
+                && r.get("measure_needed").is_none()
+            {
+                hint = Some(format!(
+                    "{m} has no target: give it one on a line of the scoreboard (--target \"LINE sprites at least N of M\"), or say what would measure it (--measure-needed WORDS)"
+                ));
+            }
+            // A question for the person with nothing to look at: say how to
+            // give it one, since the page sets the clip up from the row.
+            let r = q
+                .iter()
+                .find(|r| r["mechanic"] == json!(m))
+                .expect("just changed");
+            let card = (c.under_step
+                && r["status"] == json!("asking you")
+                && r.get("clip").is_none())
             .then(|| crate::serve::runner::row_card(&paths.home, game, m, gp_mcp::asks::now_ms()))
             .flatten()
             .map(|(_, s)| s);
-        if c.under_step
-            && let Some(why) = worker_ask_refused(r, card)
-        {
-            bail!("{m}: {why}");
-        }
-        if r["status"] == json!("asking you") && r.get("clip").is_none() {
-            hint = Some(format!(
-                "{m} asks the person without a clip: when they are to judge something they can see, give the row the clip that shows it (--clip N --frames A-B --look THEME), and the page sets it up on the screens"
-            ));
-        }
-        write_queue(&f, &q)?;
+            if c.under_step
+                && let Some(why) = worker_ask_refused(r, card)
+            {
+                bail!("{m}: {why}");
+            }
+            if r["status"] == json!("asking you") && r.get("clip").is_none() {
+                hint = Some(format!(
+                    "{m} asks the person without a clip: when they are to judge something they can see, give the row the clip that shows it (--clip N --frames A-B --look THEME), and the page sets it up on the screens"
+                ));
+            }
+            Ok(())
+        })?;
     }
     let mut q = scores::scored_queue(&paths.home, game);
     // The target as this call's games checkout measures it.
@@ -2157,25 +2163,28 @@ pub(crate) fn seed_quest_log(
 ) -> Result<(PathBuf, Vec<Row>, usize)> {
     let rows = checklist(genre)?;
     let f = queue_file(paths, game)?;
-    let mut q: Vec<Value> = read_queue(&f);
-    let mut added = 0;
-    for r in &rows {
-        if !q.iter().any(|x| x["mechanic"] == json!(r.row)) {
-            // No line can measure it before the first clip: the row says
-            // what would, so it isn't closed on a worker's word alone.
-            q.push(json!({
-                "mechanic": r.row, "status": "next", "note": r.what,
-                "measure_needed": format!(
-                    "a line of {game}/{} on the first corpus clip that shows {}",
-                    crate::scoreboard::FILE,
-                    r.row
-                ),
-            }));
-            added += 1;
+    let added = update_queue(&f, |q| {
+        let mut added = 0;
+        for r in &rows {
+            if !q.iter().any(|x| x["mechanic"] == json!(r.row)) {
+                // No line can measure it before the first clip: the row says
+                // what would, so it isn't closed on a worker's word alone.
+                q.push(json!({
+                    "mechanic": r.row, "status": "next", "note": r.what,
+                    "measure_needed": format!(
+                        "a line of {game}/{} on the first corpus clip that shows {}",
+                        crate::scoreboard::FILE,
+                        r.row
+                    ),
+                }));
+                added += 1;
+            }
         }
+        Ok(added)
+    })?;
+    for r in &rows {
         Session::create(paths, game, &r.row, Some(&r.what), rom_sha)?;
     }
-    write_queue(&f, &q)?;
     let dir = f.parent().map(PathBuf::from).unwrap_or_default();
     Ok((dir, rows, added))
 }

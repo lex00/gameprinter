@@ -63,6 +63,7 @@
 
 pub mod attotime;
 pub mod canonical;
+pub mod cpm;
 pub mod ctc;
 pub mod dasm;
 pub mod draws;

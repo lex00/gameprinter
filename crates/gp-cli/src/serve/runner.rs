@@ -170,16 +170,58 @@ fn file(home: &Path, id: &str) -> PathBuf {
     loop_state::workers_dir(home).join(format!("{id}.json"))
 }
 
+/// Takes the lock beside worker `id`'s record (an flock on `ID.json.lock`,
+/// which the workers' listing doesn't read); let go when dropped.
+fn lock_record(home: &Path, id: &str) -> Option<fs::File> {
+    let _ = fs::create_dir_all(loop_state::workers_dir(home));
+    let l = fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(file(home, id).with_extension("json.lock"))
+        .ok()?;
+    l.lock().ok()?;
+    Some(l)
+}
+
+fn read_record(home: &Path, id: &str) -> Option<Value> {
+    fs::read(file(home, id))
+        .ok()
+        .and_then(|b| serde_json::from_slice(&b).ok())
+}
+
+fn put_record(home: &Path, id: &str, v: &Value) {
+    let f = file(home, id);
+    let tmp = f.with_extension("json.tmp");
+    if fs::write(&tmp, serde_json::to_vec_pretty(v).unwrap_or_default()).is_ok() {
+        let _ = fs::rename(&tmp, &f);
+    }
+}
+
+/// The record of the worker this server runs, written whole under the
+/// record's lock. A stop the person made from another server (the record
+/// on file says stopped by them, [`stop_worker`]) is kept over a record
+/// that doesn't know of it yet.
 fn write(home: &Path, v: &Value) {
     let id = v["step"]["id"].as_str().unwrap_or("");
     if id.is_empty() {
         return;
     }
-    let f = file(home, id);
-    let _ = fs::create_dir_all(loop_state::workers_dir(home));
-    let tmp = f.with_extension("json.tmp");
-    if fs::write(&tmp, serde_json::to_vec_pretty(v).unwrap_or_default()).is_ok() {
-        let _ = fs::rename(&tmp, &f);
+    let _l = lock_record(home, id);
+    let on_file = read_record(home, id).unwrap_or_default();
+    let stop_since_start =
+        on_file["stopped_ms"].as_u64().unwrap_or(0) >= v["started_ms"].as_u64().unwrap_or(u64::MAX);
+    if on_file["stopped_by"] == json!("person")
+        && v["stopped_by"] != json!("person")
+        && stop_since_start
+    {
+        let mut v = v.clone();
+        for k in ["state", "why", "stopped_by", "stopped_ms", "pid"] {
+            v[k] = on_file[k].clone();
+        }
+        put_record(home, id, &v);
+    } else {
+        put_record(home, id, v);
     }
 }
 
@@ -306,6 +348,8 @@ pub(crate) fn status(ctx: &Ctx) -> Value {
         format!(
             "The runner is on and the loop is halted: no new worker starts. {live} still at work."
         )
+    } else if let Some(why) = super::runner_limits::held_now(&ctx.paths.home) {
+        format!("The runner is on and held: {why}. {live} still at work.")
     } else {
         format!(
             "The runner is on: {live} of at most {} workers at work.",
@@ -1088,7 +1132,11 @@ fn settle_card_asks(home: &Path, now: u64) -> Vec<(String, String)> {
 /// Row `row` of queue `f`, asking about a card there is none of: once it
 /// has stood so for [`CARD_ASK_WITHOUT_CARD_MS`], it goes to next.
 fn no_card_left(f: &Path, row: &str, now: u64) -> anyhow::Result<bool> {
-    let mut q = crate::mechanic::session::read_queue(f);
+    crate::mechanic::session::update_queue(f, |q| no_card_left_rows(q, row, now))
+}
+
+/// [`no_card_left`] on the rows, under the quest log's lock.
+fn no_card_left_rows(q: &mut [Value], row: &str, now: u64) -> anyhow::Result<bool> {
     let Some(r) = q.iter_mut().find(|r| r["mechanic"] == json!(row)) else {
         return Ok(false);
     };
@@ -1105,7 +1153,6 @@ fn no_card_left(f: &Path, row: &str, now: u64) -> anyhow::Result<bool> {
         json!("It asked you about a card that was never on your page. The loop takes it up again."),
     );
     o.remove("worker");
-    crate::mechanic::session::write_queue(f, &q)?;
     Ok(true)
 }
 
@@ -1231,7 +1278,23 @@ fn settle_row_by_card(
         return Ok(true);
     }
     let f = home.join("mechanics").join(game).join("queue.json");
-    let mut q = crate::mechanic::session::read_queue(&f);
+    crate::mechanic::session::update_queue(&f, |q| {
+        settle_row_by_card_rows(home, game, row, kind, ended, what, a, q)
+    })
+}
+
+/// [`settle_row_by_card`] on the quest log's rows `q`, under its lock.
+#[allow(clippy::too_many_arguments)]
+fn settle_row_by_card_rows(
+    home: &Path,
+    game: &str,
+    row: &str,
+    kind: &str,
+    ended: u64,
+    what: &str,
+    a: &Value,
+    q: &mut [Value],
+) -> anyhow::Result<bool> {
     let Some(r) = q.iter_mut().find(|r| r["mechanic"] == json!(row)) else {
         return Ok(true);
     };
@@ -1242,7 +1305,6 @@ fn settle_row_by_card(
     if keep_going && r.get("iterating").is_none() {
         r["iterating"] = json!(KEPT_GOING);
         if r["status"] == json!("agent working") {
-            crate::mechanic::session::write_queue(&f, &q)?;
             return Ok(false);
         }
     }
@@ -1436,7 +1498,6 @@ fn settle_row_by_card(
     if status == "done" {
         o.remove("clip");
     }
-    crate::mechanic::session::write_queue(&f, &q)?;
     Ok(true)
 }
 
@@ -2074,14 +2135,20 @@ fn approve_and_gate(
 /// Row `row` of the quest log `qf` after its confirmed look was locked as
 /// `out`. A row whose yes was taken back (no `confirmed`) is left as it is.
 fn settle_lock(qf: &Path, row: &str, out: &Locked, now: u64) -> anyhow::Result<()> {
-    use crate::mechanic::session::{read_queue, write_queue};
-    let mut q = read_queue(qf);
+    crate::mechanic::session::update_queue(qf, |q| {
+        settle_lock_rows(q, row, out, now);
+        Ok(())
+    })
+}
+
+/// [`settle_lock`] on the rows, under the quest log's lock.
+fn settle_lock_rows(q: &mut [Value], row: &str, out: &Locked, now: u64) {
     let Some(o) = q
         .iter_mut()
         .find(|r| r["mechanic"] == json!(row) && r["confirmed"].is_object())
         .and_then(Value::as_object_mut)
     else {
-        return Ok(());
+        return;
     };
     let tries = o["confirmed"]["tries"].as_u64().unwrap_or(0) + 1;
     let failed = |why: &str| {
@@ -2142,7 +2209,6 @@ fn settle_lock(qf: &Path, row: &str, out: &Locked, now: u64) -> anyhow::Result<(
         }
     }
     o.insert("changed_ms".into(), json!(now));
-    write_queue(qf, &q)
 }
 
 /// The quest-log row a corpus clip's ID names: its session,
@@ -2161,49 +2227,50 @@ fn hold_rows(home: &Path, game: &str, held: &[Value]) -> anyhow::Result<()> {
         bail!("not a game name: {game}");
     }
     let f = home.join("mechanics").join(game).join("queue.json");
-    let mut q = crate::mechanic::session::read_queue(&f);
-    for h in held {
-        let (Some(id), Some(why)) = (h["id"].as_str(), h["why"].as_str()) else {
-            continue;
-        };
-        let Some(row) = row_of_clip(id) else {
-            continue;
-        };
-        let line = format!(
-            "{id} is held out of the corpus: {why}. It enters once the model plays it together with the original"
-        );
-        let at = match q.iter().position(|r| r["mechanic"] == json!(row)) {
-            Some(i) => i,
-            None => {
-                q.push(json!({"mechanic": row, "status": "next", "by": "loop"}));
-                q.len() - 1
+    crate::mechanic::session::update_queue(&f, |q| {
+        for h in held {
+            let (Some(id), Some(why)) = (h["id"].as_str(), h["why"].as_str()) else {
+                continue;
+            };
+            let Some(row) = row_of_clip(id) else {
+                continue;
+            };
+            let line = format!(
+                "{id} is held out of the corpus: {why}. It enters once the model plays it together with the original"
+            );
+            let at = match q.iter().position(|r| r["mechanic"] == json!(row)) {
+                Some(i) => i,
+                None => {
+                    q.push(json!({"mechanic": row, "status": "next", "by": "loop"}));
+                    q.len() - 1
+                }
+            };
+            let Some(o) = q[at].as_object_mut() else {
+                continue;
+            };
+            let mut open: Vec<Value> = o
+                .get("open")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            open.retain(|l| {
+                !l.as_str()
+                    .is_some_and(|s| s.starts_with(&format!("{id} is held out")))
+            });
+            open.push(json!(line));
+            o.insert("open".into(), json!(open));
+            let status = o.get("status").and_then(Value::as_str).unwrap_or("");
+            if status == "done" || status.is_empty() {
+                o.insert("status".into(), json!("next"));
+                o.insert("note".into(), json!(crate::next::cut(&line, 600)));
+                o.remove("clip");
+            } else if o.get("note").is_none() {
+                o.insert("note".into(), json!(crate::next::cut(&line, 600)));
             }
-        };
-        let Some(o) = q[at].as_object_mut() else {
-            continue;
-        };
-        let mut open: Vec<Value> = o
-            .get("open")
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default();
-        open.retain(|l| {
-            !l.as_str()
-                .is_some_and(|s| s.starts_with(&format!("{id} is held out")))
-        });
-        open.push(json!(line));
-        o.insert("open".into(), json!(open));
-        let status = o.get("status").and_then(Value::as_str).unwrap_or("");
-        if status == "done" || status.is_empty() {
-            o.insert("status".into(), json!("next"));
-            o.insert("note".into(), json!(crate::next::cut(&line, 600)));
-            o.remove("clip");
-        } else if o.get("note").is_none() {
-            o.insert("note".into(), json!(crate::next::cut(&line, 600)));
+            o.insert("changed_ms".into(), json!(gp_mcp::asks::now_ms()));
         }
-        o.insert("changed_ms".into(), json!(gp_mcp::asks::now_ms()));
-    }
-    crate::mechanic::session::write_queue(&f, &q)
+        Ok(())
+    })
 }
 
 /// What the runner last took into each game's corpus, in words.
@@ -2284,6 +2351,9 @@ fn look(ctx: &Ctx) {
     // A row with neither a target nor words for what would measure it
     // gets no worker (issue 55); gp loop health counts them.
     let open = measured(open, s.runner.measure_required);
+    let Some(open) = within_limits(home, open, &s.runner) else {
+        return;
+    };
     let todo = plan(
         &open,
         &loop_state::workers(home),
@@ -2320,6 +2390,27 @@ fn measured(open: Vec<Value>, required: bool) -> Vec<Value> {
     open.into_iter()
         .filter(|s| s["no_measure"] != json!(true))
         .collect()
+}
+
+/// The open steps the runner may start within its limits (serve/
+/// runner_limits.rs): None while the day's spend cap or the load ceiling
+/// holds it, else the steps less those whose workers failed too many tries.
+fn within_limits(home: &Path, open: Vec<Value>, r: &loop_state::Runner) -> Option<Vec<Value>> {
+    if open.is_empty() {
+        return Some(open);
+    }
+    if super::runner_limits::held_now(home).is_some() {
+        return None;
+    }
+    if r.fail_tries == 0 {
+        return Some(open);
+    }
+    let lines = crate::worker_runs::lines_of(&crate::worker_runs::ledger(home));
+    Some(super::runner_limits::not_given_up(
+        open,
+        &lines,
+        r.fail_tries,
+    ))
 }
 
 /// When the runner last looked and found fewer workers at work than
@@ -2416,11 +2507,26 @@ fn watched(setup: Setup, mut rec: Value, resume: bool) -> std::thread::JoinHandl
         }
         write(&setup.home, &rec);
         report_on_row(&setup, &rec);
+        give_up_if_failing(&setup.home, &mut rec);
         RUNNING
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .remove(&id);
     })
+}
+
+/// A step whose workers failed the home's `fail_tries` becomes a trouble
+/// row, its row waiting on it (serve/runner_limits.rs): after the report,
+/// whose row status it overrides.
+fn give_up_if_failing(home: &Path, rec: &mut Value) {
+    match super::runner_limits::give_up(home, rec, gp_mcp::asks::now_ms()) {
+        Ok(Some(_)) => write(home, rec),
+        Ok(None) => {}
+        Err(e) => {
+            rec["trouble_error"] = json!(format!("{e:#}"));
+            write(home, rec);
+        }
+    }
 }
 
 /// A quest-log item's worker that ended: its report goes into the item's
@@ -2523,12 +2629,19 @@ fn settle_row(
         bail!("not a game name: {game}");
     }
     let f = home.join("mechanics").join(game).join("queue.json");
-    let mut q = crate::mechanic::session::read_queue(&f);
+    crate::mechanic::session::update_queue(&f, |q| {
+        settle_row_rows(q, row, report, result);
+        Ok(())
+    })
+}
+
+/// [`settle_row`] on the rows, under the quest log's lock.
+fn settle_row_rows(q: &mut [Value], row: &str, report: &str, result: Option<&Value>) {
     let Some(r) = q
         .iter_mut()
         .find(|r| r["mechanic"] == json!(row) && r["status"] == json!("agent working"))
     else {
-        return Ok(());
+        return;
     };
     // Only a look asks the owner, and a look comes with the clip the worker
     // put on the row itself (gp mechanic queue --clip): a question left in
@@ -2543,7 +2656,7 @@ fn settle_row(
     };
     let status = "next";
     let Some(o) = r.as_object_mut() else {
-        return Ok(());
+        return;
     };
     // The person's own words stay theirs (as gp mechanic queue keeps them).
     if o.get("by") == Some(&json!("person")) && !o.contains_key("asked") {
@@ -2553,7 +2666,6 @@ fn settle_row(
     o.insert("status".into(), json!(status));
     o.insert("note".into(), json!(crate::next::cut(&note, 600)));
     o.remove("worker");
-    crate::mechanic::session::write_queue(&f, &q)
 }
 
 /// The report's lines that ask the person something (a `?` ending a
@@ -2910,19 +3022,29 @@ fn closed_by_pending(
             last.id
         ),
     };
-    let mut q = crate::mechanic::session::read_queue(&qf);
-    let r = q.iter_mut().find(|r| r["mechanic"] == json!(row))?;
-    let o = r.as_object_mut()?;
-    let now = gp_mcp::asks::now_ms();
-    o.insert("status".into(), json!("in line"));
-    o.insert("note".into(), json!(note));
-    o.remove("worker");
-    if let Some(w) = &wait {
-        o.insert("waits_on".into(), json!(format!("{game}/{w}")));
-        o.insert("waits_since".into(), json!(now));
+    // The measure ran with the lock let go; the row is read again under it.
+    let set = crate::mechanic::session::update_queue(&qf, |q| {
+        let Some(o) = q
+            .iter_mut()
+            .find(|r| r["mechanic"] == json!(row))
+            .and_then(Value::as_object_mut)
+        else {
+            return Ok(false);
+        };
+        let now = gp_mcp::asks::now_ms();
+        o.insert("status".into(), json!("in line"));
+        o.insert("note".into(), json!(note));
+        o.remove("worker");
+        if let Some(w) = &wait {
+            o.insert("waits_on".into(), json!(format!("{game}/{w}")));
+            o.insert("waits_since".into(), json!(now));
+        }
+        o.insert("changed_ms".into(), json!(now));
+        Ok(true)
+    });
+    if !set.ok()? {
+        return None;
     }
-    o.insert("changed_ms".into(), json!(now));
-    crate::mechanic::session::write_queue(&qf, &q).ok()?;
     Some(format!(
         "its row's target is met on main with the pending patches ({reading}): no worker needed"
     ))
@@ -3082,7 +3204,15 @@ pub(crate) fn brief(setup: &Setup, step: &Value, wt: &Path, branch: &str, run: &
         .flatten()
         .filter_map(Value::as_str)
         .collect();
-    if row_of(step).is_some()
+    if let Some((game, row)) = row_of(step).filter(|_| for_the_train(step)) {
+        // A row for the train (issue 58): its work is gated with the
+        // others' once the queue is built, so the worker builds it whole
+        // and hands it in in place of landing the measure.
+        b.push(String::new());
+        b.push(format!(
+            "This row is for the train (its iterating words say so): don't gate anything in this step, not its measure on its own either. Build the row's whole work with its measure in it (a test that passes once the work is in, no ignore left on it), run only the tests you added or changed (cargo test -p CRATE NAME), then git diff > a patch file in your worktree and end with gp_run loop hand-in with game {game}, row {row}, patch FILE and message \"WHAT CHANGES. Expect: ... Checked: ...\" (removes_test NAME for a test it takes out on purpose). That sets the row in line, handed in; the person runs gp loop train once the queue is built, which gates every handed-in patch together, and a patch that doesn't apply or fails comes back to the row as next with why."
+        ));
+    } else if row_of(step).is_some()
         && step.get("target").is_none_or(Value::is_null)
         && !landed_tests.is_empty()
     {
@@ -3127,6 +3257,14 @@ pub(crate) fn brief(setup: &Setup, step: &Value, wt: &Path, branch: &str, run: &
     }
     b.push(RECORD_CLOSE.to_owned());
     b.join("\n") + "\n"
+}
+
+/// Whether a row's step is for the train: its iterating words name it
+/// ("for the train", "gp loop train").
+fn for_the_train(step: &Value) -> bool {
+    step["iterating"]
+        .as_str()
+        .is_some_and(|w| w.to_lowercase().contains("train"))
 }
 
 /// The game and row of a quest-log item's step (it touches `row:GAME/ROW`).
@@ -3494,6 +3632,13 @@ fn looping(text: &str) -> Option<String> {
     })
 }
 
+/// The transcript watch (serve/runner_limits.rs): why a worker whose log
+/// ends with `text` steps outside its step `id` or does by hand what gp
+/// has a tool for, or None.
+fn watched_log(setup: &Setup, id: &str, wt: &Path, text: &str) -> Option<String> {
+    super::runner_limits::out_of_step(text, id, &setup.games, wt)
+}
+
 /// A worker's limits in words, for its brief: its time, and the turn and
 /// spend caps of one run, and what the runner stops it for.
 fn limits_words(setup: &Setup) -> String {
@@ -3775,7 +3920,7 @@ fn work(setup: &Setup, live: &Live, rec: &mut Value, resume: bool) -> anyhow::Re
             let why = stalled(now, wrote.elapsed(), mine_runs).or_else(|| {
                 claude
                     .then(|| crate::worker_runs::tail(&log_path, REPEATS_TAIL))
-                    .and_then(|t| looping(&t))
+                    .and_then(|t| looping(&t).or_else(|| watched_log(setup, &id, &wt, &t)))
             });
             if let Some(why) = why {
                 set_out(live, false);
@@ -3891,7 +4036,15 @@ pub(crate) fn stop_worker(home: &Path, id: &str) -> Result<Value, String> {
         stopped_by_person(&mut w);
         w["pid"] = Value::Null;
         park_stopped_row(home, &w);
-        write(home, &w);
+        // The stop goes on the record as it is on file now, under its lock:
+        // what the server running it wrote since is kept beside the stop.
+        let _l = lock_record(home, id);
+        let mut now = read_record(home, id).unwrap_or(w);
+        if loop_state::LIVE.contains(&now["state"].as_str().unwrap_or("")) {
+            stopped_by_person(&mut now);
+            now["pid"] = Value::Null;
+            put_record(home, id, &now);
+        }
     }
     if let Some(group) = group {
         gp_mcp::proc::stop_group(group as u32, Duration::from_secs(2));
@@ -3930,20 +4083,18 @@ fn park_stopped_row(home: &Path, rec: &Value) {
         return;
     }
     let f = home.join("mechanics").join(&game).join("queue.json");
-    let mut q = crate::mechanic::session::read_queue(&f);
-    let Some(r) = q
-        .iter_mut()
-        .find(|r| r["mechanic"] == json!(row) && r["status"] != json!("done"))
-    else {
-        return;
-    };
     let id = rec["step"]["id"].as_str().unwrap_or("");
     let why = format!("you stopped its worker (loop-{id}); set it next to take it up again");
-    if r["parked"] == json!(why.as_str()) && r["status"] == json!("in line") {
-        return;
-    }
-    crate::mechanic::park_row(r, &why);
-    let _ = crate::mechanic::session::write_queue(&f, &q);
+    let _ = crate::mechanic::session::update_queue(&f, |q| {
+        if let Some(r) = q
+            .iter_mut()
+            .find(|r| r["mechanic"] == json!(row) && r["status"] != json!("done"))
+            && !(r["parked"] == json!(why.as_str()) && r["status"] == json!("in line"))
+        {
+            crate::mechanic::park_row(r, &why);
+        }
+        Ok(())
+    });
 }
 
 /// A worker's process as started by [`launch`]. On unix it runs on its
@@ -5790,6 +5941,32 @@ mod tests {
         step["repo"] = json!("games");
         let b = brief(&setup, &step, &wt, "loop/s0000000000h2", &Run::default());
         assert!(!b.contains("cite a row by its name alone"), "{b}");
+    }
+
+    /// Issue 58: a row whose iterating words name the train is told to
+    /// build the whole work and end with gp loop hand-in, in place of
+    /// landing its measure; a row iterating for another reason isn't.
+    #[test]
+    fn a_train_rows_brief_ends_with_hand_in() {
+        let t = tempfile::tempdir().unwrap();
+        let setup = rig(t.path(), "true\n");
+        let wt = t.path().join("wt");
+        let mut step = s("s0000000000h3", "agent", &["row:g/r"]);
+        step["measure_needed"] = json!("a test");
+        step["iterating"] = json!("for the train: build them all first, gate them together");
+        let b = brief(&setup, &step, &wt, "loop/s0000000000h3", &Run::default());
+        assert!(b.contains("gp_run loop hand-in with game g, row r"), "{b}");
+        assert!(
+            !b.contains("Your first job, before any other change, is its measure"),
+            "{b}"
+        );
+        step["iterating"] = json!("the person is still trying it");
+        let b = brief(&setup, &step, &wt, "loop/s0000000000h3", &Run::default());
+        assert!(!b.contains("loop hand-in"), "{b}");
+        assert!(
+            b.contains("Your first job, before any other change, is its measure"),
+            "{b}"
+        );
     }
 
     /// Issue 55: the brief's rules come first and are the same from run to

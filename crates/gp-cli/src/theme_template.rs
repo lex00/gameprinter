@@ -213,37 +213,11 @@ pub(crate) fn find_game(name: &str) -> Option<PathBuf> {
         .find(|d| load(d).is_ok_and(|t| t.manifest.template.id == name))
 }
 
-/// The games checkout for tests: `$GP_GAMES_DIR`, else `games` beside the
-/// gameprinter checkout, when it holds a game folder. None (and the test
-/// passes over it) without one.
-#[cfg(test)]
-pub(crate) fn test_games() -> Option<PathBuf> {
-    let d = std::env::var_os("GP_GAMES_DIR")
-        .filter(|v| !v.is_empty())
-        .map(PathBuf::from)?;
-    (!templates_in(&d).is_empty()).then_some(d)
-}
-
-/// The games checkout's page game for tests ([`page_game`]), else its
-/// first game folder. None (and the test passes over it) without one.
-#[cfg(test)]
-pub(crate) fn test_page_game() -> Option<PathBuf> {
-    let games = test_games()?;
-    match page_game(&games) {
-        Some(g) => Some(games.join(g)).filter(|d| d.join("template.toml").is_file()),
-        None => templates_in(&games).into_iter().next(),
-    }
-}
-
-/// The games checkout's game folders and gameprinter's own templates, for
-/// tests.
+/// gameprinter's own templates, for tests: never the person's games
+/// checkout, whose games are checked from their own folders.
 #[cfg(test)]
 pub(crate) fn test_game_dirs() -> Vec<PathBuf> {
-    let mut out = test_games().map(|r| templates_in(&r)).unwrap_or_default();
-    out.extend(templates_in(
-        &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../templates"),
-    ));
-    out
+    templates_in(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../templates"))
 }
 
 /// gameprinter's own templates only (Moss Hop), for the tests that hold a

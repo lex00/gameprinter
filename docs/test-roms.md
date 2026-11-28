@@ -1,12 +1,12 @@
 # Test ROMs
 
-Brought from game-printer on 2026-11-13. These are the NES's suites, run on gp-nes. An arcade board is held to MAME instead, frame by frame (`gp oracle diff` against a capture, docs/oracle.md). A Z80 instruction suite (ZEXDOC, ZEXALL) would need a CP/M harness on gp-arcade's Z80 (the program at 0100, BDOS calls 2 and 9 at 0005) and a pinned download, and isn't here yet.
+Brought from game-printer on 2026-11-13. Most of these are the NES's suites, run on gp-nes. The one arcade suite, `z80`, runs ZEXDOC and ZEXALL on gp-arcade's Z80 through a CP/M harness ([below](#the-z80-suite)); the rest of an arcade board is held to MAME, frame by frame (`gp oracle diff` against a capture, docs/oracle.md).
 
 This is the accuracy baseline. The standard NES test ROMs run headless on `gp-nes`, and each run of `just check-testroms` records their results in the metrics history, with the commit. They show how close the emulator under every recording is to the hardware, and where it differs, before a recording runs into the difference.
 
 ## What runs
 
-34 suites, 175 ROMs and 176 results (nestest gives two). The manifest, `test-roms/suites.toml`, lists them with their sources and hashes. Two of them are our own: the collection has no MMC1 test that reports a result, so `mmc1_banking` runs a test program we wrote, and `mmc3_banking` runs another for MMC3's banking ([below](#our-mmc1-test-program)).
+34 NES suites, 175 ROMs and 176 results (nestest gives two), and the `z80` suite's two CP/M programs ([below](#the-z80-suite)). The manifest, `test-roms/suites.toml`, lists them with their sources and hashes. Two of them are our own: the collection has no MMC1 test that reports a result, so `mmc1_banking` runs a test program we wrote, and `mmc3_banking` runs another for MMC3's banking ([below](#our-mmc1-test-program)).
 
 | Suite | What it checks | ROMs | How it reports |
 |---|---|---|---|
@@ -204,6 +204,18 @@ The pinned collection has 290 ROM images in 62 directories. Every directory whos
 | `stress/NEStress.NES` | A menu of PPU, APU and CPU tests chosen with the controller |
 | `240pee/`, `blargg_litewall/`, `dpcmletterbox/`, `exram/`, `full_palette/`, `m22chrbankingtest/`, `mmc5test/`, `mmc5test_v2/`, `nes15-1.0.0/`, `nmi_sync/`, `nrom368/`, `ny2011/`, `scanline/`, `scanline-a1/`, `scrolltest/`, `soundtest/`, `spritecans-2011/`, `stars_se/`, `stomper/`, `tutor/`, `tvpassfail/`, `volume_tests/`, `window5/` | Demos and visual or audio tests: a person judges the picture or sound |
 | `other/` (63) | Demos and visual tests, apart from `nestest.nes`. Two (`Streemerz_bundle.nes`, `test28.nes`) are mapper 28, which `tetanes-core` doesn't support |
+
+## The Z80 suite
+
+The `z80` suite (`check = "zex"`) runs Frank Cringle's Z80 instruction exercisers on gp-arcade's Z80, the port of MAME's core that both MCR boards use. ZEXDOC runs every instruction group over many operands and compares a CRC of the results and the documented flags with one taken on a real Z80; ZEXALL does the same with flag bits 3 and 5, which the Z80's documentation leaves out. Each prints one line a group, ending `OK` or `ERROR **** crc expected:... found:...`, and `Tests complete` at the end.
+
+They are CP/M programs, so they run on a CP/M harness (`gp_arcade::cpm`): 64 KB of RAM and the Z80, with the program loaded at 0100 and started there. 0005 holds a `RET`, and the harness carries out the BDOS call just before it runs: call 2 prints the character in E, call 9 the string at DE up to a `$`, and call 0 ends the run. 0006 holds the top of memory (FE00), which both programs load into SP. A jump to 0000, CP/M's warm boot, ends the run, and so does a `RET` from the program, since 0000 is on the stack it starts with. Any other BDOS call ends it as unsupported, and so does a `HALT`: nothing ever raises an interrupt. A program passes when it ends at 0000 having printed `Tests complete` and no `ERROR`; a failure shows the failing groups' lines.
+
+Limits are in Z80 cycles (`cycles`), not frames: each exerciser takes about 46 billion, and the suite allows 100 billion. That is minutes of run time, the longest suite by far; `gp testroms run z80` runs it alone. RAM always powers on as zeros, so `--ram-ones` runs it the same way.
+
+They come from [anotherlin/z80emu](https://github.com/anotherlin/z80emu)'s `testfiles/` (`zexdoc.com`, `zexall.com`), a source of the suite's own (`source` in the manifest). The commit and the two files' hashes are pinned in the manifest. A source or a hash that reads `to-pin` there is one still to be pinned: nothing of it is downloaded or run, and `gp testroms fetch` lists the file as to pin and prints its SHA-256 without keeping it.
+
+The harness's own tests (`cargo test -p gp-arcade cpm::tests`) and the suite's (`the_z80_suite_runs_on_the_cpm_harness` in `gp-cli`) run made-up CP/M programs of a few bytes, written in the tests; they download nothing and read no ROM.
 
 ## Controller 2
 

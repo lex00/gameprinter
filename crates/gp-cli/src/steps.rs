@@ -118,8 +118,11 @@ pub(crate) fn settle(
 }
 
 /// One open step as `gp loop steps` lists it, with the answer it is from.
+/// A step that touches `tools` is a change to gp itself: it is listed with
+/// `repo` "tools", as a tool row's step is, so its worker gets a worktree
+/// of the gameprinter checkout (serve/runner.rs, in_games).
 pub(crate) fn listed(a: &Answer, s: &Step) -> Value {
-    json!({
+    let mut v = json!({
         "id": s.id,
         "journey": a.journey,
         "subject": a.subject,
@@ -128,7 +131,11 @@ pub(crate) fn listed(a: &Answer, s: &Step) -> Value {
         "commands": s.commands,
         "touches": s.touches,
         "how": s.how,
-    })
+    });
+    if s.touches.iter().any(|t| t == "tools") {
+        v["repo"] = json!("tools");
+    }
+    v
 }
 
 /// What a quest-log item's step may run: the item's own record, the
@@ -477,6 +484,9 @@ pub(crate) fn row_steps(paths: &gp_evidence::Paths, games: Option<&Path>) -> Vec
                 // Its measure, landed as ignored tests: the work is what
                 // takes their ignore off.
                 "measure_tests": r["measure_tests"],
+                // Why the row is iterating; words naming the train make its
+                // brief end with gp loop hand-in (crate::loop_train).
+                "iterating": r["iterating"],
                 "no_measure": no_measure(&r),
             }));
         }
@@ -541,6 +551,25 @@ pub(crate) fn open_of(answers: &[Answer], held: &[Value]) -> Vec<Value> {
         }
     }
     out
+}
+
+/// Whether gp_run's step check (gp_mcp::policy::decide_step, as with
+/// steps_required on) lets a write of gp `path` run citing step `cited`
+/// among the `open` steps, as `gp loop steps` lists them.
+#[cfg(test)]
+pub(crate) fn step_allows(open: &[Value], cited: &str, path: &str) -> bool {
+    use gp_mcp::policy::{Decision, Steps, decide_step};
+    let st = Steps {
+        cited: Some(cited),
+        open,
+        held: &[],
+        halted: None,
+        bound: None,
+    };
+    !matches!(
+        decide_step(Decision::Run { writes: true }, path, &st),
+        Decision::Refused(_)
+    )
 }
 
 #[cfg(test)]

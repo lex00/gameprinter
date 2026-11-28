@@ -1,6 +1,6 @@
 # Host your own registry and page
 
-The owner hosts two things: the registry lex00/gp-registry, a GitHub repo of static files that holds the published games and themes, and the public page, https://gameprinter.intentius.workers.dev, a Cloudflare worker that installs games and themes from that registry. Anyone can host a registry of their own and a page of their own. A theme maker, say, can put their theme in a registry of their own and send a link that offers it on the public page, with no one's permission, and can later put up a page of their own too. Games always come from the page's own registry; a registry of yours adds themes, so it needs no copy of any game.
+The owner hosts two things: the registry lex00/gp-registry, a GitHub repo of static files that holds the published games and themes, and the public page, https://gameprinter.intentius.workers.dev, a Cloudflare worker that installs games and themes from that registry. Anyone can host a registry of their own and a page of their own. A theme maker, say, can put their theme in a registry of their own and send a link that offers it on the public page, with no one's permission, and can later put up a page of their own too. Games always come from the page's own registry; a registry of yours adds themes, so it needs no copy of any game. A game you made, with its own pictures, goes in your registry and on a page of your own whose registry it is ("A game with its own pictures", below).
 
 This page takes you from nothing to your own registry and page. The examples use a made-up GitHub account, `acme`, a registry repo `acme/harbor-registry` and a theme `acme/harbor-lights` for Donkey Kong.
 
@@ -78,24 +78,25 @@ The project's public page plays only its own registry's games and themes: a link
 
 ## 7. A page of your own
 
-Build the page with your registry as its second registry of themes, check it, and put it up. Its games still come from the project's registry. You need checkouts of gameprinter and of the games repo beside it, and Node. No ROM: `--no-roms` skips every check that needs one and says so in a line each.
+Build the page with your registry as its second registry of themes, check it, and put it up. Its games still come from the project's registry. The release check and the deploy are the games repo's (`page/` in lex00/games); they build the page with gameprinter's `scripts/web/build-page.sh` from a built gp's checkout (`GP=path/to/gameprinter/target/debug/gp`). You need checkouts of gameprinter and of the games repo, and Node. No ROM: `--no-roms` skips every check that needs one and says so in a line each.
 
 ```sh
-cd gameprinter
+cd games
+GP=../gameprinter/target/debug/gp \
 GP_PAGE_THEMES_URL=https://raw.githubusercontent.com/acme/harbor-registry/main \
 GP_PAGE_CONTENT=acme/harbor-lights \
-  scripts/web/release-check.sh --no-roms --game ../games/donkey-kong
+  page/release-check.sh --no-roms --game donkey-kong
 ```
 
 `GP_PAGE_THEMES_URL` goes in the page's `page.json` as `themes`: with no `r=` in its link the page offers that registry's themes beside its own registry's, and the line under its header says so (`GP_PAGE_THEMES_ROOT` gives a signed registry's root key line). `GP_PAGE_CONTENT` is the theme the page opens in. `GP_PAGE_HOME` is the https address of your list of games: the page's header then has an "All games" link to it (a page built for the repo's own registry links to that registry's list, `home` in `scripts/web/sources.toml`; with neither, the header has no link). Nothing in the repo is edited. (`GP_PAGE_SOURCE_URL` replaces the page's own registry, where games come from, for someone hosting games too.) On a pass the check records the page's digest, marked as made without ROMs, and prints `bundle: DIR`. Only that folder, file for file as it passed, can be uploaded.
 
 ### On Cloudflare
 
-Cloudflare Workers serves the folder with the page's own headers (`_headers`), which the page needs. Log in once with `npx wrangler login`. Your workers.dev subdomain is on the Workers page of your Cloudflare dashboard.
+Cloudflare Workers serves the folder with the page's own headers (`_headers`), which the page needs. Log in once with `npx wrangler login`. Your workers.dev subdomain is on the Workers page of your Cloudflare dashboard. In the games checkout:
 
 ```sh
-scripts/web/deploy.sh --first --worker harbor-page --subdomain acme
-scripts/web/deploy.sh BUNDLE_DIR --no-roms --worker harbor-page --subdomain acme
+page/deploy.sh --first --worker harbor-page --subdomain acme
+page/deploy.sh BUNDLE_DIR --no-roms --worker harbor-page --subdomain acme
 ```
 
 The first command makes the worker with a placeholder page, once. The second uploads the page as a version that isn't live, runs the page check on that version's own preview address, asks you to type the worker's name, and makes it live at https://harbor-page.acme.workers.dev. `--address URL` gives a whole address instead (a domain of your own), and `GP_PAGE_WORKER`, `GP_PAGE_SUBDOMAIN` and `GP_PAGE_ADDRESS` do the same as the flags. Left out, they are the owner's: `gameprinter` on `intentius`. `--list` stops before the upload with wrangler's own dry run. Leave out `BUNDLE_DIR` and `deploy.sh` runs the release check itself (`--no-roms` passes on to it); the upload is held to the digest either way ([web.md](web.md#deploying-the-public-page)).
@@ -119,6 +120,36 @@ GitHub Pages can't send headers of the page's choosing, and the page needs some:
 
 Use Cloudflare for a page that plays Donkey Kong or Tapper.
 
+## A game with its own pictures
+
+The road above is written for a theme, and a game made here (a copy of a template such as Moss Hop, docs/web.md "A game with its own pictures") takes most of it as it is. Steps 1 to 5 work for a game's package as for a theme's: the repo, `init`, `grant`, `publish` and `reindex`, and `gp registry check` take any folder and kind. Two things differ. A page installs games only from its own registry (page.json's `source`), never from a second one, so the page that plays your game must have your registry as its source. And step 7's page (`release-check.sh`) builds a ported game's page from the games repo; a game of your own is built and published by `gp game share`, which by itself writes into `$GP_HOME/work/share/` a registry under the namespace `local` and a page that reads it from its own address (`.`), so the link plays only where gp serve's `/share/` or `gp registry serve` puts the two folders together.
+
+With the examples' account, the road for a game `my_hop`:
+
+```sh
+cd ~ && gh repo create acme/harbor-registry --public --clone
+gp game share ~/.gameprinter/work/mcp/my_hop \
+  --registry ~/harbor-registry --namespace acme \
+  --source https://raw.githubusercontent.com/acme/harbor-registry/main \
+  --page ~/harbor-page
+```
+
+`gp game share` makes `~/harbor-registry` a registry (unsigned, `acme` granted) if it isn't one yet, publishes the game into it as `acme/my-hop` at the next version, lists it, and writes the page into `~/harbor-page` with page.json's `source` set to the `--source` address. It writes both as folders: nothing is committed, pushed or uploaded. A registry that is there already has to grant the namespace (`gp registry grant ~/harbor-registry acme`). `--source` is an https address, since the page's policy reads no other address (`connect-src 'self' https:`); GitHub's raw host sends the CORS header the page's fetch needs.
+
+Then the two writes to the outside world, which are yours to make:
+
+```sh
+git -C ~/harbor-registry add -A && git -C ~/harbor-registry commit -m "acme/my-hop" && git -C ~/harbor-registry push
+gp registry check https://raw.githubusercontent.com/acme/harbor-registry/main
+npx wrangler@4.157.0 deploy --assets ~/harbor-page --name harbor-page --compatibility-date 2026-11-01
+```
+
+Cloudflare sends the page's own `_headers` (written into the page folder by its build), which a game with a module needs; GitHub Pages can't (above). `deploy.sh` is the project page's road and uploads only a page the release check passed, which a shared game's page never went through, so the page goes up with wrangler itself. The link `https://harbor-page.acme.workers.dev/p?g=acme/my-hop` then plays the game for anyone, with nothing installed: the page comes from Cloudflare, the game from your registry on GitHub, each file checked against its hash.
+
+Each share again is a new version in the same registry; push it and the page offers it without being deployed again. Signing is as for a theme: the registry is unsigned and the repo's write access keeps others from publishing in it.
+
+`crates/gp-cli/src/game_share.rs`'s test `the_road_puts_a_game_where_a_page_on_another_address_finds_it` walks this road with no network: a made-up game into a registry folder and a page folder outside the home, the home taken away, the registry and the page served on two local addresses, and the page's own install code (`gp_web_registry::install_on`) finding the game at the address page.json names.
+
 ## Trying the road with no real account
 
 Each piece runs against a stand-in, so it can be tried without GitHub or Cloudflare:
@@ -126,6 +157,6 @@ Each piece runs against a stand-in, so it can be tried without GitHub or Cloudfl
 | Real | Stand-in |
 |---|---|
 | The GitHub repo | A local bare repo as the checkout's origin, and `gp registry host --github acme/harbor-registry` for the address it stands for (crates/gp-cli/tests/host_your_own.rs walks the road this way) |
-| wrangler | `GP_WRANGLER` naming a script that prints what it is asked (scripts/web/test-deploy.sh) |
+| wrangler | `GP_WRANGLER` naming a script that prints what it is asked (the games repo's page/test-deploy.sh) |
 | A GitHub Pages site | The `site/` folder served by any local server with no headers |
 | A registry of themes by its address | The page check's `registry-by-address` section serves a copy of the release check's registry with the game taken out on a free port of this machine and answers an https address from it, so the page's https rule and its policy are the ones a visitor gets; the game comes from the page's own registry and the theme from the second (scripts/web/public/check-page.mjs) |

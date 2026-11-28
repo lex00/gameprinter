@@ -1,17 +1,19 @@
 //! `gp testroms`: the accuracy baseline. Downloads the standard NES test
-//! ROMs at pinned hashes and runs them on gp-nes (docs/test-roms.md).
+//! ROMs and the Z80 instruction suite at pinned hashes and runs them on
+//! gp-nes and on gp-arcade's Z80 (docs/test-roms.md).
 //!
-//! The suites, the source commit and every file's SHA-256 are in
+//! The suites, the source commits and every file's SHA-256 are in
 //! test-roms/suites.toml, compiled in so `gp` needs no repo to run them.
 //!
 //! Ported from game-printer's testroms.rs; the run recorder is the
 //! process's (crate::runrec), and the command's arguments moved here from
-//! main.rs. These are the NES's (gp-nes's CPU, PPU, APU and mappers). An
-//! arcade board's counterpart is the MAME oracle (`gp oracle diff` against
-//! a capture, docs/oracle.md); a Z80 instruction suite (ZEXDOC and ZEXALL,
-//! CP/M programs) needs a CP/M harness on gp-arcade's Z80 first (the
-//! program at 0100, BDOS calls 2 and 9 at 0005 printing its result) and a
-//! pinned download, and isn't here yet.
+//! main.rs. Most suites are the NES's (gp-nes's CPU, PPU, APU and
+//! mappers). The `z80` suite is ZEXDOC and ZEXALL, CP/M programs run on
+//! gp-arcade's Z80 through its CP/M harness (gp_arcade::cpm: the program at
+//! 0100, BDOS calls 2 and 9 at 0005 printing its result, a jump to 0000
+//! ending the run), from a source of its own. The rest of an arcade
+//! board (its video, sound and timers) is held to the MAME oracle
+//! (`gp oracle diff` against a capture, docs/oracle.md).
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -93,13 +95,28 @@ pub struct Manifest {
     suites: Vec<Suite>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Source {
     /// `owner/name` on GitHub.
     repo: String,
-    /// The full commit SHA every file is downloaded at.
+    /// The full commit SHA every file is downloaded at, or [`TO_PIN`] for a
+    /// suite's own source whose commit isn't pinned yet.
     commit: String,
+}
+
+/// A suite source's commit or a download's SHA-256 that isn't pinned yet.
+/// Nothing is downloaded from a commit to be pinned, and a download with
+/// a hash to be pinned is never run: `gp testroms fetch` prints its hash.
+const TO_PIN: &str = "to-pin";
+
+impl Source {
+    fn url(&self, path: &str) -> String {
+        format!(
+            "https://raw.githubusercontent.com/{}/{}/{path}",
+            self.repo, self.commit
+        )
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -113,7 +130,14 @@ enum Check {
     #[serde(rename = "blargg-2005-screen")]
     Blargg2005Screen,
     Screen,
+    /// ZEXDOC and ZEXALL, CP/M programs on gp-arcade's Z80: a pass ends at
+    /// 0000 having printed `Tests complete` and no `ERROR`.
+    Zex,
 }
+
+/// The most Z80 cycles a `zex` program may run by default: ZEXALL and
+/// ZEXDOC each take about 46 billion.
+const ZEX_CYCLES: u64 = 100_000_000_000;
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -121,8 +145,13 @@ struct Suite {
     name: String,
     check: Check,
     about: String,
+    /// Where this suite's files are downloaded from, when it isn't the
+    /// manifest's `[source]`.
+    source: Option<Source>,
     /// The most frames one ROM may run.
     frames: Option<u64>,
+    /// For a `zex` suite: the most Z80 cycles one program may run.
+    cycles: Option<u64>,
     /// The region to power on in, `ntsc` (the default) or `pal`.
     region: Option<String>,
     /// Set when what the suite is compared with was made with RAM powered
@@ -187,14 +216,36 @@ impl Manifest {
                 && s.bytes()
                     .all(|b| b.is_ascii_alphanumeric() || b"/._-".contains(&b))
         };
-        if !safe(&m.source.repo) || m.source.repo.matches('/').count() != 1 {
+        let repo = |r: &str| safe(r) && r.matches('/').count() == 1;
+        if !repo(&m.source.repo) {
             bail!("the manifest's repo must be owner/name on GitHub");
         }
         for s in &m.suites {
+            if let Some(src) = &s.source {
+                if !repo(&src.repo) {
+                    bail!("{}: the suite's repo must be owner/name on GitHub", s.name);
+                }
+                if !hex(&src.commit, 40) && src.commit != TO_PIN {
+                    bail!(
+                        "{}: the suite's commit must be a full 40-character SHA, or {TO_PIN:?} until it's pinned",
+                        s.name
+                    );
+                }
+            }
             for f in s.files() {
-                if !safe(&f.path) || !hex(&f.sha256, 64) {
+                // A download's hash may wait to be pinned; our own
+                // program's never does.
+                let pin_ok = hex(&f.sha256, 64) || (f.sha256 == TO_PIN && f.built_from.is_none());
+                if !safe(&f.path) || !pin_ok {
                     bail!("{}: bad path or SHA-256 in the manifest", f.path);
                 }
+            }
+            let zex = s.check == Check::Zex;
+            if (zex && s.frames.is_some()) || (!zex && s.cycles.is_some()) {
+                bail!(
+                    "{}: a zex suite is limited by cycles, not frames, and only it has cycles",
+                    s.name
+                );
             }
             if let Some(r) = &s.region
                 && !matches!(r.as_str(), "ntsc" | "pal")
@@ -235,11 +286,9 @@ impl Manifest {
         Ok(m)
     }
 
-    fn url(&self, path: &str) -> String {
-        format!(
-            "https://raw.githubusercontent.com/{}/{}/{path}",
-            self.source.repo, self.source.commit
-        )
+    /// Where a suite's files come from: its own source, or the manifest's.
+    fn source<'a>(&'a self, s: &'a Suite) -> &'a Source {
+        s.source.as_ref().unwrap_or(&self.source)
     }
 }
 
@@ -273,11 +322,20 @@ enum Fetched {
     Missing(String),
     /// Downloaded, but with another hash. Never used.
     WrongHash(String),
+    /// Its source's commit or its hash is still to be pinned; what to pin.
+    /// Skipped like a missing file, but no failure of the download.
+    Unpinned(String),
 }
 
 /// The file at its pinned hash: from the work directory, or downloaded into
 /// it unless `offline`. A cached file with another hash is downloaded again.
-fn fetch(m: &Manifest, file: &File, dir: &Path, offline: bool) -> Result<Fetched> {
+fn fetch(source: &Source, file: &File, dir: &Path, offline: bool) -> Result<Fetched> {
+    if source.commit == TO_PIN {
+        return Ok(Fetched::Unpinned(format!(
+            "not pinned yet: pin a commit of {} in test-roms/suites.toml, then `gp testroms fetch` prints each file's SHA-256 to pin",
+            source.repo
+        )));
+    }
     let dest = dir.join(&file.path);
     let cached = fs::read(&dest).ok();
     if let Some(bytes) = &cached
@@ -300,6 +358,11 @@ fn fetch(m: &Manifest, file: &File, dir: &Path, offline: bool) -> Result<Fetched
             )),
         });
     }
+    if offline && file.sha256 == TO_PIN {
+        return Ok(Fetched::Unpinned(
+            "not pinned yet, and --offline: `gp testroms fetch` prints its SHA-256 to pin".into(),
+        ));
+    }
     if offline {
         return Ok(match cached {
             // A cached file that changed is never used, and never quietly skipped.
@@ -315,7 +378,7 @@ fn fetch(m: &Manifest, file: &File, dir: &Path, offline: bool) -> Result<Fetched
     let parent = dest.parent().context("a manifest path has no directory")?;
     fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
     let partial = dest.with_extension("partial");
-    let url = m.url(&file.path);
+    let url = source.url(&file.path);
     let status = Command::new("curl")
         .args(["-sSfL", "--retry", "2", "--proto", "=https", "-o"])
         .arg(&partial)
@@ -333,6 +396,13 @@ fn fetch(m: &Manifest, file: &File, dir: &Path, offline: bool) -> Result<Fetched
     }
     let bytes = fs::read(&partial).with_context(|| format!("reading {}", partial.display()))?;
     let got = sha256_hex(&bytes);
+    if file.sha256 == TO_PIN {
+        // Never run, and never kept: what the pin should be, once checked.
+        let _ = fs::remove_file(&partial);
+        return Ok(Fetched::Unpinned(format!(
+            "not pinned yet: {url} has SHA-256 {got}; check the file, then pin it in test-roms/suites.toml"
+        )));
+    }
     if got != file.sha256 {
         let _ = fs::remove_file(&partial);
         return Ok(Fetched::WrongHash(format!(
@@ -371,7 +441,8 @@ pub fn built(m: &Manifest) -> crate::Outcome {
 
 /// `gp testroms fetch`: downloads every file that's missing or has the
 /// wrong hash, or every file with `redownload`. Exits 1 if a download has a hash other than the pin, 2 if
-/// some couldn't be downloaded.
+/// some couldn't be downloaded. A file still to be pinned is listed with
+/// what to pin, and changes neither.
 pub fn fetch_all(m: &Manifest, redownload: bool, paths: &Paths) -> Result<Outcome> {
     let dir = work_dir(paths);
     if redownload {
@@ -389,14 +460,16 @@ pub fn fetch_all(m: &Manifest, redownload: bool, paths: &Paths) -> Result<Outcom
             }
         }
     }
-    let (mut ready, mut missing, mut wrong) = (0u64, Vec::new(), Vec::new());
+    let (mut ready, mut missing, mut wrong, mut unpinned) =
+        (0u64, Vec::new(), Vec::new(), Vec::new());
     for s in &m.suites {
         // Our own programs are built by `just build-testroms`, not fetched.
         for f in s.files().into_iter().filter(|f| f.built_from.is_none()) {
-            match fetch(m, &f, &dir, false)? {
+            match fetch(m.source(s), &f, &dir, false)? {
                 Fetched::Ready(_) => ready += 1,
                 Fetched::Missing(why) => missing.push(format!("{}: {why}", f.path)),
                 Fetched::WrongHash(why) => wrong.push(why),
+                Fetched::Unpinned(why) => unpinned.push(format!("{}: {why}", f.path)),
             }
         }
     }
@@ -406,6 +479,7 @@ pub fn fetch_all(m: &Manifest, redownload: bool, paths: &Paths) -> Result<Outcom
         dir.display()
     )];
     lines.extend(missing.iter().map(|w| format!("missing   {w}")));
+    lines.extend(unpinned.iter().map(|w| format!("to pin    {w}")));
     lines.extend(wrong.iter().map(|w| format!("WRONG     {w}")));
     if !wrong.is_empty() {
         lines.push(
@@ -418,7 +492,7 @@ pub fn fetch_all(m: &Manifest, redownload: bool, paths: &Paths) -> Result<Outcom
         2 * u8::from(!missing.is_empty())
     };
     Ok(Outcome {
-        json: json!({ "dir": dir, "ready": ready, "missing": missing, "wrong_hash": wrong }),
+        json: json!({ "dir": dir, "ready": ready, "missing": missing, "wrong_hash": wrong, "to_pin": unpinned }),
         text: lines.join("\n"),
         exit,
     })
@@ -464,6 +538,64 @@ struct Checked {
     passed: bool,
     detail: String,
     frames: Option<u64>,
+}
+
+/// Runs ZEXDOC or ZEXALL on gp-arcade's Z80 through the CP/M harness. It
+/// passes when the program ends at 0000 having printed `Tests complete` and
+/// no `ERROR`; the detail is the failing tests' lines, or how it ended.
+/// RAM always powers on as zeros: `--ram-ones` is the NES's.
+fn run_zex(name: String, bytes: &[u8], cycles: u64) -> Result<Checked> {
+    use gp_arcade::cpm::{self, Ended};
+    let r = cpm::run(bytes, cycles).map_err(anyhow::Error::msg)?;
+    let text = r.text();
+    let lines: Vec<&str> = text
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .collect();
+    let errors: Vec<&str> = lines
+        .iter()
+        .copied()
+        .filter(|l| l.contains("ERROR"))
+        .collect();
+    let complete = lines.iter().any(|l| l.contains("Tests complete"));
+    let passed = r.ended == Ended::WarmBoot && complete && errors.is_empty();
+    let ended = match &r.ended {
+        Ended::WarmBoot => "ended at 0000".to_owned(),
+        Ended::Halted { pc } => format!("halted at {pc:04X}"),
+        Ended::Unsupported { call, pc } => {
+            format!("made BDOS call {call}, which the harness doesn't have, from {pc:04X}")
+        }
+        Ended::OutOfCycles => format!("ran out of its {cycles} cycles"),
+    };
+    let detail = if passed {
+        format!("Tests complete in {} cycles", r.cycles)
+    } else if !errors.is_empty() {
+        format!(
+            "{} of {} tests failed ({ended} after {} cycles): {}",
+            errors.len(),
+            lines.iter().filter(|l| l.ends_with("OK")).count() + errors.len(),
+            r.cycles,
+            errors.join(" / ")
+        )
+    } else {
+        format!(
+            "{ended} after {} cycles, {}: {}",
+            r.cycles,
+            if complete {
+                "having printed Tests complete"
+            } else {
+                "without printing Tests complete"
+            },
+            lines.last().copied().unwrap_or("nothing printed")
+        )
+    };
+    Ok(Checked {
+        name,
+        passed,
+        detail,
+        frames: None,
+    })
 }
 
 /// Runs one ROM by its suite's check and says whether it passed, with
@@ -529,6 +661,11 @@ fn run_rom(
         Check::Blargg2005 => verdict(accuracy::run_blargg_2005(bytes, power_on, frames)?),
         Check::Blargg2005Screen => verdict(accuracy::run_screen_code(bytes, power_on, frames)?),
         Check::Screen => verdict(accuracy::run_screen(bytes, power_on, frames)?),
+        Check::Zex => vec![run_zex(
+            name.clone(),
+            bytes,
+            s.cycles.unwrap_or(ZEX_CYCLES),
+        )?],
         Check::Nestest => {
             let log = log.context("nestest needs its log")?;
             let r = accuracy::run_nestest(bytes, log, power_on)?;
@@ -618,9 +755,9 @@ pub fn run(
             continue;
         }
         let log = match &s.log {
-            Some(f) => match fetch(m, f, &dir, offline)? {
+            Some(f) => match fetch(m.source(s), f, &dir, offline)? {
                 Fetched::Ready(b) => Some(Ok(String::from_utf8_lossy(&b).into_owned())),
-                Fetched::Missing(why) => Some(Err(why)),
+                Fetched::Missing(why) | Fetched::Unpinned(why) => Some(Err(why)),
                 Fetched::WrongHash(why) => {
                     wrong_hash.push(why.clone());
                     Some(Err(why))
@@ -632,7 +769,7 @@ pub fn run(
             let fetched = match &log {
                 Some(Err(why)) => Fetched::Missing(format!("its log: {why}")),
                 _ => fetch(
-                    m,
+                    m.source(s),
                     &File {
                         path: rom.path.clone(),
                         sha256: rom.sha256.clone(),
@@ -654,6 +791,7 @@ pub fn run(
                     wrong_hash.push(why.clone());
                     Err(why)
                 }
+                Fetched::Unpinned(why) => Err(why),
             };
             let bytes = match skip {
                 Ok(b) => b,
@@ -871,7 +1009,8 @@ mod tests {
             assert!(!s.roms.is_empty(), "{}", s.name);
         }
         assert!(
-            m.url("other/nestest.nes")
+            m.source
+                .url("other/nestest.nes")
                 .starts_with("https://raw.githubusercontent.com/christopherpow/nes-test-roms/")
         );
     }
@@ -931,6 +1070,43 @@ mod tests {
         }
     }
 
+    /// A suite's own source pins a full commit or says it's to be pinned,
+    /// never a branch; a download's hash may wait, our own build's can't;
+    /// and only a zex suite is limited by cycles.
+    #[test]
+    fn a_suites_own_source_may_wait_to_be_pinned() {
+        let manifest = |suite: &str, rom: &str| {
+            format!(
+                "[source]\nrepo = \"a/b\"\ncommit = \"{}\"\n[[suite]]\nname = \"s\"\nabout = \"x\"\n{suite}\n[[suite.rom]]\n{rom}\n",
+                "0".repeat(40)
+            )
+        };
+        let load = |text: String| {
+            let dir = tempfile::tempdir().unwrap();
+            let p = dir.path().join("m.toml");
+            fs::write(&p, text).unwrap();
+            Manifest::load(Some(&p))
+        };
+        let zex = |commit: &str| {
+            format!("check = \"zex\"\nsource = {{ repo = \"c/d\", commit = \"{commit}\" }}")
+        };
+        let pinned = format!("path = \"x.com\"\nsha256 = \"{}\"", "0".repeat(64));
+        let unpinned = "path = \"x.com\"\nsha256 = \"to-pin\"";
+        assert!(load(manifest(&zex("to-pin"), unpinned)).is_ok());
+        assert!(load(manifest(&zex(&"0".repeat(40)), &pinned)).is_ok());
+        assert!(load(manifest(&zex("master"), unpinned)).is_err());
+        assert!(
+            load(manifest(
+                &format!("{}\nframes = 10", zex("to-pin")),
+                unpinned
+            ))
+            .is_err()
+        );
+        assert!(load(manifest("check = \"blargg\"\ncycles = 10", &pinned)).is_err());
+        let built = "path = \"gp/x.nes\"\nsha256 = \"to-pin\"\nbuilt_from = \"test-roms/x/x.s\"";
+        assert!(load(manifest("check = \"blargg\"", built)).is_err());
+    }
+
     #[test]
     fn checks_region_names() {
         let manifest = |region: &str| {
@@ -959,21 +1135,84 @@ mod tests {
             sha256: sha256_hex(b"right"),
             built_from: Some("test-roms/x/x.s".into()),
         };
-        match fetch(&m, &file, dir.path(), false).unwrap() {
+        match fetch(&m.source, &file, dir.path(), false).unwrap() {
             Fetched::Missing(why) => assert!(why.contains("just build-testroms"), "{why}"),
             _ => panic!("a program that isn't built is missing"),
         }
         fs::create_dir_all(dir.path().join("gp")).unwrap();
         fs::write(dir.path().join("gp/x.nes"), b"wrong").unwrap();
         assert!(matches!(
-            fetch(&m, &file, dir.path(), false).unwrap(),
+            fetch(&m.source, &file, dir.path(), false).unwrap(),
             Fetched::WrongHash(_)
         ));
         fs::write(dir.path().join("gp/x.nes"), b"right").unwrap();
         assert!(matches!(
-            fetch(&m, &file, dir.path(), false).unwrap(),
+            fetch(&m.source, &file, dir.path(), false).unwrap(),
             Fetched::Ready(b) if b == b"right"
         ));
+    }
+
+    /// The Z80 suite: ZEXDOC and ZEXALL from a source of their own, run by
+    /// the zex check on gp-arcade's CP/M harness. Made-up CP/M programs
+    /// stand in for them, each printing a report through BDOS call 9 and
+    /// jumping to 0000; nothing is downloaded.
+    #[test]
+    fn the_z80_suite_runs_on_the_cpm_harness() {
+        let m = Manifest::load(None).unwrap();
+        let z80 = m
+            .suites
+            .iter()
+            .find(|s| s.name == "z80")
+            .expect("gp testroms has a z80 suite");
+        assert_eq!(z80.check, Check::Zex);
+        assert_eq!(m.source(z80).repo, "anotherlin/z80emu");
+        for program in ["zexdoc.com", "zexall.com"] {
+            assert!(
+                z80.roms.iter().any(|r| r.path.ends_with(program)),
+                "{program}"
+            );
+        }
+        // ld c,9 / ld de,010B / call 0005 / jp 0000, then the report.
+        let program = |report: &str| {
+            let mut p = vec![
+                0x0e, 0x09, 0x11, 0x0b, 0x01, 0xcd, 0x05, 0x00, 0xc3, 0x00, 0x00,
+            ];
+            p.extend_from_slice(report.as_bytes());
+            p.push(b'$');
+            p
+        };
+        let run = |bytes: &[u8]| {
+            let mut r = run_rom(z80, &z80.roms[0], bytes, None, RamInit::Zeros).unwrap();
+            assert_eq!(r.len(), 1);
+            r.remove(0)
+        };
+        let r = run(&program(
+            "Z80doc instruction exerciser\r\n<adc,sbc> hl,<bc,de,hl,sp>....  OK\r\nTests complete\r\n",
+        ));
+        assert!(r.passed, "{}", r.detail);
+        assert!(r.detail.starts_with("Tests complete in "), "{}", r.detail);
+        let r = run(&program(
+            "<adc,sbc> hl,<bc,de,hl,sp>....  OK\r\nadd hl,<bc,de,hl,sp>....  ERROR **** crc expected:01234567 found:89abcdef\r\nTests complete\r\n",
+        ));
+        assert!(!r.passed);
+        assert!(r.detail.starts_with("1 of 2 tests failed"), "{}", r.detail);
+        assert!(r.detail.contains("found:89abcdef"), "{}", r.detail);
+        let r = run(&[0xc3, 0x00, 0x00]);
+        assert!(!r.passed);
+        assert!(
+            r.detail.contains("without printing Tests complete"),
+            "{}",
+            r.detail
+        );
+        // Until its commit is pinned, it's skipped as to be pinned, with
+        // no download tried.
+        if m.source(z80).commit == TO_PIN {
+            let dir = tempfile::tempdir().unwrap();
+            assert!(matches!(
+                fetch(m.source(z80), &z80.files()[0], dir.path(), false).unwrap(),
+                Fetched::Unpinned(_)
+            ));
+        }
     }
 
     /// A missing download is skipped, but our own program missing means
@@ -1022,9 +1261,9 @@ mod tests {
         let dir = work_dir(&Paths::from_env().unwrap());
         let mut files = Vec::new();
         for file in suite.files() {
-            match fetch(&m, &file, &dir, true).unwrap() {
+            match fetch(m.source(suite), &file, &dir, true).unwrap() {
                 Fetched::Ready(bytes) => files.push(bytes),
-                Fetched::Missing(why) | Fetched::WrongHash(why) => {
+                Fetched::Missing(why) | Fetched::WrongHash(why) | Fetched::Unpinned(why) => {
                     eprintln!(
                         "skipping the nestest trace comparison: {} ({why}); `gp testroms fetch` downloads it",
                         file.path

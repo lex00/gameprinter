@@ -151,10 +151,10 @@ fn one() -> f64 {
 }
 
 /// A trace map: what an external program's trace columns are as model
-/// paths, as a file (scripts/remastered/smb1r-map.toml).
+/// paths, as a file (rooftop-port-map.toml).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TraceMap {
-    /// The program, as the trace's `game` header names it: `smb1r`.
+    /// The program, as the trace's `game` header names it: `rooftop-port`.
     pub game: String,
     /// The model it maps to (`model.name`).
     pub model: String,
@@ -432,8 +432,8 @@ mod tests {
     use super::*;
 
     const MAP: &str = r#"
-game = "smb1r"
-model = "smb1"
+game = "rooftop-port"
+model = "rooftop"
 
 [[field]]
 path = "entities.hero[0].x"
@@ -464,7 +464,7 @@ values = { "1" = "right", "-1" = "left" }
 
     fn trace() -> String {
         [
-            r#"{"probe":"1","game":"smb1r","level":"1-1","physics":"classic"}"#,
+            r#"{"probe":"1","game":"rooftop-port","level":"1-1","physics":"classic"}"#,
             r#"{"f":-1,"x":-208.0,"vx":0.0,"y":-0.076,"ground":true,"facing":1,"in":"........"}"#,
             r#"{"f":0,"x":-207.9,"vx":6.0,"y":-0.6,"ground":true,"facing":1,"in":"R......."}"#,
             r#"{"f":1,"x":-207.7,"vx":12.0,"y":-4.2,"ground":false,"facing":-1,"in":"R......A"}"#,
@@ -506,7 +506,7 @@ values = { "1" = "right", "-1" = "left" }
         let t = Trace::parse(&trace()).unwrap();
         let m = TraceMap::parse(MAP).unwrap();
         let v = m.read(&t.rows[0]).unwrap();
-        // -208 from Remastered's origin is NES x 40.
+        // -208 from the port's origin is NES x 40.
         assert_eq!(v[0], Value::Fixed(40 << 16));
         assert_eq!(v[1], Value::Fixed(0));
         // 0.076 px above the ground draws on the ground's row.

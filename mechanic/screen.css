@@ -51,6 +51,12 @@ canvas { display: block; background: #000; border: 2px solid var(--line); image-
 #clip-name { color: var(--gold); font-weight: 700; }
 #clip-scrub { width: min(360px, 60vw); accent-color: var(--accent); }
 #clip-at { color: var(--muted); min-width: 16ch; }
+#sprite-runs { max-width: min(90ch, 100%); font-size: 13px; }
+#sprite-runs[hidden] { display: none; }
+#sprite-runs-says { margin: 4px 0; color: var(--muted); }
+#sprite-runs-list { margin: 0; padding-left: 2.5em; max-height: 14em; overflow-y: auto; }
+#sprite-runs-list button { font: inherit; text-align: left; background: none; border: none; color: var(--accent); cursor: pointer; padding: 2px 0; overflow-wrap: anywhere; }
+#sprite-runs-list li.at button { color: var(--gold); font-weight: 700; }
 #line { margin: 0; color: var(--gold); font-size: 13px; min-height: 1.45em; text-align: center; max-width: 90ch; }
 #keys { margin: 0; color: var(--muted); font-size: 12px; text-align: center; max-width: 90ch; }
 #input-set { margin: 0; color: var(--muted); font-size: 12px; text-align: center; max-width: 90ch; }

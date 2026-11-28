@@ -656,6 +656,12 @@ pub const TABLE: &[Row] = &[
     r("loop health", S, Read),
     r("loop hook", S, Read),
     r("loop clean", S, Write),
+    // A train row's worker hands its patch in: it writes the home's train
+    // folder and the row.
+    r("loop hand-in", S, Write),
+    // Lands the handed-in patches through the gates: the person's yes, as
+    // a gate's; its dry run lands nothing.
+    r("loop train", S, Rule::Ask(Ask::Publish, DRY_RUN)),
     // Puts the games checkout's local changes under a game in a git stash
     // (the person's files, so their yes on a card that lists them).
     r("loop set-aside", S, Rule::Ask(Ask::Replace, DRY_RUN)),

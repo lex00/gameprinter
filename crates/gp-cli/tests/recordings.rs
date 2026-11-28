@@ -76,7 +76,8 @@ fn record_replay_query_and_trace_with_the_test_rom() {
     assert_eq!(shown["missing"], 0);
     assert!(shown["recording"]["has_trace"].as_bool().unwrap());
 
-    // Replay finds the ROM in $GP_ROM_DIR by hash, or from a checkpoint.
+    // Replay finds the ROM in the scratch home's ROM folder by hash, or
+    // from a checkpoint.
     let full = json(home, &["replay", short]);
     assert_eq!(full["frames_checked"], 120);
     assert!(full["divergence"].is_null());

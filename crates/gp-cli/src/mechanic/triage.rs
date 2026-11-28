@@ -59,7 +59,7 @@ use serde_json::{Value, json};
 
 use super::paths::{clip_fields, full_log, put_path};
 use super::probe::{self, Board, Cond, Names};
-use super::session::{Session, queue_file, read_queue, write_queue};
+use super::session::{Session, queue_file, read_queue};
 use crate::Outcome;
 use crate::original::{OriginalRuntime, Platform};
 
@@ -1197,6 +1197,7 @@ pub(crate) fn run(paths: &Paths, a: &Args) -> Result<Outcome> {
     // What lands where.
     let qf = queue_file(paths, a.game)?;
     let mut q = read_queue(&qf);
+    let mut triaged: Vec<(String, String, Value)> = Vec::new();
     let today = crate::game_new::today();
     let mut made = Vec::new();
     let mut yours = Vec::new();
@@ -1290,11 +1291,24 @@ pub(crate) fn run(paths: &Paths, a: &Args) -> Result<Outcome> {
             }
         }
         if let Some(r) = q.iter_mut().find(|r| r["mechanic"] == json!(i.row)) {
-            r["triage"] = t;
+            r["triage"] = t.clone();
         }
+        triaged.push((i.row.clone(), i.note.clone(), t));
     }
+    // The probes ran with the log as read before them; what they found
+    // goes on the rows as they are now, under the log's lock.
     if !a.dry_run {
-        write_queue(&qf, &q)?;
+        q = super::session::update_queue(&qf, |q| {
+            for (row, note, t) in triaged {
+                if !q.iter().any(|r| r["mechanic"] == json!(row)) {
+                    q.push(json!({"mechanic": row, "status": "next", "note": note}));
+                }
+                if let Some(r) = q.iter_mut().find(|r| r["mechanic"] == json!(row)) {
+                    r["triage"] = t;
+                }
+            }
+            Ok(q.clone())
+        })?;
     }
     let mut text = format!(
         "{} ({set_id}): {} made by the tools, {} need you, in {:.0} s. {lead_note}\n",

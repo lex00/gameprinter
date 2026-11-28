@@ -98,6 +98,7 @@ mod localize_z80;
 mod lockstep;
 mod loop_cmd;
 mod loop_hook;
+mod loop_train;
 mod mcp;
 #[cfg(test)]
 mod mcp_keeps_up;
@@ -1251,7 +1252,11 @@ enum GameCmd {
     /// (/share/p?g=local/NAME) and what it takes for other people to open
     /// it. Every theme made for the game ($GP_HOME/work/themes/, the new-game
     /// journey's "Give it a look") goes in the package, offered in Settings,
-    /// and the link opens in one of them. Nothing is sent anywhere
+    /// and the link opens in one of them. With --source, the https address
+    /// your registry will be read at (--registry its folder, --namespace
+    /// yours), the page reads the game from there, so the registry and the
+    /// page put online on two hosts play the link for anyone
+    /// (docs/host-your-own.md). Nothing is sent anywhere
     Share {
         /// The game's folder (a copy template_fork made). Example:
         /// $GP_HOME/work/mcp/my_hop
@@ -1266,6 +1271,25 @@ enum GameCmd {
         /// Example: --look hop-night
         #[arg(long)]
         look: Option<String>,
+        /// Your registry's folder, such as a clone of your public GitHub
+        /// repo (default: $GP_HOME/work/share/registry). It is written as a
+        /// folder: nothing is committed or pushed. Example: --registry
+        /// ~/harbor-registry
+        #[arg(long)]
+        registry: Option<PathBuf>,
+        /// The folder the page is written to (default:
+        /// $GP_HOME/work/share/page). Example: --page ~/harbor-page
+        #[arg(long)]
+        page: Option<PathBuf>,
+        /// The https address the page reads your registry at once it is
+        /// online (default: `.`, the registry beside the page). Example:
+        /// --source https://raw.githubusercontent.com/acme/harbor-registry/main
+        #[arg(long)]
+        source: Option<String>,
+        /// The namespace the game is published under (default: local), one
+        /// your registry grants. Example: --namespace acme
+        #[arg(long)]
+        namespace: Option<String>,
     },
     /// Build a game's module from its package folder and the kit, in a
     /// sandbox that reads nothing else and has no network. Exits 1 when the
@@ -1697,11 +1721,26 @@ fn dispatch(cmd: &Cmd) -> Result<Outcome> {
             &gp_evidence::Paths::from_env()?,
         ),
         Cmd::Game {
-            cmd: GameCmd::Share { dir, title, look },
+            cmd:
+                GameCmd::Share {
+                    dir,
+                    title,
+                    look,
+                    registry,
+                    page,
+                    source,
+                    namespace,
+                },
         } => game_share::run(
             dir,
             title.as_deref(),
             look.as_deref(),
+            &game_share::RoadArgs {
+                registry: registry.clone(),
+                page: page.clone(),
+                source: source.clone(),
+                namespace: namespace.clone(),
+            },
             &gp_evidence::Paths::from_env()?,
         ),
         Cmd::Game {

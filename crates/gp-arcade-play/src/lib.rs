@@ -546,87 +546,19 @@ mod tests {
         assert!(alone.frame(&[0; 3]).is_err());
     }
 
-    /// A model's requests, the latch and the byte alone, timed by
-    /// [`REQUEST_AT`]: the board alone fed the whole machine's latch
-    /// writes so makes its sound on every frame of the game's first oracle
-    /// input log, with the game's first set ($GP_GAME_DIR,
-    /// romset::test_romset_path). Skipped without them.
-    #[test]
-    fn requests_without_their_times_sound_as_the_whole_machine() {
-        let ((name, path), log) = match (
-            gp_arcade::romset::test_romset_path(),
-            gp_arcade::romset::test_input_log(),
-        ) {
-            (Ok(p), Ok(l)) => (p, l),
-            (Err(e), _) | (_, Err(e)) => {
-                eprintln!("skipped: {e}");
-                return;
-            }
-        };
-        let zip = std::fs::read(path).unwrap();
-        // The log played on this set, whichever set it was recorded on.
-        let log: String = log
-            .lines()
-            .map(|l| {
-                if l.starts_with("system ") {
-                    format!("system {name}\n")
-                } else {
-                    format!("{l}\n")
-                }
-            })
-            .collect();
-        let log = log.as_str();
-        let mut whole = Player::replay(&zip, log).unwrap();
-        whole.set_audio(true);
-        whole.set_latch_log(true);
-        let mut alone = SoundPlayer::new(&zip).unwrap();
-        let (mut frames, mut asked) = (0, 0);
-        loop {
-            let start = whole.time();
-            if !whole.advance().unwrap() {
-                break;
-            }
-            let records = whole.take_latches(start);
-            let requests: Vec<(u8, u8)> =
-                records.chunks(LATCH_RECORD).map(|r| (r[8], r[9])).collect();
-            asked += requests.len();
-            alone.requests(&requests).unwrap();
-            assert_eq!(alone.audio(), whole.audio(), "frame {}", frames + 1);
-            frames += 1;
-        }
-        assert!(
-            frames > 1000 && asked > 100,
-            "{frames} frames, {asked} requests"
-        );
-        assert_eq!(
-            request_records(&[(1, 0x38), (0, 0x80)]).len(),
-            2 * LATCH_RECORD
-        );
-    }
-
-    /// A real set's zip ($GP_GAME_DIR, romset::test_romset_path).
-    fn zip() -> Option<Vec<u8>> {
-        match gp_arcade::romset::test_romset_path() {
-            Ok((_, p)) => Some(std::fs::read(p).unwrap()),
-            Err(e) => {
-                eprintln!("skipped: {e}");
-                None
-            }
-        }
-    }
-
     /// Played with a coin and a start, the log replays to the same picture
-    /// on every frame, and a save restores to the same digest.
+    /// on every frame, and a save restores to the same digest (a made-up
+    /// set that reads its inputs every frame).
     #[test]
     fn the_log_replays_to_the_same_pictures_and_a_save_restores() {
-        let Some(zip) = zip() else { return };
+        let rom = gp_arcade::testrom::busy();
         let bits = |i: u32| match i {
             100..106 => 1,
             160..166 => 2,
             300.. if i % 40 < 6 => 0x40 | 0x08,
             _ => 0,
         };
-        let mut p = Player::new(&zip).unwrap();
+        let mut p = Player::from_romset(&rom);
         let mut saved = Vec::new();
         for i in 0..420 {
             if i == 200 {
@@ -635,7 +567,8 @@ mod tests {
             p.step(bits(i), false).unwrap();
         }
         let digest = p.digest();
-        let mut r = Player::replay(&zip, &p.input_log()).unwrap();
+        let mut r = Player::from_romset(&rom);
+        r.script(&p.input_log()).unwrap();
         assert_eq!(r.run_to(u64::MAX).unwrap(), 420);
         assert_eq!(r.pictures(), p.pictures());
         assert_eq!(r.state_hash(), p.state_hash());
@@ -654,8 +587,7 @@ mod tests {
     /// as MAME's 4-way filter has it, and the log keeps right.
     #[test]
     fn a_diagonal_goes_through_the_4way_filter() {
-        let Some(zip) = zip() else { return };
-        let mut p = Player::new(&zip).unwrap();
+        let mut p = Player::from_romset(&gp_arcade::testrom::busy());
         p.step(0, false).unwrap();
         p.step(0x04 | 0x20, false).unwrap();
         p.step(0x04 | 0x20, false).unwrap();
@@ -664,25 +596,29 @@ mod tests {
         assert!(!log.contains("..R..U."), "{log}");
     }
 
-    /// The log keeps the game's polled flag: false on the boot frames,
-    /// true once the game reads its ports.
+    /// The log keeps the game's polled flag, frame by frame: a set that
+    /// never reads its ports polls on no frame, one that reads them every
+    /// frame on its last (made-up sets).
     #[test]
-    fn the_log_keeps_the_polled_flag_of_boot_frames() {
-        let Some(zip) = zip() else { return };
-        let mut p = Player::new(&zip).unwrap();
+    fn the_log_keeps_the_polled_flag_of_each_frame() {
+        let mut p = Player::from_romset(&gp_arcade::testrom::busy());
         let read: Vec<bool> = (0..120).map(|_| p.step(0, false).unwrap()).collect();
         let kept: Vec<bool> = p.log.frames.iter().map(|f| f.polled).collect();
         assert_eq!(kept, read);
-        assert!(!kept[0] && kept[119]);
+        assert!(kept[119]);
+        let mut p = Player::from_romset(&gp_arcade::testrom::looping());
+        let read: Vec<bool> = (0..30).map(|_| p.step(0, false).unwrap()).collect();
+        let kept: Vec<bool> = p.log.frames.iter().map(|f| f.polled).collect();
+        assert_eq!(kept, read);
+        assert!(kept.iter().all(|p| !p));
     }
 
     /// With the sound on, a frame gives one or two 20 ms pieces of stereo,
-    /// and after the game has started making sound some of it isn't
-    /// silent; with it off, none.
+    /// and some of it isn't silent on a made-up set that sounds; with it
+    /// off, none.
     #[test]
     fn the_sound_comes_out_in_pieces() {
-        let Some(zip) = zip() else { return };
-        let mut p = Player::new(&zip).unwrap();
+        let mut p = Player::from_romset(&gp_arcade::testrom::sounding());
         p.set_audio(true);
         let mut loud = 0usize;
         for i in 0..900 {

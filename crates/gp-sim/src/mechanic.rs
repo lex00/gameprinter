@@ -164,7 +164,7 @@ pub struct Table {
 /// update syntax, naming only what it has.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Record {
-    /// Such as `platformer.jump`, or for a hook `smb1.firebar`.
+    /// Such as `platformer.jump`, or for a hook `rooftop.firebar`.
     pub name: &'static str,
     /// The version of what declares it: an extension's, or a hook crate's.
     pub version: &'static str,

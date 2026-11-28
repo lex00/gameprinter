@@ -134,6 +134,12 @@ def moved_assets(old, new, out, prg_base=0):
 
 
 def assemble(folder):
+    # The level's rows, from the authored data, as scripts/mosshop/build.sh
+    # writes them: level.inc beside mosshop.s.
+    level = os.path.join(REPO, "templates", "mosshop", "level-data", "level.toml")
+    rows = re.findall(r'^  "(.{32})", # (\d+)$', open(level).read(), flags=re.M)
+    open(os.path.join(folder, "level.inc"), "w").write(
+        "".join('row%s: level_row "%s"\n' % (n, r) for r, n in rows))
     subprocess.run(["ca65", "-g", "-I", folder, "-o", os.path.join(folder, "mosshop.o"),
                     os.path.join(folder, "mosshop.s")], check=True)
     subprocess.run(["ld65", "-C", os.path.join(folder, "nrom.cfg"), "-o", os.path.join(folder, "mosshop.nes"),

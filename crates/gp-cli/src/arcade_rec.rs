@@ -956,19 +956,13 @@ mod tests {
         assert!(e.to_string().contains("arcade input log"), "{e}");
     }
 
-    /// With a real romset ($GP_GAME_DIR's first set): thirty seconds idling
-    /// into its attract mode, recorded and replayed frame-exact, and each
-    /// frame's RAM the board's own. Skipped without it.
+    /// A made-up set that reads its inputs every frame: thirty seconds
+    /// with a coin and a start, recorded and replayed frame-exact, and each
+    /// frame's RAM the board's own.
     #[test]
-    fn a_real_set_records_and_replays() {
-        let (set_name, zip) = match gp_arcade::romset::test_romset_path() {
-            Ok(p) => p,
-            Err(e) => {
-                eprintln!("skipped: {e}");
-                return;
-            }
-        };
-        let set = Romset::load_zip(&zip).unwrap();
+    fn a_set_records_and_replays() {
+        let set = gp_arcade::testrom::busy();
+        let set_name = set.name;
         let (_dir, store) = store();
         let mut text = format!("gp-arcade-input 0\nsystem {set_name}\ncolumns CSRLDUT\n");
         text.push_str("600 .......\n6 C......\n60 .......\n6 .S.....\n228 .......\n");

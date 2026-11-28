@@ -15,7 +15,9 @@ use anyhow::{Context as _, Result, bail};
 use gp_evidence::Paths;
 use serde_json::{Value, json};
 
-use super::session::{name_ok, queue_file, read_queue, write_queue};
+use super::session::{name_ok, queue_file, update_queue};
+#[cfg(test)]
+use super::session::{read_queue, write_queue};
 
 /// The words every proposed row's note starts with.
 pub(crate) const MARK: &str = "Proposed by the loop:";
@@ -382,7 +384,101 @@ pub(crate) fn propose(paths: &Paths, game_dir: Option<&Path>, p: &Proposal) -> R
         bail!("a parked row says why it waits (--parked WHY)");
     }
     let f = queue_file(paths, p.game)?;
-    let mut q = read_queue(&f);
+    // The log's read, change and write under its lock; a proposal sent on
+    // to a row of its own (the line case) and the reopened row's log come
+    // after, with the lock let go.
+    let s = match update_queue(&f, |q| settle(paths, game_dir, p, parked, q))? {
+        Settle::Instead(name) => {
+            let mut v = propose(paths, game_dir, &Proposal { row: &name, ..*p })?;
+            v["instead_of"] = json!(p.row);
+            return Ok(v);
+        }
+        Settle::Done(s) => s,
+    };
+    let Settled {
+        row,
+        same,
+        had_test,
+        tests,
+        had_row,
+        new_clips,
+        reopened,
+        before,
+        new_repo,
+        repo_why,
+        note,
+    } = s;
+    if let (Some(b), Some(note)) = (&before, &note) {
+        log_reopen(paths, p.game, &row, note, b)?;
+    }
+    let mut wrote_test = None;
+    if let (Some(t), false) = (&p.test, had_test) {
+        // The home's file, not the games checkout's: a change there lands
+        // only through a gate (triage::home_file).
+        let file = tests;
+        if let Some(d) = file.parent() {
+            fs::create_dir_all(d)?;
+        }
+        let mut text = fs::read_to_string(&file).unwrap_or_default();
+        if !text.is_empty() && !text.ends_with('\n') {
+            text.push('\n');
+        }
+        if !text.is_empty() {
+            text.push('\n');
+        }
+        text.push_str(&item_toml(&row, t));
+        fs::write(&file, text).with_context(|| file.display().to_string())?;
+        wrote_test = Some(file.display().to_string());
+    }
+    let gave_target = reopened || !had_row;
+    Ok(json!({
+        "row": row,
+        "proposed_as": p.row,
+        "same_failure": same,
+        "added": !had_row,
+        "parked": !had_row && parked.is_some(),
+        "clips_added": new_clips,
+        "reopened": reopened,
+        "before": before,
+        "target": p.target.filter(|_| gave_target),
+        "target_frames": p.target_frames.filter(|_| gave_target && p.target.is_some()).map(|(n, _)| n),
+        "test": wrote_test,
+        "test_was_there": had_test,
+        "repo": new_repo,
+        "repo_why": repo_why,
+    }))
+}
+
+/// What [`settle`] did to the quest log, for [`propose`] to finish with.
+enum Settle<'a> {
+    /// The proposal is a row of its own by this name: nothing was changed.
+    Instead(String),
+    Done(Settled<'a>),
+}
+
+struct Settled<'a> {
+    row: String,
+    same: bool,
+    had_test: bool,
+    tests: std::path::PathBuf,
+    had_row: bool,
+    new_clips: Vec<&'a String>,
+    reopened: bool,
+    before: Option<String>,
+    new_repo: Option<&'static str>,
+    repo_why: Option<String>,
+    /// The row's note after a reopen, for its log.
+    note: Option<String>,
+}
+
+/// [`propose`]'s change to the quest log's rows `q`, under its lock.
+fn settle<'a>(
+    paths: &Paths,
+    game_dir: Option<&Path>,
+    p: &'a Proposal<'a>,
+    parked: Option<&str>,
+    q: &mut Vec<Value>,
+) -> Result<Settle<'a>> {
     let mut at = q.iter().position(|r| r["mechanic"] == json!(p.row));
     let is_it = |r: &Value| r["mechanic"] == json!(p.row);
     // An archived row is still the row: proposed again it stays archived,
@@ -402,14 +498,12 @@ pub(crate) fn propose(paths: &Paths, game_dir: Option<&Path>, p: &Proposal) -> R
         && target_line(r).is_some_and(|t| t != line.to_lowercase())
         && let Some(name) = line_row(p.row, line)
     {
-        let mut v = propose(paths, game_dir, &Proposal { row: &name, ..*p })?;
-        v["instead_of"] = json!(p.row);
-        return Ok(v);
+        return Ok(Settle::Instead(name));
     }
     // A failure an open row has already (the same file and field) is that
     // row's: the step goes in its note instead of a second row and card.
     let same = match (at, &in_archive) {
-        (None, None) => same_failure(&q, p.row, &failures(p.from)),
+        (None, None) => same_failure(q, p.row, &failures(p.from)),
         _ => None,
     };
     if same.is_some() {
@@ -450,7 +544,6 @@ pub(crate) fn propose(paths: &Paths, game_dir: Option<&Path>, p: &Proposal) -> R
             } else {
                 format!("{note} {also}")
             });
-            write_queue(&f, &q)?;
         }
     }
     match at {
@@ -497,7 +590,6 @@ pub(crate) fn propose(paths: &Paths, game_dir: Option<&Path>, p: &Proposal) -> R
                 r["clip"] = c;
             }
             q.push(r);
-            write_queue(&f, &q)?;
         }
         Some(i) => {
             let r = &mut q[i];
@@ -523,49 +615,25 @@ pub(crate) fn propose(paths: &Paths, game_dir: Option<&Path>, p: &Proposal) -> R
                         format!("{note} {also}")
                     });
                 }
-                write_queue(&f, &q)?;
             }
         }
     }
-    if let (Some(b), Some(i)) = (&before, at) {
-        let note = q[i]["note"].as_str().unwrap_or("").to_owned();
-        log_reopen(paths, p.game, &row, &note, b)?;
-    }
-    let mut wrote_test = None;
-    if let (Some(t), false) = (&p.test, had_test) {
-        // The home's file, not the games checkout's: a change there lands
-        // only through a gate (triage::home_file).
-        let file = tests;
-        if let Some(d) = file.parent() {
-            fs::create_dir_all(d)?;
-        }
-        let mut text = fs::read_to_string(&file).unwrap_or_default();
-        if !text.is_empty() && !text.ends_with('\n') {
-            text.push('\n');
-        }
-        if !text.is_empty() {
-            text.push('\n');
-        }
-        text.push_str(&item_toml(&row, t));
-        fs::write(&file, text).with_context(|| file.display().to_string())?;
-        wrote_test = Some(file.display().to_string());
-    }
-    let gave_target = reopened || !had_row;
-    Ok(json!({
-        "row": row,
-        "proposed_as": p.row,
-        "same_failure": same.is_some(),
-        "added": !had_row,
-        "parked": !had_row && parked.is_some(),
-        "clips_added": new_clips,
-        "reopened": reopened,
-        "before": before,
-        "target": p.target.filter(|_| gave_target),
-        "target_frames": p.target_frames.filter(|_| gave_target && p.target.is_some()).map(|(n, _)| n),
-        "test": wrote_test,
-        "test_was_there": had_test,
-        "repo": new_repo,
-        "repo_why": repo_why,
+    let note = match (&before, at) {
+        (Some(_), Some(i)) => Some(q[i]["note"].as_str().unwrap_or("").to_owned()),
+        _ => None,
+    };
+    Ok(Settle::Done(Settled {
+        row,
+        same: same.is_some(),
+        had_test,
+        tests,
+        had_row,
+        new_clips,
+        reopened,
+        before,
+        new_repo,
+        repo_why,
+        note,
     }))
 }
 

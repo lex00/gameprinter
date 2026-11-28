@@ -332,10 +332,12 @@ pub(crate) fn live(run: &Run) -> (bool, Vec<String>, Option<String>) {
 
 /// Keeps whether the queue is on in the state file, with this server's
 /// process, so `gp progress --next` and the MCP tool `next` know it
-/// without asking the server.
+/// without asking the server, and the error that stopped it, so `gp loop
+/// steps` has the step of the tool's own it makes (crate::next).
 fn record_live(run: &Run, on: bool) {
+    let error = with_live(run, |l| l.error.clone());
     let _ = update_saved(run, |v| {
-        v["live"] = json!({"on": on, "pid": std::process::id(), "at_ms": now_ms()});
+        v["live"] = json!({"on": on, "pid": std::process::id(), "at_ms": now_ms(), "error": error});
     });
 }
 

@@ -102,7 +102,7 @@ pub enum OracleCmd {
         /// The evidence: what differs and why.
         #[arg(long)]
         note: String,
-        /// A source (registry ID, such as smb1-ntsc-prg0) the record applies
+        /// A source (registry ID, such as rooftop-ntsc-prg0) the record applies
         /// to; repeat for more. Without it, any source.
         #[arg(long = "source")]
         sources: Vec<String>,

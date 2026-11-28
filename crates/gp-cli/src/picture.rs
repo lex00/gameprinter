@@ -66,7 +66,9 @@ pub struct PictureArgs {
     /// The ROM; by default the one in $GP_ROM_DIR the package names.
     #[arg(long)]
     pub rom: Option<std::path::PathBuf>,
-    /// Only this clip, by ID.
+    /// Only this clip: a corpus clip's ID, or a mechanic session's clip as
+    /// SESSION:N, the form `gp clip score` takes (played from power-on to
+    /// its start, its start state checked).
     #[arg(long)]
     pub clip: Option<String>,
     /// Details printed per group.
@@ -1269,6 +1271,52 @@ fn ppm(same: u64, total: u64) -> u64 {
     (same * 1_000_000).checked_div(total).unwrap_or(0)
 }
 
+/// A mechanic session's clip as the scenario the detector plays: its full
+/// log's frames before the start written to the run's
+/// `generated/logs/session.SESSION-NNN.log`, played from power-on to reach
+/// it, and its own frames after.
+fn session_scenario(
+    home: &std::path::Path,
+    run_dir: &std::path::Path,
+    c: &crate::clip_session::SessionClip,
+) -> Result<Scenario> {
+    use gp_interp::scenario::{Source as From, StartAt};
+    let (log, start) = c.log(home)?;
+    if start >= log.frames.len() {
+        anyhow::bail!("clip {} has no frames after its start", c.name());
+    }
+    let logs = run_dir.join("generated").join("logs");
+    std::fs::create_dir_all(&logs)?;
+    let file = logs.join(format!("session.{}.log", c.key()));
+    let mut before = log.clone();
+    before.frames.truncate(start);
+    std::fs::write(&file, before.to_text())?;
+    let mut own = log;
+    own.frames.drain(..start);
+    Ok(Scenario {
+        id: c.name(),
+        name: format!("clip {} of session {}", c.n, c.session),
+        tier: 0,
+        mechanic: String::new(),
+        params: Vec::new(),
+        frames: own.frames.len() as u64,
+        presses: Vec::new(),
+        log: Some(own.to_text()),
+        requires: Vec::new(),
+        start: (start > 0).then(|| StartAt {
+            input: format!("session clip {}", c.name()),
+            frame: start as u64,
+            snapshot: None,
+            log: Some(file.to_string_lossy().into_owned()),
+            model_frame: None,
+        }),
+        source: From::Played {
+            when: String::new(),
+            by: "a mechanic session".into(),
+        },
+    })
+}
+
 pub(crate) fn run(args: &PictureArgs, paths: &gp_evidence::Paths) -> Result<Outcome> {
     let game = &args.game;
     let rom = crate::clip_score::rom_of(paths, game, args.rom.as_deref())?;
@@ -1293,7 +1341,17 @@ pub(crate) fn run(args: &PictureArgs, paths: &gp_evidence::Paths) -> Result<Outc
         .filter(|r| args.clip.as_ref().is_none_or(|id| &r.id == id))
         .cloned()
         .collect();
-    if recipes.is_empty() {
+    // A mechanic session's clip, SESSION:N, plays on the game's own set.
+    let session = match args.clip.as_deref() {
+        Some(spec) => crate::clip_session::one(paths, game, spec, !recipes.is_empty())?
+            .map(|c| {
+                c.check_start(&paths.home, &rom)?;
+                session_scenario(&paths.home, &dir, &c)
+            })
+            .transpose()?,
+        None => None,
+    };
+    if recipes.is_empty() && session.is_none() {
         anyhow::bail!(
             "the corpus has no clip {}",
             args.clip.as_deref().unwrap_or("at all")
@@ -1316,6 +1374,9 @@ pub(crate) fn run(args: &PictureArgs, paths: &gp_evidence::Paths) -> Result<Outc
             .map(|s| s.id.clone())
             .unwrap_or_default();
         by_set.entry(key).or_default().push(r.clone());
+    }
+    if session.is_some() {
+        by_set.entry(String::new()).or_default();
     }
     let mut unmade: BTreeMap<String, String> = BTreeMap::new();
     let mut ran_by: BTreeMap<String, (Scenario, ClipWatched)> = BTreeMap::new();
@@ -1357,6 +1418,9 @@ pub(crate) fn run(args: &PictureArgs, paths: &gp_evidence::Paths) -> Result<Outc
                     unmade.insert(r.id.clone(), e);
                 }
             }
+        }
+        if key.is_empty() {
+            list.extend(session.clone());
         }
         crate::scenario::resolve_logs(&mut list, &paths.home);
         let (model, text) = b.model()?;
@@ -1485,7 +1549,7 @@ pub(crate) fn run(args: &PictureArgs, paths: &gp_evidence::Paths) -> Result<Outc
             }),
         );
     }
-    let n = recipes.len() as u64;
+    let n = (recipes.len() + usize::from(session.is_some())) as u64;
     // Every clip counts: one that can't be scored counts as 0.
     let fidelity = permille_sum.checked_div(n).unwrap_or(0);
     let (sprites_ppm, background_ppm) =
@@ -1662,6 +1726,64 @@ fn with_unmeasured(v: Value, text: String, unmeasured: &BTreeMap<String, String>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `--clip SESSION:N` names the session's clip N, played from power-on
+    /// to its start and its own frames after; a corpus clip's ID (dotted,
+    /// or a plain name the corpus has) is no session's.
+    #[test]
+    fn a_session_clip_is_played_from_power_on_and_a_corpus_id_is_not_one() {
+        let d = tempfile::tempdir().unwrap();
+        let game = d.path().join("rooftop");
+        std::fs::create_dir_all(&game).unwrap();
+        let paths = gp_evidence::Paths {
+            home: d.path().join("home"),
+            store: d.path().join("store"),
+            roms: d.path().join("roms"),
+        };
+        let clips = paths.home.join("mechanics/rooftop/jump/clips");
+        std::fs::create_dir_all(&clips).unwrap();
+        std::fs::write(clips.join("002.toml"), "start = 2\n").unwrap();
+        std::fs::write(
+            clips.join("002.log"),
+            format!(
+                "gp-input-log 0\ncontrollers 1\n{}",
+                "P ........\n".repeat(5)
+            ),
+        )
+        .unwrap();
+        let c = crate::clip_session::one(&paths, &game, "jump:2", false)
+            .unwrap()
+            .expect("a session clip");
+        assert_eq!((c.session.as_str(), c.n), ("jump", 2));
+        let run = d.path().join("run");
+        let s = session_scenario(&paths.home, &run, &c).unwrap();
+        assert_eq!((s.id.as_str(), s.frames), ("jump:2", 3));
+        let own = gp_evidence::InputLog::parse(s.log.as_deref().unwrap()).unwrap();
+        assert_eq!(own.frames.len(), 3);
+        let st = s.start.expect("a start");
+        assert_eq!(st.frame, 2);
+        let before = std::fs::read_to_string(st.log.unwrap()).unwrap();
+        assert_eq!(
+            gp_evidence::InputLog::parse(&before).unwrap().frames.len(),
+            2
+        );
+        // A clip the session hasn't, or a whole session, is refused.
+        assert!(crate::clip_session::one(&paths, &game, "jump:7", false).is_err());
+        assert!(crate::clip_session::one(&paths, &game, "jump", false).is_err());
+        // Corpus clips resolve as before: to no session.
+        for (id, in_corpus) in [
+            ("rooftop.l1.001", true),
+            ("rooftop.l1.001", false),
+            ("jump", true),
+        ] {
+            assert!(
+                crate::clip_session::one(&paths, &game, id, in_corpus)
+                    .unwrap()
+                    .is_none(),
+                "{id}"
+            );
+        }
+    }
 
     const W: u32 = 48;
     const H: u32 = 32;

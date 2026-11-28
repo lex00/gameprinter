@@ -1245,22 +1245,11 @@ metatile_kind:
     .endrepeat
 .endmacro
 
+; The rows are authored data, templates/mosshop/level-data/level.toml (the
+; file gp level edit changes): scripts/mosshop/build.sh writes them as
+; level.inc, `rowN: level_row "..."` lines, in the build's folder.
 level:
-row0:  level_row "................................"
-row1:  level_row "................................"
-row2:  level_row "................................"
-row3:  level_row "................................"
-row4:  level_row "................................"
-row5:  level_row "................................"
-row6:  level_row "................................"
-row7:  level_row "................................"
-row8:  level_row "....?..........................."
-row9:  level_row ".................ooo............"
-row10: level_row "............oo...BBB.....B......"
-row11: level_row "......B..................B...()."
-row12: level_row "MMMMMMMMMMMM..MMMMMMMMMMMMMMMMMM"
-row13: level_row "SSSSSSSSSSSS..SSSSSSSSSSSSSSSSSS"
-row14: level_row "SSSSSSSSSSSS..SSSSSSSSSSSSSSSSSS"
+.include "level.inc"
 
 level_rows_lo:
     .byte <row0, <row1, <row2, <row3, <row4, <row5, <row6, <row7

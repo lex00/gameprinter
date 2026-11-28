@@ -62,6 +62,8 @@ packP's findings on what fits: Rivet Rodeo's girders (9 runs, 54 bytes) are 6 by
 
 An agent reads and edits a stage for a person over MCP (`gp_run`), and the same commands work by hand. They read and write the stage in the kit's own terms: the slots its rules name, row by row, and each thing's start in the model. Only a person's copy is ever changed.
 
+Where the slots are read from: a copy's own `assets/` when it has one; else the game's `level-data/` folder when it has one; else the lift of the person's ROM in `$GP_HOME/work/assets/SOURCE`. A `level-data/` folder holds a level that is authored data, not lifted: the asset map (`assets.toml`) and the files of the slots the simulation reads, in the lift's formats. Moss Hop's level is authored so (`templates/mosshop/level-data/`: `level.toml`, with the `metatiles.toml` and `slugs.toml` it needs). `gp level show`, `edit`, `undo` and `verify` read it with no ROM, no lift and no cc65, an edit of a copy writes the copy's `level-data/level.toml`, and such a game is its own original. The ROM is built from the same file (`scripts/mosshop/build.sh` writes its rows as `level.inc`, which `games/mosshop/mosshop.s` includes). `crates/gp-cli/tests/level_data.rs` reads and edits it in a home with no lift and no cc65, and `gate_mosshop.rs` holds the built ROM's lift to the three files byte for byte. The game's code and pictures still come from the assembly build: the baselines, the presentation and the gate's game check run the ROM.
+
 | Command | What |
 |---|---|
 | `gp level list GAME` | The levels: what each is, its size, its starts, the slots its pieces are in, whether the kit's rules cover it, and whether the folder is a copy an edit may change |

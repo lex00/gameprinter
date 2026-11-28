@@ -535,32 +535,6 @@ mod tests {
         assert!(!Captures::is_one(&baseline));
     }
 
-    /// Each captures file of the games checkout ($GP_GAMES_DIR), when there
-    /// is one: every entry's set is one gp-arcade runs, made by this
-    /// checkout's MAME, and its input log is there with its hash and names
-    /// the set. Skips without the checkout.
-    #[test]
-    fn the_games_files_name_their_inputs() {
-        let Some(games) = std::env::var_os("GP_GAMES_DIR").map(PathBuf::from) else {
-            eprintln!("skipped: no GP_GAMES_DIR");
-            return;
-        };
-        for g in fs::read_dir(&games).into_iter().flatten().flatten() {
-            let path = g.path().join(FILE);
-            if !path.is_file() {
-                continue;
-            }
-            let c = Captures::load(&path).unwrap();
-            for e in &c.captures {
-                assert!(gp_arcade::romset::set(&e.system).is_some(), "{}", e.system);
-                assert_eq!(e.mame, MAME_VERSION, "{}", e.name);
-                assert_eq!(e.sha256.len(), 64);
-                let log = OracleLog::parse(&c.input(e).unwrap()).unwrap();
-                assert_eq!(log.system, e.system, "{}", e.name);
-            }
-        }
-    }
-
     /// A missing capture is named with the command that makes it.
     #[test]
     fn a_missing_capture_says_how_to_make_it() {

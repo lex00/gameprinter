@@ -77,7 +77,23 @@ pub struct Runner {
     /// has a target or says what would measure it (`measure_needed`). On
     /// by default; off starts every open row, as before 2026-11-26.
     pub measure_required: bool,
+    /// How many failed tries of one step's workers make it a trouble row
+    /// of the loop's own, after which the runner starts no worker on it
+    /// until its row is set next again (`gp loop set --fail-tries`); 0
+    /// for no limit.
+    pub fail_tries: u32,
+    /// The most all the workers' runs of a day spend, in dollars, counted
+    /// from the runs ledger: past it the runner starts no worker that day
+    /// (`gp loop set --day-spend`); 0 for no cap.
+    pub day_spend_usd: f64,
+    /// The machine's 1-minute load over which the runner starts no new
+    /// worker (`gp loop set --max-load`); 0 for the machine's cores.
+    pub max_load: f64,
 }
+
+/// How many failed tries of a step make it a trouble row when loop.toml
+/// names none.
+pub const WORKER_FAIL_TRIES: u32 = 3;
 
 /// The turn cap when loop.toml names none: above the largest run in the
 /// logs up to 2026-11-26 (264 turns).
@@ -102,6 +118,9 @@ impl Default for Runner {
             max_turns: WORKER_MAX_TURNS,
             max_spend_usd: WORKER_MAX_SPEND_USD,
             measure_required: true,
+            fail_tries: WORKER_FAIL_TRIES,
+            day_spend_usd: 0.0,
+            max_load: 0.0,
         }
     }
 }
@@ -567,6 +586,9 @@ mod tests {
                 max_turns: 120,
                 max_spend_usd: 12.5,
                 measure_required: false,
+                fail_tries: 4,
+                day_spend_usd: 20.0,
+                max_load: 12.0,
             },
             games: vec!["rooftop".into()],
             hold: vec!["hilltop".into()],

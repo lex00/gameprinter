@@ -160,20 +160,10 @@ check-web: build mosshop
     scripts/check/step.sh web-parity just --no-deps web-parity
     scripts/check/step.sh play-web just --no-deps play-web
     scripts/check/step.sh mechanic-page just --no-deps mechanic-page
-    scripts/check/step.sh test-deploy scripts/web/test-deploy.sh {{quote(target / "test-deploy")}}
+    scripts/check/step.sh test-pages scripts/web/test-pages.sh {{quote(target / "test-pages")}}
     scripts/check/step.sh test-parallel scripts/check/test-parallel.sh {{quote(target / "test-parallel")}}
     scripts/check/step.sh check-vendor just --no-deps check-vendor
     @echo "just check-web: passed"
-
-# `just check`, then the checks that ran only by hand, each when what it
-# needs is here (scripts/check/all.sh): each arcade game's web parity, the
-# public page's check and its share and theme-line tests, gp corpus score
-# on each game of the games checkout with a corpus (every clip exact), each
-# MAME capture a game names against gp-arcade, and gp baseline check. Each
-# it can't run is one line saying what is missing; it fails only when a
-# check that ran fails. Most of an hour.
-check-all:
-    scripts/check/all.sh {{quote(gp)}}
 
 # check's lanes. The Rust lane: clippy, the generated files, Moss Hop's
 # baselines and model, the originals, the repo's own script checks, and
@@ -195,9 +185,6 @@ _check-rust:
     scripts/check/step.sh romguard python3 -I -B -m unittest discover -s scripts/romguard -q
     scripts/check/step.sh site-prose just --no-deps site-prose
 
-# The players' lane: gp_play.wasm and gp_arcade_play.wasm against native
-# replays (both write target/play-web, so one after the other), then the
-# ROM tier.
 # The tests' lane: `just test`, unless a live tool gate run runs them
 # itself: GP_GATE_RUNS_TESTS=1 with GP_GATE_RUN the pid of a running gate.
 # GP_GATE_RUNS_TESTS=1 alone (left in a shell) is ignored, with a line.
@@ -300,87 +287,15 @@ site-dev:
 site-prose:
     cd site && ([ -f node_modules/.package-lock.json ] || npm ci --silent --no-audit --no-fund) && npm run --silent lint:prose && npm run --silent test:prose > /dev/null
 
-# The ROM tier, on what this machine has, skipping with a notice what it
-# hasn't: each NES ROM a game in the games checkout names boots in gp-nes as
-# tetanes-core boots the file, and its junk copies record the same
-# (gp-nes's registered_roms_boot_as_their_files_do); then the profiles and
-# clip_agree tests on each game of the games checkout ($GP_GAMES_DIR) that
-# has them (`just check-profiles-roms` and
-# `just check-clip-agree-roms` say which). CI has no ROM, so there it checks
-# nothing.
-check-roms: build
-    #!/usr/bin/env bash
-    set -euo pipefail
-    roms="${GP_ROM_DIR:-{{gp_home / "roms"}}}"
-    if [ ! -d "$roms" ]; then
-        echo "check-roms: skipped, no ROM folder at $roms"
-        exit 0
-    fi
-    export GP_ROM_DIR="$roms" GP_GAMES_DIR="${GP_GAMES_DIR:?set GP_GAMES_DIR to a games checkout}"
-    out=$(GP_CHECK_ROM_BOOT=1 cargo test -q -p gp-nes --profile {{profile}} --lib registered_roms_boot_as_their_files_do -- --ignored --nocapture 2>&1) || { echo "$out" >&2; exit 1; }
-    grep -E 'identical|skipped' <<<"$out" || true
-    just --no-deps _rom-tier "profiles clip_agree"
-    echo "check-roms: passed"
+# The public page's share and theme-line tests under node (no browser, no
+# game).
+page-tests:
+    node --test scripts/web/public/share.test.mjs scripts/web/public/theme-line.test.mjs
 
-# The profiles test (crates/gp-cli/tests/profiles.rs, ROM tier) on each
-# game of the games checkout with profiles.toml, hook code (ext/Cargo.toml)
-# and checks.toml's [profiles], or on the GAMES given (folder names or
-# paths): its module built from this tool's kit, then a preset replays to
-# its own hashes and none is retro's.
-check-profiles-roms *GAMES: build
-    just --no-deps _rom-tier profiles {{GAMES}}
-
-# gp clip score and gp corpus score agree on the corpus clips checks.toml's
-# [clip_agree] names (crates/gp-cli/tests/clip_agree.rs, ROM tier), on each
-# game of the games checkout with a module and those, or the GAMES given.
-check-clip-agree-roms *GAMES: build
-    just --no-deps _rom-tier clip_agree {{GAMES}}
-
-# _rom-tier TESTS GAME...: the gp-cli ROM-tier TESTS (profiles, clip_agree)
-# on each game: the GAMES given, else every game of the games checkout with
-# profiles.toml, corpus.toml, ext/Cargo.toml and checks.toml. A game whose
-# ROM isn't in $GP_ROM_DIR is skipped in words before its module is built;
-# each test skips in words a game without its checks.toml table. The game's
-# folder goes to the tests as $GP_GAME_DIR and its module as
-# $GP_GAME_MODULE.
-_rom-tier TESTS *GAMES:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    roms="${GP_ROM_DIR:-{{gp_home / "roms"}}}"
-    games="${GP_GAMES_DIR:-}"
-    export GP_ROM_DIR="$roms" GP_GAMES_DIR="$games"
-    facts() { python3 -I -B scripts/check/game-facts.py "$@"; }
-    list=()
-    for g in {{GAMES}}; do
-        if [ -d "$g" ]; then list+=("$(cd "$g" && pwd)"); else list+=("$games/$g"); fi
-    done
-    if [ "${#list[@]}" -eq 0 ]; then
-        while IFS= read -r g; do list+=("$g"); done < <(facts list "$games" profiles.toml corpus.toml ext/Cargo.toml checks.toml || true)
-    fi
-    if [ "${#list[@]}" -eq 0 ]; then
-        echo "rom tier: {{TESTS}} skipped, no game with profiles.toml, corpus.toml, ext/Cargo.toml and checks.toml in the games checkout at $games"
-        exit 0
-    fi
-    scan=$({{quote(gp)}} --json roms scan 2>/dev/null || true)
-    tests=()
-    for t in {{TESTS}}; do tests+=(--test "$t"); done
-    for g in "${list[@]}"; do
-        name=$(basename "$g")
-        rom=$(facts "$g" rom || true)
-        if [ -z "$rom" ] || ! grep -q "\"sha256\": \"$rom\"" <<<"$scan"; then
-            echo "rom tier: {{TESTS}} skipped on $name, no ROM its corpus is for (sha256 $rom) in $roms"
-            continue
-        fi
-        just --no-deps _game-module "$g"
-        out=$(GP_GAME_DIR="$g" GP_GAME_MODULE={{quote(target / "modules")}}/"$name.wasm" cargo test -q -p gp-cli --profile {{profile}} "${tests[@]}" -- --ignored --nocapture 2>&1) || { echo "$out" >&2; exit 1; }
-        grep -E '^(profiles|clip_agree):' <<<"$out" || true
-    done
-
-# A game's module, built from this tool's kit into target/modules/NAME.wasm
-# (GAME is the game's folder).
-_game-module GAME: build
-    {{quote(gp)}} game kit -o {{quote(target / "module-kit")}} > /dev/null
-    {{quote(gp)}} game build {{quote(GAME)}} --kit {{quote(target / "module-kit")}} -o {{quote(target / "modules")}}/"$(basename {{quote(GAME)}}).wasm" > /dev/null
+# The checks of a game against its ROM (its module's profiles and clips,
+# its corpus scored, its arcade player and web parity, its MAME captures)
+# are the games repo's: its justfile runs them from a game's folder with an
+# installed gp. The tool knows no game, so nothing here reads a game's files.
 
 # The original templates (docs/originals.md): each built from its
 # authored.toml into $GP_HOME/work, held to its pins, its model checked
@@ -435,125 +350,24 @@ play-web: mosshop
     fi
     echo "play-web: Moss Hop played in gp_play.wasm and replayed natively: every frame hash agrees ($web)"
 
-# The arcade player: gp_arcade_play.wasm built into target/play-web, and
-# for an arcade game of the games checkout ($GP_GAMES_DIR),
-# a MAME capture's input that its oracle/mame-captures.toml names (the
-# first for the set) played in it under node, drawing every frame, with a
-# save point restored on the way, then the same log replayed natively;
-# every frame's picture hash must agree, and with that MAME capture on this
-# machine ($GP_HOME/work/oracle/NAME), MAME's too. So must every frame's
-# sound, the AYs' samples at the speakers (its count and hash), and the
-# module's sound board alone, fed the latch writes the whole machine made,
-# must sound the same on every frame (what a page whose game is a model
-# runs). GAME is a folder of the games checkout or a path, SOURCE one of
-# its roms.toml's source ids (default: the first capture's set); with no
-# GAME, every arcade game with a captures file. The romset is the owner's
-# ($GP_ARCADE_ZIP, else $GP_ROM_DIR/arcade/SYSTEM.zip, SYSTEM the
-# source's roms.toml `system`), and a
-# game without it is skipped, so it can't run in CI.
-play-web-arcade GAME="" SOURCE="":
-    #!/usr/bin/env bash
-    set -euo pipefail
-    games="${GP_GAMES_DIR:-}"
-    facts() { python3 -I -B scripts/check/game-facts.py "$@"; }
-    work={{quote(gp_home / "work" / "play-web")}}
-    built=""
-    # one GAME SOURCE: the check on one game, or a line saying why not.
-    one() {
-        local game=$1 source=$2 name system zip="" cap="" input="" sha=""
-        name=$(basename "$game")
-        if [ -z "$source" ]; then
-            system=$(facts "$game" captures | head -1 | cut -d' ' -f2)
-            source=$(facts "$game" source "$system" || true)
-        fi
-        system=$(facts "$game" system "$source" || true)
-        if [ -z "$system" ]; then
-            echo "play-web-arcade: $name has no source ${source:-with a capture} with a system in its roms.toml" >&2
-            exit 1
-        fi
-        while read -r c s i h _; do
-            if [ "$s" = "$system" ]; then cap=$c input="$game/$i" sha=$h; break; fi
-        done < <(facts "$game" captures || true)
-        if [ -z "$input" ]; then
-            echo "play-web-arcade: $name's oracle/mame-captures.toml names no capture of $system" >&2
-            exit 1
-        fi
-        if [ "$(shasum -a 256 < "$input" | cut -d' ' -f1)" != "$sha" ]; then
-            echo "play-web-arcade: $input isn't the input $name's captures file names for $cap" >&2
-            exit 1
-        fi
-        for z in "${GP_ARCADE_ZIP:-}" "${GP_ROM_DIR:+$GP_ROM_DIR/arcade/$system.zip}"; do
-            if [ -n "$z" ] && [ -f "$z" ]; then zip="$z"; break; fi
-        done
-        if [ -z "$zip" ]; then
-            echo "play-web-arcade: skipped $name, no $system romset on this machine"
-            return 0
-        fi
-        if [ -z "$built" ]; then
-            scripts/web/build-play.sh --arcade {{quote(target / "play-web")}} > /dev/null
-            mkdir -p "$work"
-            cargo build -q --profile {{profile}} -p gp-arcade-play --example pictures --example sounds --example latches
-            built=1
-        fi
-        local log="$input"
-        # The board knows a set only by its game's roms.toml chip rows: the
-        # native examples read the checkout, the wasm module is handed them.
-        export GP_GAMES_DIR="$games" ROMS="$game/roms.toml"
-        {{quote(target / profile_dir / "examples" / "latches")}} "$zip" "$log" "$work/arcade-latches.bin"
-        node scripts/web/check-play-arcade.mjs {{quote(target / "play-web" / "gp_arcade_play.wasm")}} "$zip" "$log" "$work/arcade-web.txt" "$work/arcade-web-sound.txt" "$work/arcade-latches.bin" > /dev/null
-        {{quote(target / profile_dir / "examples" / "pictures")}} "$zip" "$log" > "$work/arcade-native.txt"
-        {{quote(target / profile_dir / "examples" / "sounds")}} "$zip" "$log" > "$work/arcade-native-sound.txt"
-        local frames first samples mame tsv col
-        frames=$(wc -l < "$work/arcade-web.txt" | tr -d ' ')
-        if ! cmp -s "$work/arcade-web.txt" "$work/arcade-native.txt"; then
-            first=$(diff <(cat -n "$work/arcade-web.txt") <(cat -n "$work/arcade-native.txt") | sed -n 2p)
-            echo "play-web-arcade: gp_arcade_play.wasm's picture hashes differ from the native replay's on $name, first at: $first" >&2
-            exit 1
-        fi
-        if ! cmp -s "$work/arcade-web-sound.txt" "$work/arcade-native-sound.txt"; then
-            first=$(diff <(cat -n "$work/arcade-web-sound.txt") <(cat -n "$work/arcade-native-sound.txt") | sed -n 2p)
-            echo "play-web-arcade: gp_arcade_play.wasm's sound differs from the native replay's on $name, first at frame: $first" >&2
-            exit 1
-        fi
-        samples=$(awk '{ n += $1 } END { print n / 2 }' "$work/arcade-web-sound.txt")
-        mame="no MAME capture of it here"
-        tsv={{quote(gp_home / "work" / "oracle")}}/"$cap/frames.tsv"
-        if [ -f "$tsv" ]; then
-            col=$(head -1 "$tsv" | tr '\t' '\n' | grep -nx picture | cut -d: -f1)
-            if cmp -s "$work/arcade-web.txt" <(tail -n +2 "$tsv" | cut -f"$col"); then
-                mame="and MAME's capture $cap agrees on every frame too"
-            else
-                echo "play-web-arcade: the picture hashes on $name differ from MAME's capture ($tsv)" >&2
-                exit 1
-            fi
-        fi
-        echo "play-web-arcade: $name's $(basename "$log") on $source ($frames frames) played in gp_arcade_play.wasm and replayed natively: every frame's picture hash agrees, $mame; so does every frame's sound ($samples samples a speaker), and the sound board alone's"
-    }
-    game="{{GAME}}"
-    if [ -n "$game" ]; then
-        [ -d "$game" ] || game="$games/$game"
-        one "$game" "{{SOURCE}}"
-        exit 0
-    fi
-    any=""
-    for g in $(facts arcade "$games" 2>/dev/null || true); do
-        [ -f "$g/oracle/mame-captures.toml" ] || continue
-        any=1
-        one "$g" ""
-    done
-    [ -n "$any" ] || echo "play-web-arcade: skipped, no arcade game with oracle/mame-captures.toml in the games checkout at $games"
+# The arcade player alone, for a game's own check of it (the games repo's
+# play-web-arcade): gp_arcade_play.wasm built into OUT (default
+# target/play-web) and the native examples it is held to (gp-arcade-play's
+# pictures, sounds and latches, in the profile's examples folder). Reads no
+# game and no romset.
+play-arcade-wasm OUT=(target / "play-web"):
+    scripts/web/build-play.sh --arcade {{quote(OUT)}} > /dev/null
+    cargo build -q --profile {{profile}} -p gp-arcade-play --example pictures --example sounds --example latches
+    @echo "play-arcade-wasm: {{OUT}}/gp_arcade_play.wasm, and pictures, sounds and latches in {{target / profile_dir / "examples"}}"
 
 # The mechanic page in a headless browser on Moss Hop, in a GP_HOME made
 # for the run: the screen page at gp mechanic start's and gp serve's
 # addresses, the first screen, the copies and their tabs
-# (scripts/web/check-mechanic.mjs). That part needs no games checkout.
-# Then an arcade part for each arcade game of the games checkout
-# ($GP_GAMES_DIR) whose package.toml's `play` set is on this machine
-# ($GP_ROM_DIR/arcade/SYSTEM.zip, SYSTEM its roms.toml `system`); it drove
-# the older mechanic page, which is gone, so it says it is skipped until
-# the screen page's check of it (row page-check-on-the-screen-page). Its
-# players are built into target/play-web-mech, its own folder, so it can
-# run beside play-web, which writes target/play-web.
+# (scripts/web/check-mechanic.mjs). It needs no games checkout. The arcade
+# run on a game's own romset (check-mechanic.mjs --only arcade
+# --arcade-game DIR --arcade-rom ZIP --arcade-wasm WASM) is the games
+# repo's to run. The player is built into target/play-web-mech, its own
+# folder, so it can run beside play-web, which writes target/play-web.
 mechanic-page: build mosshop
     #!/usr/bin/env bash
     set -euo pipefail
@@ -562,45 +376,9 @@ mechanic-page: build mosshop
         npm ci --prefix scripts/web --silent --no-audit --no-fund
     fi
     browser=$(scripts/inspector/fetch-browser.sh {{quote(gp_home)}})
-    check() {
-        node scripts/web/check-mechanic.mjs --gp {{quote(gp)}} --rom {{quote(mosshop_rom)}} \
-            --wasm {{quote(target / "play-web-mech" / "gp_play.wasm")}} --browser "$browser" "$@" \
-            --shots {{quote(gp_home / "work" / "mechanic-page")}}
-    }
-    check
-    games="${GP_GAMES_DIR:-}"
-    # gp, which the check starts, knows the arcade sets from this checkout.
-    export GP_GAMES_DIR="$games"
-    facts() { python3 -I -B scripts/check/game-facts.py "$@"; }
-    arcade=$(facts arcade "$games" 2>/dev/null || true)
-    if [ -z "$arcade" ]; then
-        echo "mechanic-page: the arcade part skipped, no arcade game in the games checkout at $games"
-        exit 0
-    fi
-    built=""
-    for g in $arcade; do
-        name=$(basename "$g")
-        play=$(facts "$g" role play || true)
-        system=$(facts "$g" system "$play" || true)
-        if [ -z "$system" ] || ! facts "$g" check mechanic_page > /dev/null; then
-            echo "mechanic-page: the arcade part skipped on $name, which has no package.toml play set with a system in roms.toml, or no checks.toml [mechanic_page]"
-            continue
-        fi
-        zip=""
-        for z in "${GP_ROM_DIR:+$GP_ROM_DIR/arcade/$system.zip}"; do
-            if [ -n "$z" ] && [ -f "$z" ]; then zip="$z"; break; fi
-        done
-        if [ -z "$zip" ]; then
-            echo "mechanic-page: the arcade part skipped on $name, no $system romset on this machine"
-            continue
-        fi
-        if [ -z "$built" ]; then
-            scripts/web/build-play.sh --arcade {{quote(target / "play-web-mech")}} > /dev/null
-            built=1
-        fi
-        echo "mechanic-page: the arcade part on $name ($play)"
-        check --only arcade --arcade-game "$g" --arcade-rom "$zip" --arcade-wasm {{quote(target / "play-web-mech" / "gp_arcade_play.wasm")}}
-    done
+    node scripts/web/check-mechanic.mjs --gp {{quote(gp)}} --rom {{quote(mosshop_rom)}} \
+        --wasm {{quote(target / "play-web-mech" / "gp_play.wasm")}} --browser "$browser" \
+        --shots {{quote(gp_home / "work" / "mechanic-page")}}
 
 _interp-mosshop:
     #!/usr/bin/env bash
@@ -778,50 +556,6 @@ web-page *args: build
       accept-pictures) node scripts/web/public/check-page.mjs --dist "$out" --browser "$browser" --shots "$shots" --accept-pictures ;;
     esac
 
-# The release check (docs/web.md, "Deploying the public page"): the page built at
-# this tip, its game-data check, the headless check under its headers, the
-# lift's tests, gp package scan on the game, and on a pass a record of the
-# page's digest, which `just web-page-deploy` needs. `--full` reuses nothing.
-# The page's release check, which a deploy needs a pass of.
-web-page-release *args: build
-    #!/usr/bin/env bash
-    set -euo pipefail
-    case "{{args}}" in ""|--full|--no-roms|"--full --no-roms"|"--no-roms --full") ;; *) echo "web-page-release: give nothing, --full or --no-roms" >&2; exit 2 ;; esac
-    WEB_TOOLS=$(scripts/web/fetch-tools.sh {{quote(gp_home)}})
-    export WEB_TOOLS
-    GP={{quote(gp)}} scripts/web/release-check.sh {{args}}
-
-# Runs the full release check (`--full`: nothing reused), shows what would
-# upload, uploads the page as a version that isn't live (`npx wrangler
-# versions upload --assets`), runs the page check on that version's preview
-# address, asks for the worker name, then makes it live (`npx wrangler
-# versions deploy`). Needs `npx wrangler login` once; docs/web.md.
-# `just web-page-deploy list` stops before the upload, with wrangler's dry
-# run; `just web-page-deploy first` puts a placeholder live once, for a
-# Worker that doesn't exist yet.
-# Deploys the page hidden first, then live after its check and a typed confirmation.
-web-page-deploy *args: build
-    #!/usr/bin/env bash
-    set -euo pipefail
-    case "{{args}}" in ""|list|first) ;; *) echo "web-page-deploy: give nothing, list or first" >&2; exit 2 ;; esac
-    WEB_TOOLS=$(scripts/web/fetch-tools.sh {{quote(gp_home)}})
-    export WEB_TOOLS
-    flag=""; [ "{{args}}" = list ] && flag="--list"; [ "{{args}}" = first ] && flag="--first"
-    GP={{quote(gp)}} scripts/web/deploy.sh $flag
-
-# The old address's Worker (nes-donkey-kong): builds its folder, a
-# _redirects sending every path to the same path on the new address with a
-# 301, and runs wrangler's dry run; `upload` puts it up hidden, checks the
-# preview's redirects, asks for the worker name and makes it live
-# (docs/web.md, "The old address").
-# Builds, and with upload deploys, the old address's redirect.
-web-page-deploy-old *args:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    case "{{args}}" in ""|upload) ;; *) echo "web-page-deploy-old: give nothing or upload" >&2; exit 2 ;; esac
-    flag=""; [ "{{args}}" = upload ] && flag="--upload"
-    scripts/web/deploy-old.sh $flag
-
 # The web build against the native interpreter on Moss Hop's baselines
 # (docs/web.md, "Parity"): gp_web.wasm under Node and the interpreter built
 # for this machine must give the same state hash on every frame. No ROM but
@@ -839,41 +573,6 @@ web-parity: build mosshop
     out={{quote(target / "web" / "mosshop")}}
     scripts/web/build-preview.sh "$out" templates/mosshop "$assets" > /dev/null
     scripts/web/parity.sh "$out" templates/mosshop "$assets" scripts/web/parity/mosshop.toml | grep -v '^{'
-
-# An arcade game's model in the page's player against the native run
-# (docs/web.md, "Parity"): from the original's state at each clip's
-# start, its module under Node through the page's exports and gp interp run
-# through the same module must give the same state hash on every frame.
-# GAME is a folder of the games checkout (GP_GAMES_DIR) or a
-# path; CLIPS are its corpus clip IDs (default: its checks.toml's
-# [web_parity] clips). Needs the game's model.toml and the romset its corpus
-# is for, $GP_ROM_DIR/arcade/SYSTEM.zip (SYSTEM its roms.toml `system`);
-# skipped without them.
-web-parity-arcade GAME *CLIPS: build
-    #!/usr/bin/env bash
-    set -euo pipefail
-    facts() { python3 -I -B scripts/check/game-facts.py "$@"; }
-    game={{quote(GAME)}}
-    [ -d "$game" ] || game="${GP_GAMES_DIR:?set GP_GAMES_DIR to a games checkout}/$game"
-    name=$(basename "$game")
-    zip="${GP_ROM_DIR:-}/arcade/$(facts "$game" system || true).zip"
-    if [ ! -f "$game/model.toml" ] || [ ! -f "$zip" ]; then
-        echo "skip web-parity-arcade: no $game/model.toml or no $zip"
-        exit 0
-    fi
-    map=$(facts "$game" asset-map) || { echo "web-parity-arcade: $name's package.toml names no asset_map for its scored set" >&2; exit 1; }
-    clips="{{CLIPS}}"
-    [ -n "$clips" ] || clips=$(facts "$game" check web_parity.clips | tr '\n' ' ') || { echo "web-parity-arcade: give clips, or name them in $name's checks.toml [web_parity]" >&2; exit 1; }
-    out={{quote(target / "web")}}/"$name"
-    # Lifted outside the work tree, as gp assets lift requires.
-    assets={{quote(gp_home / "work" / "web-parity-arcade")}}/"$name/assets"
-    mkdir -p "$assets"
-    {{quote(gp)}} assets lift "$zip" --map "$game/$map" -o "$assets" --force > /dev/null
-    {{quote(gp)}} game kit -o {{quote(target / "module-kit")}} > /dev/null
-    {{quote(gp)}} game build "$game" --kit {{quote(target / "module-kit")}} -o {{quote(target / "modules")}}/"$name.wasm" > /dev/null
-    scripts/web/build-preview.sh "$out" "$game" "$assets" > /dev/null
-    GP={{quote(gp)}} scripts/web/parity-arcade.sh "$out" "$game" "$assets" {{quote(target / "modules")}}/"$name.wasm" "$zip" \
-        $clips | grep -v '^{'
 
 # Build a registry in a folder on this machine and the page that installs from it.
 local-registry GAMES THEME:

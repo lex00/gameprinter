@@ -49,13 +49,34 @@ While working, run the tests of the crate you change: `cargo test -p <crate>`. A
 
 `just check` (through `just test`) and `gp tool gate` run every test, the slow ones included: each slow test in a run of its own beside one run of the rest, about two minutes for the whole workspace. Run `just test` yourself before landing a change to code a slow test covers.
 
+## Dependencies
+
+Each crate added to the workspace is built by every worker, every gate and CI, so a common job uses what the workspace already has. A test needs a crate even less: write the small check in the test, as `tests/schema_mapping.rs` checks the JSON Schemas with serde_json and a hundred lines of its own (jsonschema had brought 56 crates into the lock for that one file).
+
+| Job | Use |
+|-----|-----|
+| JSON, TOML | `serde` with `serde_json`, `toml` |
+| JSON Schema for a type | `schemars` (gp-model and eleven more) |
+| Errors | `anyhow` in gp-cli, `thiserror` in the library crates |
+| Arguments | `clap` (derive) |
+| Hashes | `blake3` for content, `sha2`, `sha1` and `md-5` where a format names one |
+| Hex, base64 | `hex`, `base64` |
+| Dates | `time` |
+| Temporary files and folders | `tempfile` |
+| PNG | `png` |
+| Zip, gzip | `zip`, `flate2` |
+| Logging | `tracing` |
+| Async (the MCP server only) | `tokio` |
+
+No regex crate is in the build (regex comes only with criterion's benches): match a fixed shape by hand, as `fits_pattern` in that test does. A crate the table lacks is a choice to say in the commit message, with what it adds to `Cargo.lock`.
+
 ## The rules
 
 `gp worker env NAME` prints these, and `--shell` writes them as comments.
 
 - No `rm` in any form. List what should be deleted in your report; the person deletes it.
 - Remove a worktree with `git worktree remove`, adding `--force` once its patch has landed: the change is still uncommitted in it. Empty a build folder with `cargo clean --target-dir DIR`.
-- Never commit with `--no-verify`, and never push.
+- Never commit with `--no-verify`, and never push. A loop worker that runs `git push`, a gate from its shell, a gp_run call citing another step, or an edit of the person's games checkout is stopped by the runner as it runs ([loop.md](loop.md), "The runner's limits").
 - Never release gp: no `just release`, `just release-on-main`, `chant release cut --yes` or `chant release publish`, and no release tag pushed. The owner starts a release ([docs/release.md](release.md)); `just release-plan` is a dry run anyone may use.
 - Never open `$GP_HOME/sealed` or a sealed run's session.
 - ROMs stay in `$GP_ROM_DIR`. Nothing made from a ROM (bytes, lifted files, a built game) goes into a commit or leaves the machine.

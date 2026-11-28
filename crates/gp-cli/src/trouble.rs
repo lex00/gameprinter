@@ -1,6 +1,6 @@
 //! The loop's own trouble becomes quest-log rows with no one noticing
 //! first (the owner, 2026-11-20: "this whole thing should be a self
-//! improvement loop"). Three kinds:
+//! improvement loop"). Four kinds:
 //!
 //! - page: an error the screen page shows the person (a clip that won't set
 //!   up, a refused answer, a model that won't start), posted by the page to
@@ -12,6 +12,9 @@
 //! - hand: a fix made by hand while the runner goes: gp serve started again
 //!   after the one before it stopped, a row's status set from outside a
 //!   step.
+//! - worker: a step whose workers failed `fail_tries` tries (loop.toml),
+//!   filed by gp serve's runner with the tries' endings
+//!   (serve/runner_limits.rs).
 //!
 //! Each cause is one tools row, named `trouble-WORDS-HASH` from its message
 //! with the numbers and ids taken out, so the same trouble again adds to its
@@ -33,7 +36,9 @@ use gp_evidence::Paths;
 use serde_json::{Value, json};
 
 use crate::mechanic::propose::{MARK, slug};
-use crate::mechanic::session::{queue_file, read_queue, write_queue};
+use crate::mechanic::session::{queue_file, update_queue};
+#[cfg(test)]
+use crate::mechanic::session::{read_queue, write_queue};
 
 /// Where a trouble was seen.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -41,6 +46,8 @@ pub(crate) enum Kind {
     Page,
     Health,
     Hand,
+    /// A step whose workers failed too many tries (serve/runner_limits.rs).
+    Worker,
 }
 
 impl Kind {
@@ -49,6 +56,7 @@ impl Kind {
             Kind::Page => "page",
             Kind::Health => "health",
             Kind::Hand => "hand",
+            Kind::Worker => "worker",
         }
     }
 }
@@ -185,13 +193,23 @@ pub(crate) fn file(paths: &Paths, t: &Trouble, now: u64) -> Result<Value> {
     let what = crate::next::cut(t.what, 400);
     let _one = WRITING.lock().unwrap_or_else(|e| e.into_inner());
     let f = queue_file(paths, t.game)?;
-    let mut q = read_queue(&f);
+    update_queue(&f, |q| file_rows(paths, t, &what, now, q))
+}
+
+/// [`file`]'s change to the quest log's rows `q`, under its lock.
+fn file_rows(
+    paths: &Paths,
+    t: &Trouble,
+    what: &str,
+    now: u64,
+    q: &mut Vec<Value>,
+) -> Result<Value> {
     let names = row_names(
-        &q,
+        q,
         &crate::mechanic::archive::read_archive(&paths.home, t.game),
     );
-    let k = key_named(&what, &names);
-    let at = commits(&what);
+    let k = key_named(what, &names);
+    let at = commits(what);
     // Trouble that comes back to an archived row brings the row back.
     if !q.iter().any(|r| of_cause(r, &k, &names))
         && let Some(r) =
@@ -213,7 +231,6 @@ pub(crate) fn file(paths: &Paths, t: &Trouble, now: u64) -> Result<Value> {
             r["trouble"]["commits"] = json!(at);
         }
         let row = r["mechanic"].clone();
-        write_queue(&f, &q)?;
         let mut v = json!({"row": row, "added": false, "count": count, "came_back": back});
         v["moved"] = json!(moved);
         return Ok(v);
@@ -235,7 +252,6 @@ pub(crate) fn file(paths: &Paths, t: &Trouble, now: u64) -> Result<Value> {
             "commits": at,
         },
     }));
-    write_queue(&f, &q)?;
     Ok(json!({"row": row, "added": true, "count": 1, "came_back": false}))
 }
 
@@ -428,44 +444,41 @@ fn settle_gone(
     let Ok(f) = queue_file(paths, game) else {
         return missing;
     };
-    let mut q = read_queue(&f);
-    let names = row_names(
-        &q,
-        &crate::mechanic::archive::read_archive(&paths.home, game),
-    );
-    let keys: Vec<String> = problems
-        .iter()
-        .chain(held.unwrap_or_default())
-        .map(|p| key_named(&crate::next::cut(p, 400), &names))
-        .collect();
-    let mut gone = false;
-    for r in q.iter_mut() {
-        let Some(row) = r["mechanic"].as_str().map(str::to_owned) else {
-            continue;
-        };
-        let status = r["status"].as_str().unwrap_or("");
-        let had = r["trouble"]["key"].as_str().unwrap_or("");
-        if r["trouble"]["kind"] != json!("health")
-            || status == "done"
-            || status.contains("working")
-            || (had.starts_with("github s ") && held.is_none())
-            || keys.iter().any(|k| of_cause(r, k, &names))
-        {
-            continue;
+    let _ = update_queue(&f, |q| {
+        let names = row_names(
+            q,
+            &crate::mechanic::archive::read_archive(&paths.home, game),
+        );
+        let keys: Vec<String> = problems
+            .iter()
+            .chain(held.unwrap_or_default())
+            .map(|p| key_named(&crate::next::cut(p, 400), &names))
+            .collect();
+        for r in q.iter_mut() {
+            let Some(row) = r["mechanic"].as_str().map(str::to_owned) else {
+                continue;
+            };
+            let status = r["status"].as_str().unwrap_or("");
+            let had = r["trouble"]["key"].as_str().unwrap_or("");
+            if r["trouble"]["kind"] != json!("health")
+                || status == "done"
+                || status.contains("working")
+                || (had.starts_with("github s ") && held.is_none())
+                || keys.iter().any(|k| of_cause(r, k, &names))
+            {
+                continue;
+            }
+            let first = before[&row]["first_ms"].as_u64().unwrap_or(now);
+            let checks = before[&row]["checks"].as_u64().unwrap_or(0) + 1;
+            if checks >= 2 && now.saturating_sub(first) >= HEALTH_LASTS_MS {
+                r["status"] = json!("done");
+                r["trouble"]["gone_ms"] = json!(now);
+            } else {
+                missing.insert(row, json!({"first_ms": first, "checks": checks}));
+            }
         }
-        let first = before[&row]["first_ms"].as_u64().unwrap_or(now);
-        let checks = before[&row]["checks"].as_u64().unwrap_or(0) + 1;
-        if checks >= 2 && now.saturating_sub(first) >= HEALTH_LASTS_MS {
-            r["status"] = json!("done");
-            r["trouble"]["gone_ms"] = json!(now);
-            gone = true;
-        } else {
-            missing.insert(row, json!({"first_ms": first, "checks": checks}));
-        }
-    }
-    if gone {
-        let _ = write_queue(&f, &q);
-    }
+        Ok(())
+    });
     missing
 }
 

@@ -15,7 +15,7 @@ use anyhow::{Result, bail};
 use serde_json::{Value, json};
 
 use super::archive::read_archive;
-use super::session::{name_ok, read_queue, write_queue};
+use super::session::{name_ok, read_queue, update_queue};
 
 /// A row waited on: (game, row).
 pub(crate) type Wait = (String, String);
@@ -172,51 +172,50 @@ pub(crate) fn wake(home: &Path, games: Option<&Path>, cards: &Cards) -> Vec<Wait
     let known = |g: &str, r: &str| rows.contains(&(g.to_owned(), r.to_owned()));
     for game in &names {
         let f = queue_of(home, game);
-        let mut q = read_queue(&f);
         let board = games.and_then(|g| crate::scoreboard::board(home, g, game));
-        let mut changed = false;
-        for r in &mut q {
-            let Some(on) = of(game, r, &known) else {
-                continue;
-            };
-            let me = r["mechanic"].as_str().unwrap_or("").to_owned();
-            if cards.busy.contains(&(game.clone(), me.clone())) {
-                continue;
+        let ended_here = update_queue(&f, |q| {
+            let mut ended_here = Vec::new();
+            for r in q.iter_mut() {
+                let Some(on) = of(game, r, &known) else {
+                    continue;
+                };
+                let me = r["mechanic"].as_str().unwrap_or("").to_owned();
+                if cards.busy.contains(&(game.clone(), me.clone())) {
+                    continue;
+                }
+                let since = r["waits_since"].as_u64();
+                let since = since.or_else(|| r["changed_ms"].as_u64()).unwrap_or(0);
+                let name = if on.0 == *game {
+                    on.1.clone()
+                } else {
+                    format!("{}/{}", on.0, on.1)
+                };
+                let Some(why) = ended(home, cards, &on, since, &name) else {
+                    continue;
+                };
+                let was = r["note"].as_str().unwrap_or("").trim().to_owned();
+                let closes = |t: &&str| crate::scoreboard::may_close(board.as_ref(), t).is_ok();
+                let met = r["target"].as_str().filter(closes).map(str::to_owned);
+                let over = format!("Its wait is over: {why}");
+                let again = format!("{over}. The loop takes it up again. It waited: {was}");
+                let (status, note) = match met {
+                    Some(t) => ("done", format!("Met its target: {t}. {over}.")),
+                    None => ("next", again),
+                };
+                let Some(o) = r.as_object_mut() else { continue };
+                o.insert("status".into(), json!(status));
+                o.insert("note".into(), json!(crate::next::cut(&note, 600)));
+                o.remove("waits_on");
+                o.remove("waits_since");
+                o.remove("worker");
+                if status == "done" {
+                    o.remove("clip");
+                }
+                ended_here.push((game.clone(), me));
             }
-            let since = r["waits_since"].as_u64();
-            let since = since.or_else(|| r["changed_ms"].as_u64()).unwrap_or(0);
-            let name = if on.0 == *game {
-                on.1.clone()
-            } else {
-                format!("{}/{}", on.0, on.1)
-            };
-            let Some(why) = ended(home, cards, &on, since, &name) else {
-                continue;
-            };
-            let was = r["note"].as_str().unwrap_or("").trim().to_owned();
-            let closes = |t: &&str| crate::scoreboard::may_close(board.as_ref(), t).is_ok();
-            let met = r["target"].as_str().filter(closes).map(str::to_owned);
-            let over = format!("Its wait is over: {why}");
-            let again = format!("{over}. The loop takes it up again. It waited: {was}");
-            let (status, note) = match met {
-                Some(t) => ("done", format!("Met its target: {t}. {over}.")),
-                None => ("next", again),
-            };
-            let Some(o) = r.as_object_mut() else { continue };
-            o.insert("status".into(), json!(status));
-            o.insert("note".into(), json!(crate::next::cut(&note, 600)));
-            o.remove("waits_on");
-            o.remove("waits_since");
-            o.remove("worker");
-            if status == "done" {
-                o.remove("clip");
-            }
-            changed = true;
-            moved.push((game.clone(), me));
-        }
-        if changed {
-            let _ = write_queue(&f, &q);
-        }
+            Ok(ended_here)
+        });
+        moved.extend(ended_here.unwrap_or_default());
     }
     moved
 }

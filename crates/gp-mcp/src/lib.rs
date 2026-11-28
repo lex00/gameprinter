@@ -176,7 +176,7 @@ impl Drop for CopyLock {
 }
 
 /// True for a source ID that's safe to join into a path: a path name, with
-/// `-` allowed (`smb1-ntsc-prg0`).
+/// `-` allowed (`rooftop-ntsc-prg0`).
 /// Where an original template keeps its model baselines: its own
 /// `baselines/` directory (gp_interp::baseline), for a source with no ROM
 /// baselines under the repo's `baselines/`.

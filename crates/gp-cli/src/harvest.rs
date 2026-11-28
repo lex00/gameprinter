@@ -659,7 +659,7 @@ pub(crate) fn harvest(
 
     // Candidate mechanics: one per kind, matched to queue rows by words.
     let qf = root.join("queue.json");
-    let mut q = session::read_queue(&qf);
+    let q = session::read_queue(&qf);
     let matches: &[(&str, &[&str])] = &[
         ("head-hit", &["hit-block-from-below", "multi-coin-block"]),
         ("side-hit", &["bump-block-side"]),
@@ -699,36 +699,40 @@ pub(crate) fn harvest(
             .then(b["count"].as_u64().cmp(&a["count"].as_u64()))
     });
     if add {
-        for l in &leads {
-            let kind = l["kind"].as_str().unwrap_or("");
-            let note = format!(
-                "the run shows this in {} event(s) over {} level(s)",
-                l["count"], l["levels"]
-            );
-            let rows: Vec<String> = l["queue"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter_map(|v| v.as_str().map(str::to_owned))
-                .collect();
-            if rows.is_empty() {
-                let name = format!("harvest-{kind}");
-                if !q.iter().any(|r| r["mechanic"] == json!(name)) {
-                    q.push(json!({"mechanic": name, "status": "next", "note": note}));
-                }
-            } else {
-                for r in q
-                    .iter_mut()
-                    .filter(|r| rows.iter().any(|x| r["mechanic"] == json!(x)))
-                {
-                    let old = r["note"].as_str().unwrap_or("").to_owned();
-                    if !old.contains("the run shows this") {
-                        r["note"] = json!(format!("{old}; {note}"));
+        // The leads are counted from the log as read above; the rows they
+        // go on are read again under the log's lock.
+        crate::mechanic::session::update_queue(&qf, |q| {
+            for l in &leads {
+                let kind = l["kind"].as_str().unwrap_or("");
+                let note = format!(
+                    "the run shows this in {} event(s) over {} level(s)",
+                    l["count"], l["levels"]
+                );
+                let rows: Vec<String> = l["queue"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|v| v.as_str().map(str::to_owned))
+                    .collect();
+                if rows.is_empty() {
+                    let name = format!("harvest-{kind}");
+                    if !q.iter().any(|r| r["mechanic"] == json!(name)) {
+                        q.push(json!({"mechanic": name, "status": "next", "note": note}));
+                    }
+                } else {
+                    for r in q
+                        .iter_mut()
+                        .filter(|r| rows.iter().any(|x| r["mechanic"] == json!(x)))
+                    {
+                        let old = r["note"].as_str().unwrap_or("").to_owned();
+                        if !old.contains("the run shows this") {
+                            r["note"] = json!(format!("{old}; {note}"));
+                        }
                     }
                 }
             }
-        }
-        crate::mechanic::session::write_queue(&qf, &q)?;
+            Ok(())
+        })?;
     }
     // Object types: first level and frame, frames active, events while
     // active, and the routines that run (almost) only while it is active,

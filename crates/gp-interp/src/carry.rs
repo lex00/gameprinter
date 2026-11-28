@@ -272,7 +272,7 @@ pub struct Gap {
     /// The slot field, when the cause is one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub field: Option<String>,
-    /// "ext[1] isn't read: the hook smb_lakitu keeps it".
+    /// "ext[1] isn't read: the hook rooftop_crow keeps it".
     pub why: String,
 }
 
@@ -457,8 +457,8 @@ fn object_gaps<O: Runtime>(
     Ok(out)
 }
 
-/// The gaps in words, for a start's `cant`: "the original has a lakitu
-/// (ext[1] isn't read: the hook smb_lakitu keeps it) and 2 more here that
+/// The gaps in words, for a start's `cant`: "the original has a crow
+/// (ext[1] isn't read: the hook rooftop_crow keeps it) and 2 more here that
 /// a start can't carry".
 pub fn says(gaps: &[Gap]) -> Option<String> {
     let first = gaps.first()?;

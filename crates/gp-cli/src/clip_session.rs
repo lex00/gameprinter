@@ -73,6 +73,27 @@ pub(crate) fn is_session_spec(spec: &str) -> bool {
     spec.contains(':') || (!spec.contains('.') && crate::mechanic::name_ok(spec))
 }
 
+/// The one session clip a command's `--clip` (or `gp clip log`'s clip)
+/// names, `SESSION:N`, or None when `spec` is a corpus clip's ID: a spec
+/// with no `:` is a session's only when the corpus has no such clip
+/// (`in_corpus`). A whole session is refused here: these take one clip.
+pub(crate) fn one(
+    paths: &Paths,
+    game: &Path,
+    spec: &str,
+    in_corpus: bool,
+) -> Result<Option<SessionClip>> {
+    if !(spec.contains(':') || !in_corpus) || !is_session_spec(spec) {
+        return Ok(None);
+    }
+    let name = game_name(game)?;
+    let mut clips = clips(paths, &name, spec)?;
+    if !spec.contains(':') || clips.len() != 1 {
+        bail!("a clip is SESSION:N or a corpus clip's ID, not {spec}");
+    }
+    Ok(Some(clips.remove(0)))
+}
+
 /// The game's name for its sessions: its package folder's.
 pub(crate) fn game_name(game: &Path) -> Result<String> {
     let abs = fs::canonicalize(game).with_context(|| game.display().to_string())?;

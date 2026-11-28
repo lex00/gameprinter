@@ -437,6 +437,21 @@ RECORDING, SHOWING YOUR CHOICE, FOLLOW IS OFF), and FOLLOW THE WORK in the
 header turns it off and on (kept in the browser). The report says
 `work_clip` and `follow`.
 
+A corpus clip on the screens (a followed refine's, or a row's LOOK AT IT
+on a corpus clip) has SPRITE RUNS on its bar. It lists, beside the clip,
+the runs of frames where the original shows a sprite the model doesn't
+draw (missing) or the model draws one the original doesn't (extra), with
+their frames and the codes or kinds, from the scan `gp picture --sprites`
+makes. A run clicked stands both games at its first frame, and while the
+clip stands in a run the missing sprites are boxed on the original's side.
+A clip with no runs says so. `api/screen/sprite-runs?id=ID` runs the scan
+off the page's thread (it plays the clip on the package's scored set and
+the model as it is): it answers `scanning` until the scan ends, then the
+runs. The scan's lines are kept in
+`$GP_HOME/work/screen-sprites/GAME/MODEL/ID.jsonl`, by the clip and the
+model's version, so opening the list twice scans once and a changed model
+scans again.
+
 The screen is the developer's loop, the working copy as it is: a file of
 the theme shown changes (`api/screen` gives each theme's newest file
 time), and within two seconds the model's page is loaded again in it at
@@ -661,6 +676,7 @@ minute later.
 | `GET /api/screen`, `POST /api/screen` | The agent's last ask for the screen, what the page shows and each theme's newest file time; the page's report of what it shows |
 | `GET /api/screen/clip?n=N&mechanic=M` | A clip's start and length, for the screen to play it |
 | `GET /api/screen/work-clip?id=ID` | A corpus clip's play from power-on, its start and length, for the screen to follow a refine on it |
+| `GET /api/screen/sprite-runs?id=ID` | A corpus clip's sprite runs (SPRITE RUNS): `scanning` while `gp picture --sprites` scans it off the page's thread, then each run's frames, sprites and missing boxes, kept by the clip and the model's version |
 | `GET /api/paths/SHA` | A stored path's log, for PLAY FROM HERE |
 | `POST /api/confirm` | `{mechanic}`: CONFIRM, the owner's yes to a row's look in the game's own pictures, which gp serve's runner locks |
 

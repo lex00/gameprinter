@@ -5,9 +5,10 @@
 
 Prints the SHA-256 of the lines "SHA256  PATH", one for every file under
 DIR (hidden ones too, no folder left out), sorted by PATH. The release
-check (scripts/web/release-check.sh) records it on a pass, and
-scripts/web/deploy.sh works it out again for the folder it is about to
-upload: a file added, removed, renamed or changed gives another digest.
+check (the games repo's page/release-check.sh) records it on a pass, and
+its page/deploy.sh and this repo's pages.sh work it out again for the
+folder they are about to put up: a file added, removed, renamed or changed
+gives another digest.
 Exit codes: 0 printed, 2 couldn't read DIR.
 """
 

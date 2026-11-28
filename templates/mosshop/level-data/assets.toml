@@ -1,0 +1,80 @@
+# Asset map for Moss Hop, the reference game (docs/reference-game.md,
+# docs/assets.md): where its built ROM keeps each asset, and in which format.
+# Offsets count from the start of PRG ROM or CHR ROM, after the iNES header.
+# Each `label` is the symbol games/mosshop/mosshop.s gives the data; a test
+# in crates/gp-cli/tests/assets.rs builds the game and checks every offset
+# against ld65's debug file, so a change to the source that moves the data
+# fails there with the new offsets.
+schema = 1
+source = "mosshop"
+title = "Moss Hop"
+# SHA-256 of the ROM's PRG and CHR data, as in baselines/mosshop/. A change
+# to the game changes it, like the baselines' sha256.
+sha256 = "44fcedf5050970a0ae6cf10c76ac80d9628f663416c22adb8432a43b0c953ec4"
+
+# The whole 8KB pattern table: tiles $00-$27 and $30-$3C are drawn in games/mosshop/chr.s,
+# the rest are empty.
+[[asset]]
+name = "tiles"
+format = "chr-2bpp"
+region = "chr"
+offset = 0x0000
+tiles = 512
+tiles_per_row = 16
+# The counters' digits, from tile $30, and the cross between the life and
+# the lives (hud_number in mosshop.s adds $30 to a digit).
+charset = [[0x30, "0123456789"], [0x3B, "x"]]
+
+[[asset]]
+name = "palettes"
+format = "palette"
+label = "palette"
+region = "prg"
+offset = 0x06F9
+count = 8
+
+[[asset]]
+name = "metatiles"
+format = "metatiles"
+label = "metatile_tiles"
+region = "prg"
+offset = 0x0719
+count = 9
+names = ["sky", "moss over soil", "soil", "stone block", "burrow, left half", "burrow, right half", "? block", "used block", "coin"]
+property = [
+  { name = "solid", label = "metatile_solid", region = "prg", offset = 0x073D },
+  { name = "kind", label = "metatile_kind", region = "prg", offset = 0x0746 },
+]
+
+# 32 metatiles wide and 15 high: two screens. The legend is the one the
+# level_row macro in mosshop.s reads; the used block, `u`, is never in the
+# level as written: a ? block becomes one when bumped.
+[[asset]]
+name = "level"
+format = "level-grid"
+label = "level"
+region = "prg"
+offset = 0x074F
+width = 32
+height = 15
+legend = ".MSB()?uo"
+metatiles = "metatiles"
+
+# Each slug walks right from start to end and back (pixels in the level).
+[[asset]]
+name = "slugs"
+format = "table"
+count = 2
+column = [
+  { name = "start", label = "enemy_start_lo", hi_label = "enemy_start_hi", region = "prg", offset = 0x094D, hi_offset = 0x094F },
+  { name = "end", label = "enemy_max_lo", hi_label = "enemy_max_hi", region = "prg", offset = 0x0951, hi_offset = 0x0953 },
+]
+
+# Every sprite frame of every entity, from the sprite tables and the
+# recordings: gp sprites capture writes it into the lifted directory, so it
+# has no ROM span and gp assets lift writes nothing for it
+# (docs/formats/sprite-set.md).
+[[asset]]
+name = "sprites"
+format = "sprite-set"
+written_by = "gp sprites capture"

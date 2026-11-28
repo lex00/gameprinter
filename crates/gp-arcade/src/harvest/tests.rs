@@ -203,34 +203,6 @@ fn the_same_program_gives_the_same_harvest() {
     assert_eq!(a, b);
 }
 
-/// A real set's interrupt handlers' activations, as the harvest finds
-/// them, printed (`cargo test -p gp-arcade dump_a_set -- --ignored
-/// --nocapture`), for the game $GP_GAME_DIR names when its romset is
-/// on the machine.
-#[test]
-#[ignore = "prints; reads the romset"]
-fn dump_a_set() {
-    let set = match crate::romset::test_romset() {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("skipped: {e}");
-            return;
-        }
-    };
-    let b = Board::mcr_main(&set.maincpu);
-    let h = harvest(&b);
-    let irqs: Vec<u16> = h
-        .facts
-        .iter()
-        .filter(|f| f.path.starts_with("hardware.interrupts."))
-        .filter_map(|f| match &f.value {
-            Value::Str(s) => u16::from_str_radix(s.strip_prefix("irq_")?, 16).ok(),
-            _ => None,
-        })
-        .collect();
-    println!("{}", dump(&b, &irqs));
-}
-
 #[test]
 #[ignore = "prints"]
 fn dump_program() {

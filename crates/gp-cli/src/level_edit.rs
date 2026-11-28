@@ -54,6 +54,13 @@ use crate::level_picture::{self, Canvas, Marks};
 /// A copy's level history, one JSON object a line, oldest first.
 pub(crate) const HISTORY_FILE: &str = "level-edits.jsonl";
 
+/// The folder of a game whose level is authored data, not lifted from a
+/// ROM (Moss Hop's, templates/mosshop/level-data): the asset map and the
+/// files of the slots the simulation reads, in the lift's formats. When a
+/// game's folder has one (and no `assets/` of its own), its levels are
+/// read from it and an edit of a copy writes it; the ROM is built from it.
+pub(crate) const LEVEL_DATA: &str = "level-data";
+
 /// Where the MCP server keeps a person's copies (`gp mcp --work`'s
 /// default), so a copy can be named by its name alone.
 const MCP_COPIES: &str = "mcp";
@@ -116,8 +123,11 @@ impl Game {
         let text = fs::read_to_string(&file).with_context(|| file.display().to_string())?;
         let model = Model::parse(&text).with_context(|| file.display().to_string())?;
         let own = dir.join("assets");
+        let authored = dir.join(LEVEL_DATA);
         let (assets, own_assets) = if own.join(gp_assets::MAP_FILE).is_file() {
             (own, true)
+        } else if authored.join(gp_assets::MAP_FILE).is_file() {
+            (authored, true)
         } else {
             let source = model
                 .model
@@ -137,7 +147,10 @@ impl Game {
             .source
             .as_ref()
             .map(|s| paths.home.join("work").join("assets").join(s));
+        // A game whose level is authored in its own folder (LEVEL_DATA) is
+        // its own original: no ROM's lift is read for it.
         let original = match shared {
+            Some(_) if assets.ends_with(LEVEL_DATA) => lifted.clone(),
             Some(s) if own_assets => Lifted::read_dir(&s, &model).map_err(|e| {
                 anyhow!(
                     "the original lift of {name} isn't in {} ({e}): the layout can't be held apart from the original's without it; lift it again with gp assets lift ROM",
@@ -3265,16 +3278,25 @@ pub(crate) fn edit_cmd(
         own_assets(&mut g, paths)?;
         let mut before = BTreeMap::new();
         let mut writes: Vec<(PathBuf, String)> = Vec::new();
+        // The folder the files are in, from the copy's: assets/, or the
+        // authored level-data/.
+        let folder = g
+            .assets
+            .strip_prefix(&g.dir)
+            .ok()
+            .and_then(|p| p.to_str())
+            .unwrap_or("assets")
+            .to_owned();
         for s in &data.changed {
             let d = &data.slots[s];
             let path = g.assets.join(&d.file);
-            let rel = format!("assets/{}", d.file);
+            let rel = format!("{folder}/{}", d.file);
             before.insert(rel, fs::read_to_string(&path).ok());
             writes.push((path, d.text()));
         }
         for (f, t) in &data.raw {
             let path = g.assets.join(f);
-            before.insert(format!("assets/{f}"), fs::read_to_string(&path).ok());
+            before.insert(format!("{folder}/{f}"), fs::read_to_string(&path).ok());
             writes.push((path, t.clone()));
         }
         if model.to_toml() != g.model.to_toml() {

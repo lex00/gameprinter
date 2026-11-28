@@ -659,7 +659,7 @@ at = "games/mosshop/mosshop.s:64"
 quote = "ENEMY_Y      = 176"
 
 [[evidence.levels.refs]]
-at = "games/mosshop/mosshop.s:1272"
+at = "games/mosshop/mosshop.s:1261"
 quote = "each walks right from its start to its end and back"
 
 [[evidence.levels.refs]]

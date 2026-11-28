@@ -8,8 +8,7 @@
 # model.toml is added. A name's hyphen also matches a space, an underscore
 # or nothing (donkey-kong, "Donkey Kong", donkey_kong, DonkeyKong).
 #
-# Left out: this file (it lists the names) and scripts/web/deploy-old*, the
-# old Cloudflare Worker, whose deployed name is the game's and can't change.
+# Left out: this file (it lists the names).
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 
@@ -19,10 +18,16 @@ if [ -n "${GP_GAMES_DIR:-}" ] && [ -d "$GP_GAMES_DIR" ]; then
         [ -f "$m" ] && games+=("$(basename "$(dirname "$m")")")
     done
 fi
-pattern=""
+# An old game's disassembly (its name, its .ASM file's) and the prefix of
+# its hooks are not a folder of lex00/games, so they are listed here too.
+pattern="smbdis|smb_"
 for g in "${games[@]}"; do
     pattern="${pattern:+$pattern|}${g//-/[-_ ]?}"
 done
+# The games the tools were first written for, dropped on record
+# (ROADMAP.md): their short names, smb as a word of its own.
+old=(smb1 smb mm2)
+pattern="$pattern|smb1|mm2|(^|[^a-z0-9_])smb([^a-z0-9_]|\$)"
 
 dirs=()
 for d in crates mechanic plugin scripts; do
@@ -31,11 +36,10 @@ done
 set +e
 if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     hits=$(git grep --untracked -nIiE "$pattern" -- "${dirs[@]}" \
-        ':!scripts/check/no-game-names.sh' \
-        ':!scripts/web/deploy-old.sh' ':!scripts/web/deploy-old/**')
+        ':!scripts/check/no-game-names.sh')
 else
     hits=$(grep -rnIiE "$pattern" "${dirs[@]}" \
-        --exclude=no-game-names.sh --exclude=deploy-old.sh --exclude-dir=deploy-old \
+        --exclude=no-game-names.sh \
         --exclude-dir=node_modules --exclude-dir=target)
 fi
 rc=$?
@@ -46,7 +50,7 @@ if [ "$rc" -gt 1 ]; then
 fi
 if [ -n "$hits" ]; then
     echo "$hits"
-    echo "no-game-names: the tools name a ported game (${games[*]}) above: use a made-up game (rooftop, hilltop) in tests, cite a quest-log row by its name alone (never GAME/ROW), and name no game's theme" >&2
+    echo "no-game-names: the tools name a ported game (${games[*]}) or an old one (${old[*]}) above: use a made-up game (rooftop, hilltop) in tests, cite a quest-log row by its name alone (never GAME/ROW), and name no game's theme" >&2
     exit 1
 fi
-echo "no-game-names: crates/, mechanic/, plugin/ and scripts/ name no ported game (${games[*]})"
+echo "no-game-names: crates/, mechanic/, plugin/ and scripts/ name no ported game (${games[*]}) and no old one (${old[*]})"
