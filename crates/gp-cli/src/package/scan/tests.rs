@@ -356,7 +356,7 @@ fn a_theme_package_scan_compares_with_the_game_s_roms() {
         store: d.path().join("home/store"),
         roms: d.path().join(roms),
     };
-    let o = super::run(&theme, &[], &[], &paths("roms")).unwrap();
+    let o = super::run_with(&theme, &[], &[], &paths("roms"), true).unwrap();
     assert!(
         o.text.contains("ROM sets: those of test/made-up"),
         "{}",
@@ -380,7 +380,7 @@ fn a_theme_package_scan_compares_with_the_game_s_roms() {
     // No ROM here: the sets looked for are named and it passes, unless
     // --need-roms.
     fs::create_dir_all(d.path().join("none")).unwrap();
-    let mut o = super::run(&theme, &[], &[], &paths("none")).unwrap();
+    let mut o = super::run_with(&theme, &[], &[], &paths("none"), true).unwrap();
     assert_eq!(o.exit, 0, "{}", o.text);
     assert!(
         o.text.contains("No ROM with the hash of made-up"),
@@ -401,14 +401,14 @@ fn a_theme_package_scan_compares_with_the_game_s_roms() {
         &beside.join("package.toml"),
         "[package]\nname = \"test/dusk\"\nversion = \"0.1.0\"\nkind = \"content\"\nfor_games = [\"test/made-up\"]\n",
     );
-    let o = super::run(&beside, &[], &[], &paths("roms")).unwrap();
+    let o = super::run_with(&beside, &[], &[], &paths("roms"), true).unwrap();
     assert_eq!(o.json["rom_sets_of"], "test/made-up", "{}", o.text);
     assert_eq!(o.json["rom_compared"], true);
     write(
         &beside.join("package.toml"),
         "[package]\nname = \"test/dusk\"\nversion = \"0.1.0\"\nkind = \"content\"\nfor_games = [\"test/hilltop\"]\n",
     );
-    let mut o = super::run(&beside, &[], &[], &paths("roms")).unwrap();
+    let mut o = super::run_with(&beside, &[], &[], &paths("roms"), true).unwrap();
     assert!(
         o.text
             .contains("ROM sets: none found; no package of test/hilltop"),
@@ -419,6 +419,76 @@ fn a_theme_package_scan_compares_with_the_game_s_roms() {
     super::need_roms(&mut o);
     assert_eq!(o.exit, 1);
     assert!(o.text.contains("names no ROM set"), "{}", o.text);
+}
+
+/// The comparison of a theme with its game's ROMs is asked for, with
+/// --game-roms: without it the theme names no ROM, nothing is compared, it
+/// passes and one line names the flag; with it the theme is compared with
+/// the game's ROM (theme-scan-with-game-roms-is-asked-for).
+#[test]
+fn a_theme_scan_compares_with_the_game_s_roms_only_when_asked() {
+    let d = tempfile::tempdir().unwrap();
+    made_up_package(d.path(), None, false);
+    let theme = d.path().join("dusk");
+    write(
+        &theme.join("package.toml"),
+        "[package]\nname = \"test/dusk\"\nversion = \"0.1.0\"\nkind = \"content\"\nfor_games = [\"test/made-up\"]\n",
+    );
+    // A table of the game's ROM typed out in the theme.
+    let vals: Vec<String> = TABLE.iter().map(u8::to_string).collect();
+    write(
+        &theme.join("look.toml"),
+        &format!("t = [{}]\n", vals.join(", ")),
+    );
+    let paths = gp_evidence::Paths {
+        home: d.path().join("home"),
+        store: d.path().join("home/store"),
+        roms: d.path().join("roms"),
+    };
+
+    let o = super::run(&theme, &[], &[], &paths).unwrap();
+    assert_eq!(o.exit, 0, "{}", o.text);
+    assert_eq!(o.json["rom_compared"], false);
+    assert!(o.json["rom_sets_of"].is_null());
+    assert!(o.text.contains("this package names no ROM"), "{}", o.text);
+    let line = "ROM sets: the ROMs of the game this content is for were not compared; --game-roms compares them";
+    assert_eq!(o.text.matches(line).count(), 1, "{}", o.text);
+    // Held to a baseline, the same.
+    let base = d.path().join("base.json");
+    fs::write(&base, o.json.to_string()).unwrap();
+    let again = super::run_against(&theme, &[], &[], &base, &paths, false).unwrap();
+    assert_eq!(again.exit, 0, "{}", again.text);
+    assert_eq!(again.json["rom_compared"], false);
+
+    let o = super::run_with(&theme, &[], &[], &paths, true).unwrap();
+    assert!(!o.text.contains(line), "{}", o.text);
+    assert_eq!(o.json["rom_compared"], true);
+    assert_eq!(o.json["rom_sets_of"], "test/made-up");
+    assert!(o.text.contains("done against made-up"), "{}", o.text);
+    assert_eq!(o.exit, 1, "{}", o.text);
+    let again = super::run_against(&theme, &[], &[], &base, &paths, true).unwrap();
+    assert_eq!(again.json["rom_compared"], true);
+    assert_eq!(again.exit, 1, "{}", again.text);
+
+    // A person reviews the match and keeps it: the scan with the flag
+    // passes, and the one without doesn't call the entry stale.
+    let keys: Vec<String> = o.json["parts"][0]["rewrite"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|r| r["key"].as_str().map(str::to_owned))
+        .collect();
+    assert!(!keys.is_empty(), "{}", o.text);
+    let entries: Vec<String> = keys
+        .iter()
+        .map(|k| format!("[[reviewed]]\nkey = {k:?}\nwhy = \"a room's tile numbers\"\n"))
+        .collect();
+    write(&theme.join("scan-reviewed.toml"), &entries.join("\n"));
+    let o = super::run_with(&theme, &[], &[], &paths, true).unwrap();
+    assert_eq!(o.exit, 0, "{}", o.text);
+    let o = super::run(&theme, &[], &[], &paths).unwrap();
+    assert_eq!(o.exit, 0, "{}", o.text);
+    assert!(!o.text.contains("no longer matches"), "{}", o.text);
 }
 
 #[test]
@@ -479,7 +549,7 @@ fn a_baseline_excuses_the_items_it_lists() {
     assert_eq!(first.exit, 1);
     let base = d.path().join("base.json");
     fs::write(&base, first.json.to_string()).unwrap();
-    let again = super::run_against(&dir, &[], &[], &base, &paths).unwrap();
+    let again = super::run_against(&dir, &[], &[], &base, &paths, false).unwrap();
     assert_eq!(again.exit, 0, "{}", again.text);
     assert!(
         again
@@ -495,7 +565,7 @@ fn a_baseline_excuses_the_items_it_lists() {
         .unwrap()
         .retain(|r| r["at"] != "fn r8100");
     fs::write(&base, v.to_string()).unwrap();
-    let again = super::run_against(&dir, &[], &[], &base, &paths).unwrap();
+    let again = super::run_against(&dir, &[], &[], &base, &paths, false).unwrap();
     assert_eq!(again.exit, 1);
     assert_eq!(again.json["new_rewrite"], 1);
     // game-printer's scan JSON, its items at the top level, reads the same.

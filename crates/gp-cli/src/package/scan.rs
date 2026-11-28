@@ -44,8 +44,25 @@ use crate::template::{self, lifted_digest, sha256_hex};
 use rom_match::{Match, Num, RomIndex};
 
 pub fn run(dir: &Path, given: &[PathBuf], wasm: &[PathBuf], paths: &Paths) -> Result<Outcome> {
+    run_with(dir, given, wasm, paths, false)
+}
+
+/// [`run`], and with `game_roms` (`--game-roms`) a theme's package that
+/// names no ROM is compared with the ROM sets of the game it is for
+/// ([`Package::borrow_game_roms`]). Without it such a package names no ROM
+/// and its report says the game's were not compared
+/// (theme-scan-with-game-roms-is-asked-for).
+pub fn run_with(
+    dir: &Path,
+    given: &[PathBuf],
+    wasm: &[PathBuf],
+    paths: &Paths,
+    game_roms: bool,
+) -> Result<Outcome> {
     let mut pkg = Package::load(dir)?;
-    pkg.borrow_game_roms()?;
+    if game_roms {
+        pkg.borrow_game_roms()?;
+    }
     let found = roms::find(&pkg.rom_hashes(), given, &paths.roms)?;
     let mut outcome = scan(&pkg, &found)?.outcome();
     let sets: Vec<&str> = pkg.entries.iter().map(|e| e.id.as_str()).collect();
@@ -93,12 +110,13 @@ pub fn run_against(
     wasm: &[PathBuf],
     baseline: &Path,
     paths: &Paths,
+    game_roms: bool,
 ) -> Result<Outcome> {
     let known = known_keys(
         &fs::read_to_string(baseline)
             .with_context(|| format!("reading the baseline {}", baseline.display()))?,
     )?;
-    let mut o = run(dir, given, wasm, paths)?;
+    let mut o = run_with(dir, given, wasm, paths, game_roms)?;
     let (mut new, mut all) = (0usize, 0usize);
     for part in o.json["parts"].as_array_mut().into_iter().flatten() {
         for r in part["rewrite"].as_array_mut().into_iter().flatten() {
@@ -443,7 +461,8 @@ pub struct Report {
     entries: Vec<(String, bool)>,
     parts: Vec<PartReport>,
     /// For content naming no ROM: the game whose sets it is compared with,
-    /// and the line saying so, or the line saying none was found.
+    /// and the line saying so, or the line saying none was found or that
+    /// none was looked for (no `--game-roms`).
     rom_sets: Option<(Option<String>, String)>,
 }
 
@@ -522,8 +541,9 @@ impl Report {
             why.push(format!("{rewrite} to rewrite"));
         }
         why.extend(problems.iter().cloned());
-        // A reviewed match can only be seen missing when every ROM was read.
-        if not.is_empty() {
+        // A reviewed match can only be seen missing when every ROM was read,
+        // and some was: a theme scanned without --game-roms names none.
+        if not.is_empty() && !self.entries.is_empty() {
             for k in self.parts.iter().flat_map(|p| &p.stale) {
                 why.push(format!(
                     "{REVIEWED_FILE} lists {k}, which no longer matches"
@@ -1271,7 +1291,9 @@ pub fn scan(pkg: &Package, found: &BTreeMap<String, Rom>) -> Result<Report> {
         )),
         None if pkg.kind == "content" && pkg.entries.is_empty() => Some((
             None,
-            if pkg.for_games.is_empty() {
+            if !pkg.game_roms_looked {
+                "ROM sets: the ROMs of the game this content is for were not compared; --game-roms compares them".to_owned()
+            } else if pkg.for_games.is_empty() {
                 "ROM sets: none found; no folder up to three above this one holds a game's package.toml with [[rom.entry]]s".to_owned()
             } else {
                 format!(

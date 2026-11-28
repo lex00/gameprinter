@@ -1330,9 +1330,11 @@ enum PackageCmd {
     /// buckets: ours, reference, from the ROM and needs rewrite. Compares
     /// with each ROM of its `[[rom.entry]]` found by hash in $GP_ROM_DIR
     /// and prints no ROM byte. With no ROM it says that nothing was
-    /// compared. Exits 1 on any needs-rewrite item or a failed rebuild, or
-    /// with --baseline only on a needs-rewrite item the baseline doesn't
-    /// list.
+    /// compared. A theme's package, naming no ROM of its own, is compared
+    /// with the ROM sets of the game it is for only with --game-roms
+    /// (or --need-roms), and says so when it isn't. Exits 1 on any
+    /// needs-rewrite item or a failed rebuild, or with --baseline only on
+    /// a needs-rewrite item the baseline doesn't list.
     Scan {
         dir: PathBuf,
         /// A ROM file to compare with, instead of finding it by hash.
@@ -1348,9 +1350,18 @@ enum PackageCmd {
         baseline: Option<PathBuf>,
         /// Fail (exit 1) when no ROM was compared, for a machine that holds
         /// the ROMs. Without it a scan with no ROM here passes and says so.
+        /// It implies --game-roms.
         /// Example: --need-roms
         #[arg(long)]
         need_roms: bool,
+        /// Compare a theme's package (content naming no ROM of its own)
+        /// with the ROM sets of the game it is for: the game's package
+        /// above it, or the one its for_games names. Without it such a
+        /// package names no ROM, and the report says the game's ROMs were
+        /// not compared.
+        /// Example: --game-roms
+        #[arg(long)]
+        game_roms: bool,
     },
 }
 
@@ -1897,11 +1908,13 @@ fn dispatch(cmd: &Cmd) -> Result<Outcome> {
                 wasm,
                 baseline,
                 need_roms,
+                game_roms,
             } => {
                 let paths = gp_evidence::Paths::from_env()?;
+                let game_roms = *game_roms || *need_roms;
                 let mut o = match baseline {
-                    None => package::scan::run(dir, rom, wasm, &paths)?,
-                    Some(b) => package::scan::run_against(dir, rom, wasm, b, &paths)?,
+                    None => package::scan::run_with(dir, rom, wasm, &paths, game_roms)?,
+                    Some(b) => package::scan::run_against(dir, rom, wasm, b, &paths, game_roms)?,
                 };
                 if *need_roms {
                     package::scan::need_roms(&mut o);

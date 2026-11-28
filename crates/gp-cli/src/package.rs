@@ -57,6 +57,9 @@ pub struct Package {
     /// The game package whose ROM entries `entries` are, for content that
     /// names none of its own ([`Package::borrow_game_roms`]).
     pub borrowed: Option<Borrowed>,
+    /// Whether [`Package::borrow_game_roms`] was called (the scan's
+    /// `--game-roms`), found a game or not.
+    pub game_roms_looked: bool,
 }
 
 /// The game a content package took its ROM entries from.
@@ -173,6 +176,7 @@ impl Package {
             entries: parse_entries(&t),
             open,
             borrowed: None,
+            game_roms_looked: false,
         })
     }
 
@@ -186,6 +190,7 @@ impl Package {
     /// Nothing is done for a package with entries of its own, or one that
     /// isn't content.
     pub fn borrow_game_roms(&mut self) -> Result<()> {
+        self.game_roms_looked = true;
         if self.kind != "content" || !self.entries.is_empty() {
             return Ok(());
         }
