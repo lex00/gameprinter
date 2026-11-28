@@ -192,6 +192,11 @@ pub struct Local {
     /// in its 32 by 32 picture.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub board_bodies: BTreeMap<String, crate::theme_geometry::Body>,
+    /// The board's colour cycles its levels' looks name
+    /// (`present.board.cycles`), each list's steps in order, read from the
+    /// person's own lift, so a theme's flashes can keep the board's time.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub board_cycles: Vec<crate::theme_board_kit::Cycle>,
 }
 
 /// The words a role's description starts with.
@@ -867,7 +872,7 @@ pub fn kit_text(kit: &Kit) -> String {
 }
 
 /// The rows of a `rows` lifted file.
-fn read_rows(dir: &Path, model: &Model, slot: &str) -> Result<Vec<Vec<u32>>> {
+pub(crate) fn read_rows(dir: &Path, model: &Model, slot: &str) -> Result<Vec<Vec<u32>>> {
     let s = model
         .assets
         .get(slot)
@@ -1619,6 +1624,25 @@ pub fn kit(
             local.board_frames.len(),
             sheet.join(crate::theme_board::SEEN_FILE).display()
         ));
+        for c in &local.board_cycles {
+            let steps: Vec<String> = c
+                .steps
+                .iter()
+                .map(|s| format!("{} frames slot {} colour {}", s.frames, s.slot, s.colour))
+                .collect();
+            text.push_str(&format!(
+                "\ncolour cycle of {} ({} row {} column {}): {}",
+                c.level,
+                c.slot,
+                c.row,
+                c.column,
+                if steps.is_empty() {
+                    "no steps".to_owned()
+                } else {
+                    steps.join(", ")
+                }
+            ));
+        }
         local_path = Some(ldir);
     } else if let Some(rom) = rom {
         let bytes = fs::read(rom).with_context(|| format!("reading {}", rom.display()))?;

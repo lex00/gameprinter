@@ -1431,6 +1431,10 @@ pub fn validate(model: &Model) -> Vec<Problem> {
                     byte(&mut c, format!("{rat}.high"), &r.high);
                     guards(&mut c, format!("{rat}.when"), &r.when);
                 }
+                // Feature `level.board.cycles`.
+                for (i, y) in b.cycles.iter().enumerate() {
+                    byte(&mut c, format!("{bat}.cycles[{i}].steps"), &y.steps);
+                }
             }
             // Feature `present.sprite_order`.
             for (name, o) in &pr.sprite_order {

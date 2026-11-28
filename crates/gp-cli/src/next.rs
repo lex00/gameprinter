@@ -391,9 +391,7 @@ pub(crate) struct Scores {
     pub stale: bool,
     /// The fidelity number: over the clips scored, the mean of how much of
     /// each plays the same as the original (an exact clip counts 1000).
-    /// Behaviour only; pictures and sound aren't measured. The page's
-    /// REFINE line computes the same from the same scores (refine/fold.js,
-    /// fidelitySentence).
+    /// Behaviour only; pictures and sound aren't measured.
     pub fidelity_permille: u64,
 }
 

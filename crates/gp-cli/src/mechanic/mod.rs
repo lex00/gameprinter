@@ -55,6 +55,8 @@ mod evidence;
 pub(crate) mod http;
 mod import;
 pub(crate) mod live;
+#[cfg(test)]
+mod page_files;
 pub(crate) mod paths;
 pub(crate) mod probe;
 pub(crate) mod propose;

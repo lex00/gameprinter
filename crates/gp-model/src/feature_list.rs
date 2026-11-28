@@ -497,6 +497,12 @@ pub const FEATURES: &[Feature] = &[
         ],
     ),
     core(
+        "level.board.cycles",
+        "",
+        "A level drawn by an arcade board whose colour cycles are named, each a list of steps (frames to wait, colour slot, colour) lifted from the player's romset, so a theme kit lists them",
+        &["levels.*.present.board.cycles"],
+    ),
+    core(
         "present.effect_order",
         "",
         "Each effect's place in the console's sprite table in a level, by the event that starts it, which decides what it is painted over and under",

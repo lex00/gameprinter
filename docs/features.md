@@ -69,6 +69,7 @@ A feature is an optional part of a format with a name. A model lists the ones it
 | `level.board` |  | A level drawn as an arcade board draws its picture: its background tile layer from a whole screen, in the board's colours | `levels.*.present.board` |
 | `level.board.looks` |  | A level drawn by an arcade board with other looks, a screen and colours each, chosen by the model's counters as the frame is drawn | `levels.*.present.board.looks` |
 | `level.board.counters` |  | Counters drawn into an arcade board's tile layer, as digits or as one tile repeated, with tile codes lifted from the player's romset | `levels.*.present.board.counters`, `levels.*.present.board.repeats` |
+| `level.board.cycles` |  | A level drawn by an arcade board whose colour cycles are named, each a list of steps (frames to wait, colour slot, colour) lifted from the player's romset, so a theme kit lists them | `levels.*.present.board.cycles` |
 | `present.effect_order` |  | Each effect's place in the console's sprite table in a level, by the event that starts it, which decides what it is painted over and under | `levels.*.present.effect_order` |
 | `present.sprites_off` |  | Rule states in which the console's sprite layer is off: no sprite shows | `present.screen.sprites_off` |
 | `present.hidden` |  | Bodies not drawn while a rule state holds and counters are in ranges: given entity types, the whole sprite layer, or the HUD | `present.hidden` |

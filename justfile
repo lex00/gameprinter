@@ -544,17 +544,16 @@ play-web-arcade GAME="" SOURCE="":
     [ -n "$any" ] || echo "play-web-arcade: skipped, no arcade game with oracle/mame-captures.toml in the games checkout at $games"
 
 # The mechanic page in a headless browser on Moss Hop, in a GP_HOME made
-# for the run: play, record a clip with a note and hand it off, the agent's
-# answer from gp mechanic say, FREE PLAY, and the page's message when the
-# player isn't built (scripts/web/check-mechanic.mjs). That part needs no
-# games checkout. Then an arcade part for each arcade game of the games
-# checkout ($GP_GAMES_DIR) whose package.toml's `play` set
-# is on this machine ($GP_ROM_DIR/arcade/SYSTEM.zip, SYSTEM its roms.toml
-# `system`): coin, start, a
-# clip that is play by the game's checks.toml, gp mechanic say, ON THE
-# MODEL's refusal and the ROM set picker; each one skipped in words without
-# its romset. Its players are built into target/play-web-mech, its own
-# folder, so it can run beside play-web, which writes target/play-web.
+# for the run: the screen page at gp mechanic start's and gp serve's
+# addresses, the first screen, the copies and their tabs
+# (scripts/web/check-mechanic.mjs). That part needs no games checkout.
+# Then an arcade part for each arcade game of the games checkout
+# ($GP_GAMES_DIR) whose package.toml's `play` set is on this machine
+# ($GP_ROM_DIR/arcade/SYSTEM.zip, SYSTEM its roms.toml `system`); it drove
+# the older mechanic page, which is gone, so it says it is skipped until
+# the screen page's check of it (row page-check-on-the-screen-page). Its
+# players are built into target/play-web-mech, its own folder, so it can
+# run beside play-web, which writes target/play-web.
 mechanic-page: build mosshop
     #!/usr/bin/env bash
     set -euo pipefail

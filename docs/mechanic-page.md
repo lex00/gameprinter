@@ -2,48 +2,37 @@
 
 `gp serve` hosts the page at `http://127.0.0.1:7710/mechanic/GAME/`, and its
 root opens it (crates/gp-cli/src/serve/pages.rs mounts the page's server,
-crates/gp-cli/src/mechanic/server.rs). Since 2026-11-26 that address opens
+crates/gp-cli/src/mechanic/server.rs). That address opens
 [the screen](#the-screen) (`mechanic/screen.html`), the one page the owner
-works on; the older page this section describes, with its tabs, is at
-`/mechanic/GAME/index.html` until it is removed. `gp mechanic start GAME [MECHANIC]`
-opens its CLIPS tab, starting `gp serve` when none answers; `--own-server`
-serves the page alone on 127.0.0.1:7712 as before (the first screen at
-`/start/` is gp serve's, so there the logo opens the game's page). The page is `mechanic/`
-in this repo, plain HTML, CSS and JavaScript, game-printer's page
-(docs/contributing-mechanics.md there) with its tabs by phase:
+works on, and so does `index.html` under it. The older page, with its tabs
+(CLIPS, REFINE, PLAY, THEMES), was removed on 2026-11-27 (the owner,
+2026-11-26: "get rid of the older one"), and with it the files only it
+loaded: `mechanic/details/`, the REFINE pane's parts in `mechanic/refine/`
+and the THEMES pane, `mechanic/themes/pane.js`, with the routes that served
+them. `mechanic::page_files`'s test follows what the served pages load and
+fails while a file under `mechanic/` is left that none of them loads.
+`gp mechanic start GAME [MECHANIC]` opens the page, starting `gp serve`
+when none answers; `--own-server` serves the page alone on 127.0.0.1:7712
+(the first screen at `/start/` is gp serve's, so there the logo opens the
+game's page). The page is `mechanic/` in this repo, plain HTML, CSS and
+JavaScript. Its pages:
 
-- CLIPS: the quest log, and the game pane on THE ORIGINAL (play, record,
-  hand off, talk: once HELP WITH MECHANICS) or ON THE MODEL (a clip on the
-  original beside the model: once REVIEW REBUILD), with a line of the
-  background work under it.
-- REFINE: gp serve's background work (`/api/capture/GAME/background`): what
-  runs now with its bars, what finished, the questions, the clips scored.
-  Its parts come from `mechanic/refine/` when they are there.
-  Among them THE GRID (`mechanic/refine/grid.js`, game-printer's
-  GridHeat, over `/api/capture/GAME/grid` from
-  `crates/gp-cli/src/serve/grid.rs`): the game's clips as a heatmap of
-  the model's parts (its mechanics, entity kinds and events) by contexts
-  (a level and the mechanic session a clip came from), each cell colored
-  by its clips' scores on the model as it stands (matches, close,
-  differs, being fixed, needs you, waiting, empty). The pointer on a cell
-  says which it is; a click opens its clip on CLIPS. Under it, the empty
-  cell to fill next, by game-printer's priorities (most doubt around it,
-  then a context nothing covers yet), as the clip to record next.
-  game-printer's grid also made that clip itself; here the clips come
-  from the mechanic sessions through `gp corpus import`, so "clips in
-  flight" is kept for when it does.
-- PLAY: the game's model played alone (the rebuild: the interpreter, or the game's module when it has hook code) with its settings (once FREE PLAY).
-- THEMES: the game's themes in the person's registry and its theme kit.
+| Address | Files | What |
+|---|---|---|
+| `/mechanic/GAME/` (`screen.html`) | screen.html, screen.js, screen.css, model-load.js, nesplayer.js, and the shared controls.js | [The screen](#the-screen): the original beside the model; with `?page=loop`, the loop's page |
+| `/start/` | start.html, style.css, journeys/, picture-card.js, sound-card.js, sprite-card.js | [The first screen](#the-first-screen) and a copy's steps |
+| `gp mechanic watch`'s page | watch.html, watch.js, style.css | The agent's status, pins, problems, talk and log, for a person watching an agent work |
+| `/refine` | refine.html, refine.js, refine.css, style.css | The refinement view: the rule `gp rule` found and the last `gp model refine` run, for developers |
 
-The header picks the game (every game gp serve has; gp serve's root opens
-the one opened last, kept in `$GP_HOME/work/serve/last-game`, else
-[the first screen](#the-first-screen), which lists them) and, for a game whose roms.toml names several sets (Tapper's tapper,
-rbtapper, tapperg, sutapper and tappera; Donkey Kong's OE and JU), the set:
-the ones in `$GP_ROM_DIR` are listed, and choosing one plays it, draws the
-model with that set's pictures (lifted by the same asset map into
-`$GP_HOME/work/assets/SOURCE@SET`) and keeps it for the game
-(`$GP_HOME/mechanics/GAME/rom-set`). `gp mechanic start --rom SET|FILE` and
-`gp serve --rom GAME=SET|FILE` choose it too.
+The game is the one in the address; gp serve's root opens the one opened
+last, kept in `$GP_HOME/work/serve/last-game`, else the first screen,
+which lists them. For a game whose roms.toml names several sets (Tapper's
+tapper, rbtapper, tapperg, sutapper and tappera; Donkey Kong's OE and JU),
+`gp mechanic start --rom SET|FILE` and `gp serve --rom GAME=SET|FILE`
+choose the set: the screen plays it, draws the model with that set's
+pictures (lifted by the same asset map into
+`$GP_HOME/work/assets/SOURCE@SET`), and the choice is kept for the game
+(`$GP_HOME/mechanics/GAME/rom-set`).
 
 With no game in the games checkout, the first screen's PORT A GAME I OWN
 leads into the conversation: what the person needs (their own copy of the
@@ -51,8 +40,8 @@ game, as a file), and what to say to their agent, with the next-step
 loop's own sentences for stages 0 to 2 (crate::next). It looks again every
 5 s and opens the game once the agent has brought one in. Page text names
 what to press or what to ask the agent, never a gp command; commands are
-left only in the standalone /refine page (refine.html, refine.js) and in
-error texts from the server, both for developers.
+left only in the standalone /refine page and in error texts from the
+server, both for developers.
 
 The first time a game's page is asked for, gp serve makes its server on a
 thread of its own, since that can build the game's hook code (the first
@@ -64,88 +53,31 @@ loads the game when it is ready. Two requests start one build. If making
 it fails, the page says so in plain words, with the error to give the
 agent and TRY AGAIN (`?again=1`).
 
-Under the status line, on every tab, a card for each thing the agent waits
-for the person's yes on (YOUR AGENT ASKS, with YES and NO): what it does in
-plain words, and what it costs when its dry run says. It comes from the
-status line's answer (`waits_for_yes`, the asks `gp_run` leaves when it
-refuses a command for want of a yes, docs/mcp.md "Every command"), and a
-press writes the answer (`POST /api/asks/ID`). A yes shows as YOU SAID YES
-until the agent uses it, once.
-
-The agent's proposals are cards there too, one at a time with how many
-wait, each with a box for words, ACCEPT and REJECT, and PUT THE OLD ONE
-BACK once accepted (docs/mcp.md "Every command"). A picture for the
-person's theme (YOUR AGENT PROPOSES A PICTURE, `mechanic/picture-card.js`)
-shows the picture now and the new one. A change to how the person's copy
-sounds (YOUR AGENT PROPOSES A NEW SOUND, `mechanic/sound-card.js`, in the
-picture card's look) has PLAY WHAT YOU HAVE and PLAY THE NEW ONE, which
-play the first seconds of the song as it is and with the change, one at a
-time (`GET /api/sounds/ID/old.wav`, `new.wav`); the answer goes to
-`POST /api/sounds/ID`. The same card takes a sound for one role of the
-person's large-art theme (a proposal of kind `role`, from `gp theme sound
-propose DIR --role ROLE --wav FILE`, issue #30): it names the theme, the
-role and its take, plays the role's sound as it is and the new one whole,
-and says NO SOUND THERE YET, with the button off, when the theme has no
-file there (a new take, or a role with no sound yet).
-A sprite edit the agent proposes with `assets_edit` for the person's
-copy (YOUR AGENT PROPOSES A SPRITE CHANGE, `mechanic/sprite-card.js`, in
-the picture card's look; an NES copy's tiles or an arcade copy's board
-sprites) shows the edit's own pictures, the sprite before and after close
-up and in the recorded frames (`GET /api/sprites/ID/edit.png`,
-`context.png`); the answer goes to `POST /api/sprites/ID`
-(docs/sprite-editing.md, "On the page").
-
-When the agent changes the game through `gp_run` while the page is open
-(any command that writes, but the talk and the log, which redraw on their
-own), `next` counts it (`changes`) and the status line's poll hears it: the
-game picker is read again, THEMES redraws when it shows, a clip open ON
-THE MODEL is loaded again with the clips' scores, and on PLAY and REFINE
-the line says "Your agent changed the game." with RELOAD.
-
-Point and tell (REFINE's THE CLIP MEASURED: pause, box part of the
-screen, say what is wrong) posts its request as before
-(`POST /api/capture/GAME/input`, kind `request`). With no capture run,
-which is the usual case now, it becomes the person's turn in the talk of
-the mechanic open on the page, with a `point` field (the recording, the
-frame, the box, its label, the choice and what is under it). `gp mechanic
-show` prints it ("[pointing at Mario in walk.001 at frame 412, box
-96,120,24,24: ladder]"), the talk on CLIPS shows "(pointing at Mario,
-frame 412)", and the agent answers with `gp mechanic say` as for any turn.
-
-The agent's log (log, pins, problems) is a panel at the right on every tab,
-from AGENT'S LOG in the header or L. The tab is in the address (`?tab=`).
-REFINE and THEMES take the game's place, and the games hold while they show.
-`mechanic/shell.js` does the tabs; `mechanic/app.js` the game and its modes.
+The agent's yes cards (the asks `gp_run` leaves when it refuses a command
+for want of a yes, docs/mcp.md "Every command") are in the screen's YOUR
+TURN, with YES and NO (`GET /api/asks`, `POST /api/asks/ID`). A copy's
+proposals, a picture for the person's theme, a change to how their copy
+sounds, and a sprite edit (`mechanic/picture-card.js`, `sound-card.js`,
+`sprite-card.js`), are cards on the copy's steps on the first screen, each
+with ACCEPT and REJECT. The sound card plays the first seconds of the song
+as it is and with the change (`GET /api/sounds/ID/old.wav`, `new.wav`;
+the answer goes to `POST /api/sounds/ID`), and takes a sound for one role
+of a large-art theme (a proposal of kind `role`, from `gp theme sound
+propose DIR --role ROLE --wav FILE`, issue #30). The sprite card shows the
+sprite before and after close up and in the recorded frames (`GET
+/api/sprites/ID/edit.png`, `context.png`; the answer goes to `POST
+/api/sprites/ID`; docs/sprite-editing.md, "On the page").
 
 The old inspector's views (wave 8) are drawn by the editor's build, which
 gp serve serves at `/index.html` (`just editor`): `?embed=game&run=GAME`
 or `?embed=inspector&run=GAME` draws one view with no header, in the
-page's colors (`editor/src/Embed.tsx`, `editor/src/App.tsx`). Those two
-are all that is left of the old editor: `/index.html` with no `?embed=`
-sends the visitor to the page at `/`. `mechanic/details/` puts them on
-the page:
-
-- REFINE, under the background work: THE CLIP MEASURED, a corpus clip,
-  free play clip or store recording of the game's ROM on the original and
-  on the rebuilt game from the same moment, with the lockstep panel and
-  its curves, the moments, the scenario ladder, and pause, point and tell
-  (what the person says there is their turn in the mechanic's talk).
-  Its free play button plays the original yourself, with save points (F5,
-  F8) and clips from them: on an NES game in `gp_play.wasm`, on an arcade
-  game on its board in `gp_arcade_play.wasm` (gp serve's
-  `/api/play/gp_arcade_play.wasm`, or `$GP_ARCADE_PLAY_WASM`) at the
-  board's 512 by 480 and 30 frames a second, keyed as a cabinet (5 a
-  coin, 1 the start). The server rebuilds each save point natively on the
-  same player (`serve/freeplay.rs`'s `Live`) and checks its hashes
-  against the page's; an arcade clip's log is the board's
-  (`gp-arcade-input 0`).
-- DETAILS in the header, on every tab (`?details=1`): a drawer with the
-  trace inspector, a store recording's frames drawn by each view (RAM
-  heatmap and watch, box selection and resolution card, OAM, nametables,
-  event lanes, tiles, coverage, annotations, compare two recordings).
-
-With no editor build, or on a server of the page's own, each says so.
-The sections below keep the old names for CLIPS's two views and PLAY.
+page's colors (`editor/src/Embed.tsx`, `editor/src/App.tsx`), and
+`/index.html` with no `?embed=` sends the visitor to the page at `/`. The
+older page framed them in REFINE and its DETAILS drawer; no page frames
+them now. The server still takes point and tell's request (`POST
+/api/capture/GAME/input`, kind `request`, which with no capture run becomes
+the person's turn in the open mechanic's talk with a `point` field), which
+only REFINE sent.
 
 ## The first screen
 
@@ -233,58 +165,38 @@ fitted and reviewed; the theme journey reuses its picture cards
 
 ## Layout
 
-Under the header, on every tab, one status line (`mechanic/next.js`) says
-where the port stands, the next step and who does it, with its button
-(PLAY FROM HERE, or the tab it needs), and a clue in its place when the
-person seems lost. It reads `GET /api/next/GAME` every 5 seconds, the same
-answer as `gp progress --next` ([what next](progress.md#what-next)), and
-never covers the game. Its sentences wrap onto more lines rather than being
-cut, and when the window is narrow the next step starts on a line of its
-own. It keeps the tallest height it has had at the window's width, so a
-poll doesn't move the game up and down.
+The screen page, from the top:
 
-The game window is in the middle at the top. Its left margin holds REVIEW
-REBUILD's clip picker (`#rule-card`) and the clip loaded (its row, scores,
-length, note and first split); its right margin holds, while a clip plays
-beside the rebuild, the frame it stands at, the measures the two games
-disagree on there with both values, and the random draws taken so far.
-Under the game are REVIEW REBUILD's bar, the line saying whose turn it is,
-FREE PLAY's settings and the agent's panel. The quest log, the clips and the
-conversation are beneath, in two columns. Below 1,200
-pixels wide the margins are left out.
+- The header: GAME PRINTER (to the first screen), the game's title,
+  PICTURES (the game's own or a theme), the view (SIDE BY SIDE, ON TOP,
+  DIFFERENCE, MODEL ONLY), MODEL's transparency slider while ON TOP shows,
+  SETTINGS (the model's own settings screen), RECORD, STOP AND SEAL while
+  recording, the row a recording goes to, and FOLLOW THE WORK.
+- A line that says how to connect an agent, while none connected to gp mcp
+  this week, and the follow line (FOLLOWING YOUR AGENT, YOU ARE PLAYING,
+  RECORDING, SHOWING YOUR CHOICE, FOLLOW IS OFF).
+- The two screens, centred: THE ORIGINAL and THE MODEL (the rebuild's
+  preview runs in a frame off screen and is drawn here).
+- While a clip shows, its bar: its name, PLAY, the frame slider and the
+  frame, BEFORE on a gate card's look, and BACK TO PLAYING.
+- The status line: what is worked on, by whom, whether the loop runs or
+  waits on the person, and THE LOOP'S PAGE. Under it the keys, and
+  CONTROLS' TIMING, folded ([below](#the-controls-timing)).
+- YOUR TURN, then the game's scoreboard when it has one.
 
-A click on a quest log row only opens it: its clips and conversation show,
-and nothing goes to the agent (`POST api/pick`). HAND TO THE AGENT on the
-open row hands it over: the person's "Let's do" turn (`POST api/handoff`),
-once, and the row is the agent's until it answers. A row reads WORKING ON IT
-only when something is on it: a person's turn waits for the agent, or gp
-serve's background work has a job or a clip agent on one of its clips (the
-hub the strip under the game reads). The rows follow the session poll with
-no click: turns, `queue.json` and the gate's `status.json`.
+The loop's page (`screen.html?page=loop`) is the same file with
+PROGRESS, YOUR TURN and WHAT THE AGENTS ARE DOING (the cards answered, the
+quest log, the steps, the workers and the clips) in place of the
+scoreboard; it shows the screens only while a clip is open on them. Both
+are laid out in [the screen](#the-screen).
 
-## The tabs
+A click on a quest log row only opens it: its clips, notes and talk show,
+and nothing goes to the agent. RECORD INTO THIS ROW on the open row makes
+it the row the next recording goes to, and SEND puts the typed words in
+its talk as the person's turn. The rows follow the session poll with no
+click: turns, `queue.json` and the gate's `status.json`.
 
-HELP WITH MECHANICS plays the original (gp_play.wasm, or
-gp_arcade_play.wasm for an arcade game) and talks to your agent.
-
-REVIEW REBUILD shows a clip on the original beside the game's model, in the
-game window. The server plays the clip through both as `gp clip score` does
-straight through, with the original's random draws, and keeps both pictures
-of every compared frame beside the clip (`clips/NNN.review/`, made again
-when the model, the mapping or the module changes). The three layouts are
-side by side, the rebuild on top at a transparency, and the differences:
-the original dimmed where the two agree and magenta where a pixel differs,
-inside the part both games draw, with the count. A strip under the game
-marks each frame green where the mapped state agrees and red where it
-differs; a click goes there, and << DIFF and DIFF >> (or [ and ]) jump to
-the difference before and after. Outlining the rebuild's entities is a
-layer for any layout. A clip's ON THE MODEL button opens it here. PLAY THE
-REBUILD plays the model live beside the original on the same presses.
-
-FREE PLAY is the model alone, from its own start, with its own random
-numbers; the original follows the presses unseen, so a clip recorded there
-is the original's play. Its settings panel opens the model's own settings
-screen inside the game (F1, the right stick's press, or the button).
+## The model
 
 The rebuild played live is the interpreter preview of the game's model
 (scripts/web/build-preview.sh), built on first use into
@@ -304,38 +216,34 @@ An arcade game's model plays the same way (issue #3), keyed as a cabinet,
 its bodies drawn by tile kind or, where the model names them, with its
 board's own art (docs/formats/board-art.md).
 
+MODEL ONLY plays the model alone at its own size, from its own start, with
+its own random numbers. SETTINGS (F1, or the right stick's press) opens the
+model's own settings screen inside the game, in MODEL ONLY; beside the
+original the model is always the model as written.
+
 ## States and keys
 
-The badge over the game names the state. A key not listed for a state does
-nothing there. The rows are `ACTIONS` in mechanic/app.js, and
-`node mechanic/actions.test.mjs` checks them (cargo test runs it).
+The keys are read by screen.js (its keydown handler); the game's own
+buttons go to the shared controls ([docs/controls.md](controls.md)), keyboard
+or gamepad.
 
-| Tab | State (badge) | Keys and buttons |
-|---|---|---|
-| HELP | live (PLAYING) | Game buttons play. F5 or left trigger saves, F8 or right trigger loads. R or right bumper records. C or left bumper opens the open row's newest clip beside the rebuild |
-| HELP | recording (RECORDING) | Game buttons play. Save and load as in live (loading before the start moves the start back). R or right bumper stops |
-| any | review (YOUR CLIP) | A or Enter hands it off to the row in big letters, or for a run that spans a stage does the chosen answer (up and down choose; sealing is chosen). Select or Tab seals it instead. B or Esc drops it. R or right bumper records again |
-| any | sending (SENDING) | Nothing until it is sent |
-| any | sealed (SEALED) | A, B, Enter or Esc goes back to playing |
-| HELP | agent (YOUR AGENT SAYS, or A CLIP BESIDE THE REBUILD) | Up and down choose. A or Enter answers. B replays the clip. C or left bumper puts the rebuild beside the clip or takes it away. Left and right switch the layout |
-| HELP | idle (WATCHING YOUR AGENT) | After 30 s with no button: any button goes back |
-| HELP | watch (WATCHING YOUR AGENT PLAY) | Nothing; it ends in the agent state with the demo's clip |
-| REVIEW | refine (REVIEWING THE REBUILD) | A, Enter or Space plays and pauses. Left and right step a frame, the triggers (F5, F8) a second. [ and ] jump to the difference before and after. Up and down set the transparency. Select or Tab changes the layout. C or left bumper outlines the entities. B goes back to a second before the first split. R or right bumper plays the rebuild |
-| REVIEW | live beside the rebuild (PLAYING THE REBUILD) | Game buttons play. Save and load (the rebuild starts again from the loaded moment). R records. V or left bumper changes the layout, [ and ] the transparency. Esc goes back to the review |
-| FREE | free play (FREE PLAY: THE REBUILD) | Game buttons play. R records. F1 opens the settings. Esc goes back to HELP. Save and load do nothing |
-
-U turns the original's sound off and on in every state but while typing a
-note.
+| State | Keys |
+|---|---|
+| Live: the person plays the original, the model follows | Game buttons play. R records; R again sends the clip to the row it goes to. F1 opens the settings screen. U turns the model's sound off and on (kept in the browser) |
+| Recording | Game buttons play. R stops and sends. STOP AND SEAL keeps the run sealed instead ([sealed runs](#sealed-runs)) |
+| A clip on both screens | Space or Enter plays and stands still. Left and right step a frame. Esc goes back to live play |
+| Following the agent's work | As a clip. R takes the screen back and records; any other game button goes back to live play |
+| The settings screen open | Its keys go to it alone |
+| Typing in a box | The keys are the box's; Esc leaves it |
 
 ## Sealed runs
 
-Select or Tab in review seals the run: it goes to
-`$GP_HOME/sealed/GAME/sealed-run/clips/`, outside every session, and the
-sealed-run row hears where it is kept. A run that spans a stage (the stage
-`observe.toml`'s `[level]` reads changes during it) is offered for sealing
-first. REVIEW REBUILD lists the sealed runs only when asked (OPEN A SEALED
-RUN), and reads them without writing anything. The guard that keeps every
-other tool off them, and a sealed run on the model, are `gp sealed`'s
+STOP AND SEAL while recording seals the run: the page asks which part it
+plays, and it goes to `$GP_HOME/sealed/GAME/sealed-run/clips/` with that
+name as its note, outside every session, and no row and no agent hears of
+it. Only the play up to its start goes to the shared paths. The
+scoreboard's HELD OUT lines score the sealed runs (`gp sealed score`). The guard that keeps
+every other tool off them, and a sealed run on the model, are `gp sealed`'s
 ([sealed.md](sealed.md)).
 
 ## The decision model at the controller
@@ -759,7 +667,7 @@ minute later.
 
 The screen keeps every change of the keys and the gamepad with the time it happened, and each game frame reads the buttons at its own time. Before, the page read the controls once for each game frame it stepped, at whatever moment the browser ran the step. A late browser frame steps up to four game frames at once, and all four read the same buttons, so a short press counted as four frames or a release was seen four frames late. A press and release between two steps was never seen. The gamepad, which a page can only poll, was read no oftener than the screen was drawn.
 
-Since 2026-11-25 the screen page reads them through the same code as the public page: `controls.js` on `gp_controls.wasm` ([docs/controls.md](controls.md)), which the page's server serves beside the screen (`scripts/web/build-play.sh` builds the module beside the player). The mechanic page (`app.js`) does too, with the settings this box keeps. A gamepad on the NES layout is the shell's table, as on the public page: A on the bottom button, B on the left and the right; before, the screen had A on the bottom and the right and B on the left and the top.
+Since 2026-11-25 the screen page reads them through the same code as the public page: `controls.js` on `gp_controls.wasm` ([docs/controls.md](controls.md)), which the page's server serves beside the screen (`scripts/web/build-play.sh` builds the module beside the player). The older mechanic page did too, with the settings this box keeps, until it was removed. A gamepad on the NES layout is the shell's table, as on the public page: A on the bottom button, B on the left and the right; before, the screen had A on the bottom and the right and B on the left and the top.
 
 A game still reads its controls once a frame, as the machine did: at 30 frames a second a pull of 150 ms is 4 frames or 5 by where it starts. That is the original's own timing and stays.
 

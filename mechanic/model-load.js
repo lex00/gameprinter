@@ -1,5 +1,5 @@
 // The model's preview loading in its frame, for the screen page
-// (screen.js) and the mechanic page (app.js). Checked without a browser by
+// (screen.js). Checked without a browser by
 // mechanic/model-load.test.mjs.
 //
 // The preview tells each step of its load ({gp: "loading", step}, its

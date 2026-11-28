@@ -1,8 +1,9 @@
 //! The grid (game-printer's serve/grid.rs; game-printer's docs/show.md,
 //! "The grid"): the game's clips laid out as mechanics by contexts, each
 //! cell with the state of the clips covering it, and the cell the next
-//! clip should fill. REFINE draws it as a heatmap (mechanic/refine/grid.js,
-//! game-printer's editor/src/GridHeat.tsx and gridfold.ts).
+//! clip should fill. The older page's REFINE drew it as a heatmap
+//! (game-printer's editor/src/GridHeat.tsx and gridfold.ts); the routes
+//! below still answer with it.
 //!
 //! The rows are the model's parts: each mechanic the player, a level or the
 //! game carries (the mechanic catalog's), each entity kind and each event a

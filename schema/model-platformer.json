@@ -305,6 +305,20 @@
       ],
       "type": "object"
     },
+    "BoardCycle": {
+      "additionalProperties": false,
+      "description": "A colour cycle of a level drawn by its arcade board (feature\n`level.board.cycles`): a list of steps in the player's romset, each\nthree bytes, the frames the step waits, the colour slot it writes and\nthe colour, ending at a zero frames byte.",
+      "properties": {
+        "steps": {
+          "$ref": "#/$defs/RowByte",
+          "description": "Where the list starts, lifted: a `rows` slot's row, read from\n`column` three bytes a step up to a zero frames byte or the row's\nend."
+        }
+      },
+      "required": [
+        "steps"
+      ],
+      "type": "object"
+    },
     "BoardHidden": {
       "additionalProperties": false,
       "description": "When a body's board sprites are left out (feature\n`sprite.board.hidden`): while bit `bit` of byte `byte` of the body's\n`ext` word `word` is set, or without `bit` while that byte isn't 0.",
@@ -344,6 +358,13 @@
           "description": "Feature `level.board.counters`: counters drawn as digits in the\ntile layer, as a game's vblank writes its score into video RAM.",
           "items": {
             "$ref": "#/$defs/BoardCounter"
+          },
+          "type": "array"
+        },
+        "cycles": {
+          "description": "Feature `level.board.cycles`: the board's colour cycles, each a\nlist of steps the program walks to flash or fade a colour (a light\nthat blinks, a sky that darkens). Listed in a theme kit's local part\nso a theme's flashes keep the board's time; the model draws the\nlevel's colours without them.",
+          "items": {
+            "$ref": "#/$defs/BoardCycle"
           },
           "type": "array"
         },

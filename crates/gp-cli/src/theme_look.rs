@@ -32,6 +32,20 @@ mod sound;
 
 #[derive(Subcommand)]
 pub enum LookCmd {
+    /// Where a clip of an arcade game drawn by its board's art draws its
+    /// pictures: it plays the corpus clip (`gp picture --clip --sprites`)
+    /// and gives each picture code's stretches of frames with its place on
+    /// the first, the codes within --near pixels of one with their
+    /// commonest offsets, every code on --frames A-B/STEP (--each), each
+    /// code's count, sizes and rows (no codes named), the stretches the
+    /// codes keep moving across (--moving), and how many of one code sit
+    /// beside another frame by frame (--count). The sprite list is kept
+    /// under $GP_HOME/work/theme-where for --sprites; nothing is written to
+    /// a repo.
+    ///
+    /// Example: gp theme look where --game rooftop --clip rooftop.l1.001 4d
+    /// --near 48
+    Where(crate::theme_where::WhereArgs),
     /// Check a large-art theme folder against a game, the way the page reads
     /// it: package.toml, look.txt and art.txt, every picture a rule names, the
     /// game's kit (every slot and pose drawn, nothing named the game lacks),
@@ -202,6 +216,7 @@ pub enum LookCmd {
 
 pub(crate) fn run(cmd: &LookCmd, paths: &Paths) -> Result<Outcome> {
     match cmd {
+        LookCmd::Where(a) => crate::theme_where::run(a, paths),
         LookCmd::Check { dir, game, rom } => check(dir, game, rom.as_deref(), paths),
         LookCmd::Cells {
             dir,

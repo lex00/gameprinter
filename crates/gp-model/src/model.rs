@@ -1121,6 +1121,26 @@ pub struct BoardLook {
     /// while counters say so, as a game's text routine writes a message.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub texts: Vec<BoardText>,
+    /// Feature `level.board.cycles`: the board's colour cycles, each a
+    /// list of steps the program walks to flash or fade a colour (a light
+    /// that blinks, a sky that darkens). Listed in a theme kit's local part
+    /// so a theme's flashes keep the board's time; the model draws the
+    /// level's colours without them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cycles: Vec<BoardCycle>,
+}
+
+/// A colour cycle of a level drawn by its arcade board (feature
+/// `level.board.cycles`): a list of steps in the player's romset, each
+/// three bytes, the frames the step waits, the colour slot it writes and
+/// the colour, ending at a zero frames byte.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct BoardCycle {
+    /// Where the list starts, lifted: a `rows` slot's row, read from
+    /// `column` three bytes a step up to a zero frames byte or the row's
+    /// end.
+    pub steps: RowByte,
 }
 
 /// A string drawn in an arcade board's tile layer (feature

@@ -3,8 +3,7 @@
 //! checks with their results, theme clip review and theme refinement.
 //!
 //! The mechanic page's server ([`crate::mechanic::server`]) hands every
-//! path under `/api/themes/` and `/themes/` here. The pane itself is
-//! `mechanic/themes/pane.js`.
+//! path under `/api/themes/` here.
 //!
 //! Ported from game-printer's `serve/themes.rs` (the routes `GET
 //! /api/themes/{model}`, `POST .../preview` and `POST .../save`, here
@@ -55,8 +54,6 @@ pub(crate) struct At<'a> {
     pub game: &'a str,
     /// The game's folder in the games checkout.
     pub dir: &'a Path,
-    /// The page's files (mechanic/).
-    pub page: &'a Path,
 }
 
 /// The most frames a review draws of one clip (each side); a longer clip
@@ -66,9 +63,6 @@ const REVIEW_FRAMES: usize = 900;
 /// Handles the request when its path is one of THEMES's: `None` otherwise.
 pub(crate) fn route(at: &At, req: &Request) -> Option<Result<Response>> {
     let p = req.path.as_str();
-    if let Some(name) = p.strip_prefix("/themes/") {
-        return Some(Ok(page_file(at, name)));
-    }
     let rest = p.strip_prefix("/api/themes/")?;
     let post = req.method == "POST";
     let r = match (post, rest) {
@@ -86,25 +80,6 @@ pub(crate) fn route(at: &At, req: &Request) -> Option<Result<Response>> {
         _ => Ok(Response::error(404, "no such THEMES route")),
     };
     Some(r.or_else(|e| Ok(Response::error(409, &format!("{e:#}")))))
-}
-
-fn page_file(at: &At, name: &str) -> Response {
-    let ok = !name.is_empty()
-        && !name.starts_with('.')
-        && name
-            .bytes()
-            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-' || b == b'.');
-    let kind = if name.ends_with(".js") {
-        "text/javascript; charset=utf-8"
-    } else if name.ends_with(".css") {
-        "text/css; charset=utf-8"
-    } else {
-        return Response::error(404, "not here");
-    };
-    match (ok, fs::read(at.page.join("themes").join(name))) {
-        (true, Ok(b)) => Response::bytes(kind, b),
-        _ => Response::error(404, "not here"),
-    }
 }
 
 /// `$GP_HOME/work/themes/GAME/`: everything the tab writes.

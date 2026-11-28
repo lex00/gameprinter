@@ -1,6 +1,6 @@
-// The editor's build inside gp serve's one page (the page at /mechanic/GAME/,
-// mechanic/details/details.js). It draws one view with no header of its
-// own: ?embed=inspector&run=GAME the trace inspector (pick a recording,
+// The editor's build, as gp serve serves it at /index.html (the older
+// mechanic page framed it in its Details drawer). It draws one view with
+// no header of its own: ?embed=inspector&run=GAME the trace inspector (pick a recording,
 // and a second one to compare, scrub to a frame, and every registered view
 // draws that frame), any other ?embed=VIEW Embed.tsx's view. With no
 // ?embed= it sends the visitor to the page at /. The URL holds the

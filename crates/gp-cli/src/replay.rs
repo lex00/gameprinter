@@ -158,10 +158,150 @@ pub(crate) fn pick(mut candidates: Vec<Value>, n: usize) -> Vec<Value> {
 
 use crate::serve::work::git_ok as git;
 
+/// Whether archived row `r` is a trouble row (crate::trouble): its
+/// measure is a gp loop health line read from today's home and GitHub,
+/// which a trial can't put back as it was, so its worker finds the trouble
+/// cleared and rightly changes nothing. Five of the eleven no-patch trials
+/// of baseline-01403e91 were such rows.
+pub(crate) fn is_trouble(r: &Value) -> bool {
+    r["trouble"].is_object()
+        || r["mechanic"]
+            .as_str()
+            .is_some_and(|m| m.starts_with("trouble-"))
+}
+/// The first commit on main of the repo at `at` whose message names row
+/// `game`/`row`, as the tool's commits do: "(row GAME/ROW)".
+fn named_commit(at: &Path, game: &str, row: &str) -> Option<String> {
+    git(
+        at,
+        &[
+            "log",
+            "refs/heads/main",
+            "--reverse",
+            "--format=%H",
+            "-F",
+            "--grep",
+            &format!("(row {game}/{row})"),
+        ],
+    )
+    .ok()
+    .and_then(|o| o.lines().next().map(str::to_owned))
+}
+
+/// Why a trial can't do archived row `r` of `game` again from `base` (in
+/// `at`, the checkout of its repo; `commit`, its landed commit, and
+/// `files`, what that changed), or None when it can. Of the 11 trials of
+/// replay baseline-01403e91 that made no patch, 6 were rows like these:
+///
+/// - a row with no target whose landing put a picture into a theme: an
+///   image model made it and the person's look on its card judged it, so
+///   a worker can't make it again and no gate can say it passes
+///   (theme-tip-money, theme-font-at-sign-and-credits);
+/// - a row whose note names a commit of its repo, other than its own,
+///   that its base lacks: it closed on a later fix (get-ready-screen's
+///   note: "fixed by e5e06ef", drink-far-end's fix; the runner's wake
+///   takes `waits_on` off a row whose wait ended, so the note is what is
+///   left of it);
+/// - a row that waited on another (`waits_on`) whose landing its base
+///   lacks, or that never landed (a card still to come). A row waited on
+///   in the other repo is there at today's tip, as a trial runs it.
+fn left_out(
+    home: &Path,
+    game: &str,
+    r: &Value,
+    at: &Path,
+    commit: &str,
+    base: &str,
+    files: &[String],
+) -> Option<String> {
+    let repo = if r["repo"] == json!("tools") {
+        "tools"
+    } else {
+        "games"
+    };
+    let picture = |f: &String| f.contains("/themes/") && f.to_lowercase().ends_with(".png");
+    if repo == "games" && r["target"].is_null() && files.iter().any(picture) {
+        return Some("its landing put a picture into a theme, judged by a look on its card".into());
+    }
+    let in_base = |c: &str| git(at, &["merge-base", "--is-ancestor", c, base]).is_ok();
+    let hex = |w: &&str| {
+        (7..=40).contains(&w.len())
+            && w.chars().all(|c| c.is_ascii_hexdigit())
+            && w.chars().any(|c| c.is_ascii_digit())
+            && w.chars().any(|c| c.is_ascii_alphabetic())
+    };
+    let note = r["note"].as_str().unwrap_or("");
+    let words = note.split(|c: char| !c.is_ascii_alphanumeric());
+    for w in words.filter(hex) {
+        let Ok(c) = git(
+            at,
+            &[
+                "rev-parse",
+                "--verify",
+                "--quiet",
+                &format!("{w}^{{commit}}"),
+            ],
+        ) else {
+            continue;
+        };
+        if c != commit && !in_base(&c) {
+            return Some(format!("it closed on {w}, a commit its base lacks"));
+        }
+    }
+    let w = r["waits_on"].as_str()?;
+    let Ok((g, row)) = crate::mechanic::waits::parse(game, w) else {
+        return Some(format!("it waited on {w}, which names no row"));
+    };
+    let waited = crate::mechanic::archive::read_archive(home, &g)
+        .into_iter()
+        .rev()
+        .find(|x| x["mechanic"] == json!(row));
+    let waited_repo = match &waited {
+        Some(x) if x["repo"] == json!("tools") => "tools",
+        _ => "games",
+    };
+    if waited_repo != repo {
+        return None;
+    }
+    let landed = waited
+        .as_ref()
+        .and_then(|x| x["landed"]["commit"].as_str().map(str::to_owned))
+        .or_else(|| named_commit(at, &g, &row));
+    let Some(c) = landed else {
+        return Some(format!("it waited on {g}/{row}, which never landed"));
+    };
+    (!in_base(&c)).then(|| format!("it waited on {g}/{row}, whose landing {c} its base lacks"))
+}
+
+/// Puts the pictures the repo at `repo` keeps in Git LFS into the trial's
+/// `tree`, cloned with their pointers: the tree takes the repo's own LFS
+/// store, as a worktree of it shares it, and checks them out from there,
+/// with nothing fetched. Without it a theme row's worker read pointers
+/// (gp theme look check read 109 PNGs it couldn't open, replay
+/// baseline-01403e91). With git-lfs's filter set in the tree, a real
+/// picture is cleaned back to its pointer, so it is no change of the
+/// worker's, and a picture the worker makes is stored where the gate's
+/// dry run on the repo finds it. Nothing to do where git-lfs isn't
+/// installed.
+fn lfs_pictures(repo: &Path, tree: &Path) -> Result<()> {
+    if git(tree, &["lfs", "version"]).is_err() {
+        return Ok(());
+    }
+    let common = git(
+        repo,
+        &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+    )?;
+    let store = Path::new(&common).join("lfs");
+    git(tree, &["config", "lfs.storage", &store.to_string_lossy()])?;
+    git(tree, &["lfs", "install", "--local"])?;
+    git(tree, &["lfs", "checkout"])?;
+    Ok(())
+}
+
 /// Every archived row of the home with a landed commit that `tools` (for a
 /// tools row) or `games` still has, as a task: its game, row, repo, kind,
 /// commit, the commit before it (the base a worker starts from) and the
-/// row a worker gets.
+/// row a worker gets. A trouble row is left out (is_trouble).
 pub(crate) fn candidates(home: &Path, tools: Option<&Path>, games: Option<&Path>) -> Vec<Value> {
     let mut out = Vec::new();
     let Ok(rd) = fs::read_dir(home.join("mechanics")) else {
@@ -178,6 +318,9 @@ pub(crate) fn candidates(home: &Path, tools: Option<&Path>, games: Option<&Path>
             let Some(row) = r["mechanic"].as_str() else {
                 continue;
             };
+            if is_trouble(&r) {
+                continue;
+            }
             let repo = if r["repo"] == json!("tools") {
                 "tools"
             } else {
@@ -190,26 +333,10 @@ pub(crate) fn candidates(home: &Path, tools: Option<&Path>, games: Option<&Path>
             // row has none there (on 2026-11-26 all 57 kept were game
             // rows'), so it is the first commit on main whose message names
             // the row, as the tool's commits do: "(row GAME/ROW)".
-            let named = || {
-                git(
-                    at,
-                    &[
-                        "log",
-                        "refs/heads/main",
-                        "--reverse",
-                        "--format=%H",
-                        "-F",
-                        "--grep",
-                        &format!("(row {game}/{row})"),
-                    ],
-                )
-                .ok()
-                .and_then(|o| o.lines().next().map(str::to_owned))
-            };
             let Some(commit) = r["landed"]["commit"]
                 .as_str()
                 .map(str::to_owned)
-                .or_else(named)
+                .or_else(|| named_commit(at, &game, row))
             else {
                 continue;
             };
@@ -228,6 +355,9 @@ pub(crate) fn candidates(home: &Path, tools: Option<&Path>, games: Option<&Path>
                 .lines()
                 .map(str::to_owned)
                 .collect();
+            if left_out(home, &game, &r, at, &full, &base, &files).is_some() {
+                continue;
+            }
             out.push(json!({
                 "id": format!("{game}/{row}"),
                 "game": game,
@@ -397,7 +527,8 @@ pub(crate) fn trial(rig: &Rig, task: &Value, label: &str, n: u32, stamp: &str) -
         .args(["--branch", &branch])
         .arg(repo)
         .arg(&tree)
-        // Pictures kept outside git stay pointers: nothing is fetched.
+        // Pictures kept outside git are cloned as pointers, and checked
+        // out from the repo's own LFS store just after (lfs_pictures).
         .env("GIT_LFS_SKIP_SMUDGE", "1")
         .stdin(Stdio::null())
         .output()
@@ -410,6 +541,7 @@ pub(crate) fn trial(rig: &Rig, task: &Value, label: &str, n: u32, stamp: &str) -
         );
     }
     let ran = (|| -> Result<Value> {
+        lfs_pictures(repo, &tree).context("checking out the tree's LFS pictures")?;
         let games = if tools_row { &rig.games } else { &tree };
         // The checkout the row is about is the tree, in what the worker
         // may read too: the person's own is at today's tip, with the fix.
@@ -963,6 +1095,62 @@ mod tests {
         );
     }
 
+    /// A trouble row's measure is a health line of today's home and
+    /// GitHub, which a trial can't put back, so a pick over an archive that
+    /// holds one leaves it out of the set; docs/worker-evals.md says so.
+    #[test]
+    fn a_pick_leaves_trouble_rows_out_of_the_set() {
+        let t = tempfile::tempdir().unwrap();
+        let repo = t.path().join("repo");
+        fs::create_dir_all(&repo).unwrap();
+        let g = |args: &[&str]| {
+            let ok = Command::new("git")
+                .arg("-C")
+                .arg(&repo)
+                .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+                .args(["-c", "commit.gpgsign=false"])
+                .args(args)
+                .status()
+                .unwrap()
+                .success();
+            assert!(ok, "git {args:?}");
+        };
+        g(&["init", "-q", "-b", "main"]);
+        g(&["commit", "-q", "--allow-empty", "-m", "first"]);
+        g(&["commit", "-q", "--allow-empty", "-m", "second"]);
+        let landed = git(&repo, &["rev-parse", "HEAD"]).unwrap();
+        let home = t.path().join("home");
+        fs::create_dir_all(home.join("mechanics").join("g")).unwrap();
+        let row = |name: &str, closed: u64| {
+            json!({"mechanic": name, "status": "done", "repo": "tools",
+                "landed": {"commit": landed}, "closed_ms": closed})
+        };
+        let mut keyed = row("checkout-health", 3);
+        keyed["trouble"] = json!({"kind": "health", "key": "checkout health"});
+        fs::write(
+            crate::mechanic::archive::archive_file(&home, "g"),
+            serde_json::to_string(&[
+                row("tree-count", 1),
+                row("trouble-card-failed-in-the-last-hour-0e911a", 2),
+                keyed,
+            ])
+            .unwrap(),
+        )
+        .unwrap();
+        let set = pick(candidates(&home, Some(&repo), None), 10);
+        let ids: Vec<&str> = set.iter().filter_map(|c| c["id"].as_str()).collect();
+        assert_eq!(ids, ["g/tree-count"]);
+        let doc = fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../docs/worker-evals.md"
+        ))
+        .unwrap();
+        assert!(
+            doc.contains("A trouble row is left out"),
+            "docs/worker-evals.md says the set leaves trouble rows out"
+        );
+    }
+
     /// The set's tasks are found by GAME/ROW, or by a row's name when one
     /// task alone has it.
     #[test]
@@ -1088,5 +1276,297 @@ mod tests {
         let lines = crate::worker_runs::lines_of(&results_file(&rig.home));
         assert_eq!(lines.len(), 1);
         assert!(!rig.home.join("mechanics").exists());
+    }
+
+    /// The first replay of the whole set, `--trials 2 --label
+    /// baseline-01403e91` on the build at 01403e91 (2026-11-27), is in
+    /// docs/worker-evals.md: its row of the before and after table has
+    /// `gp loop replay --report`'s numbers in place of "no replay has been
+    /// run yet", and one paragraph says what stopped the 11 trials that
+    /// left no patch, naming each one's trial folder (RUN/1795753219343-N
+    /// under replay/runs). It fails listing what the doc is missing.
+    #[test]
+    fn the_first_baseline_is_in_the_doc() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let doc = std::fs::read_to_string(root.join("docs/worker-evals.md")).unwrap();
+        let mut missing = Vec::new();
+        if doc.contains("no replay has been run yet") {
+            missing.push("the table still says no replay has been run yet".to_string());
+        }
+        let row = doc.lines().find(|l| {
+            l.starts_with('|')
+                && l.split('|')
+                    .any(|c| c.trim().trim_matches('`') == "baseline-01403e91")
+        });
+        match row {
+            None => missing.push("the table has no row labelled baseline-01403e91".into()),
+            Some(row) => {
+                // Change | Label | Tasks | Trials | Pass rate | Pass every
+                // trial | Turns | Cost | Refusals
+                let cells: Vec<&str> = row.split('|').map(str::trim).collect();
+                let want = [
+                    (3, "30"),
+                    (4, "60"),
+                    (5, "45.0%"),
+                    (6, "36.7%"),
+                    (7, "65.87"),
+                    (8, "2.28"),
+                    (9, "3.25"),
+                ];
+                for (i, w) in want {
+                    if !cells.get(i).is_some_and(|c| c.contains(w)) {
+                        missing.push(format!(
+                            "the baseline row's column {i} is {:?}, wanted {w}",
+                            cells.get(i).copied().unwrap_or("")
+                        ));
+                    }
+                }
+            }
+        }
+        // The 11 trials that ended with no patch, by their run folder's
+        // name after the game and the trial's stamp.
+        let no_patch = [
+            ("trouble-the-home-s-disk-has-gb-free-under-gb-gp-8546ab", 1),
+            ("trouble-github-s-check-web-fails-on-main-at-run-0e911a", 1),
+            ("trouble-github-s-check-web-fails-on-main-at-run-0e911a", 2),
+            ("get-ready-screen", 1),
+            ("get-ready-screen", 2),
+            ("theme-trophies-at-the-dancers", 1),
+            ("theme-trophies-at-the-dancers", 2),
+            ("trouble-the-home-s-disk-has-gb-free-under-gb-gp-7e400a", 1),
+            ("trouble-the-home-s-disk-has-gb-free-under-gb-gp-7e400a", 2),
+            ("theme-tip-money", 2),
+            ("theme-font-at-sign-and-credits", 1),
+        ];
+        let logs: Vec<String> = no_patch
+            .iter()
+            .map(|(run, n)| format!("-{run}/1795753219343-{n}"))
+            .collect();
+        let best = doc
+            .split("\n\n")
+            .map(|p| logs.iter().filter(|l| p.contains(l.as_str())).count())
+            .max()
+            .unwrap_or(0);
+        if best < logs.len() {
+            let unnamed: Vec<&str> = logs
+                .iter()
+                .filter(|l| !doc.contains(l.as_str()))
+                .map(|l| l.trim_start_matches('-'))
+                .collect();
+            missing.push(format!(
+                "no paragraph names all 11 no-patch trials' logs (the best names {best}); \
+                 not named anywhere: {}",
+                unnamed.join(", ")
+            ));
+        }
+        assert!(
+            missing.is_empty(),
+            "docs/worker-evals.md is missing the first baseline:\n{}",
+            missing.join("\n")
+        );
+    }
+    /// Runs git in `repo` as a test's committer; panics when it fails.
+    fn git_in(repo: &Path, args: &[&str]) {
+        let ok = Command::new("git")
+            .arg("-C")
+            .arg(repo)
+            .args([
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@t",
+                "-c",
+                "commit.gpgsign=false",
+            ])
+            .args(args)
+            .stdin(Stdio::null())
+            .status()
+            .unwrap()
+            .success();
+        assert!(ok, "git {args:?}");
+    }
+
+    /// Row replay-theme-rows-get-what-they-need: a model trial's
+    /// tree has the game's pictures as main has them, never their Git LFS
+    /// pointers. The trials of replay baseline-01403e91 cloned the tree
+    /// with GIT_LFS_SKIP_SMUDGE, and gp theme look check read 109 PNGs it
+    /// couldn't open. The real picture is no change of the worker's: a
+    /// worker that touches nothing still changed nothing. Skipped where
+    /// git-lfs isn't installed.
+    #[test]
+    fn a_model_trial_tree_has_the_real_pictures_main_has() {
+        let lfs = Command::new("git")
+            .args(["lfs", "version"])
+            .stdin(Stdio::null())
+            .output()
+            .is_ok_and(|o| o.status.success());
+        if !lfs {
+            eprintln!("git-lfs isn't installed: skipped");
+            return;
+        }
+        let t = tempfile::tempdir().unwrap();
+        let repo = t.path().join("games");
+        let pics = repo.join("g").join("themes").join("t").join("theme");
+        fs::create_dir_all(&pics).unwrap();
+        git_in(&repo, &["init", "-q", "-b", "main"]);
+        git_in(&repo, &["lfs", "install", "--local"]);
+        fs::write(
+            repo.join(".gitattributes"),
+            "*.png filter=lfs diff=lfs merge=lfs -text\n",
+        )
+        .unwrap();
+        let png: Vec<u8> = b"\x89PNG\r\n\x1a\n"
+            .iter()
+            .copied()
+            .chain((0..200u8).map(|i| i.wrapping_mul(37)))
+            .collect();
+        fs::write(pics.join("pic.png"), &png).unwrap();
+        fs::write(repo.join("g").join("model.toml"), "a = 1\n").unwrap();
+        git_in(&repo, &["add", "."]);
+        git_in(&repo, &["commit", "-qm", "the theme"]);
+        // Main's own blob is the pointer: the picture is in LFS.
+        let blob = git(&repo, &["show", "HEAD:g/themes/t/theme/pic.png"]).unwrap();
+        assert!(blob.starts_with("version https://git-lfs"), "{blob}");
+        let base = git(&repo, &["rev-parse", "HEAD"]).unwrap();
+        let tools = t.path().join("tools");
+        fs::create_dir_all(&tools).unwrap();
+        git_in(&tools, &["init", "-q", "-b", "main"]);
+        let seen = t.path().join("seen.png");
+        let sh = t.path().join("agent.sh");
+        fs::write(
+            &sh,
+            format!(
+                "cp \"$(pwd)/g/themes/t/theme/pic.png\" {}\ncat > /dev/null\n",
+                seen.display()
+            ),
+        )
+        .unwrap();
+        let rig = Rig {
+            home: t.path().join("home"),
+            tools,
+            games: repo.clone(),
+            gp: PathBuf::from("/nonexistent/gp"),
+            argv: vec!["sh".into(), sh.display().to_string()],
+            program: PathBuf::from("/bin/sh"),
+            timeout: Duration::from_secs(60),
+        };
+        let task = json!({"id": "g/r", "game": "g", "row": "r", "repo": "games", "kind": "model",
+            "base": base, "task": {"mechanic": "r", "status": "next", "note": "do it"}});
+        let r = trial(&rig, &task, "test", 1, "7").unwrap();
+        let got = fs::read(&seen).unwrap();
+        assert!(
+            got == png,
+            "the tree's pic.png is not main's picture: {}",
+            String::from_utf8_lossy(&got[..got.len().min(80)])
+        );
+        assert_eq!(r["why"], "the worker changed nothing");
+        assert_eq!(r["patch_bytes"], 0);
+        assert_eq!(git(&repo, &["branch", "--list", "replay/*"]).unwrap(), "");
+    }
+
+    /// Row replay-theme-rows-get-what-they-need: the set leaves out
+    /// what a trial can't do again from its base. A row with no target
+    /// whose landing put a theme's picture in (judged by the person's look
+    /// on its card, from an image model's picture: theme-tip-money,
+    /// theme-font-at-sign-and-credits), a row whose note names a later fix
+    /// it closed on (as get-ready-screen closed on drink-far-end's), and a
+    /// row that waited on another whose landing its base lacks or that
+    /// never landed (a card still to come). A row that waited on a landing
+    /// its base holds, and whose note names that and its own commit, is
+    /// kept.
+    #[test]
+    fn the_set_leaves_out_a_picture_card_and_a_row_that_waited_past_its_base() {
+        let t = tempfile::tempdir().unwrap();
+        let repo = t.path().join("games");
+        let game = repo.join("g");
+        fs::create_dir_all(game.join("themes").join("t").join("theme")).unwrap();
+        git_in(&repo, &["init", "-q", "-b", "main"]);
+        fs::write(repo.join("README"), "games\n").unwrap();
+        git_in(&repo, &["add", "."]);
+        git_in(&repo, &["commit", "-qm", "first"]);
+        let mut n = 0;
+        let mut commit = |files: &[&str]| {
+            n += 1;
+            for f in files {
+                fs::write(game.join(f), format!("{n}\n")).unwrap();
+            }
+            git_in(&repo, &["add", "."]);
+            git_in(&repo, &["commit", "-qm", &format!("change {n}")]);
+            git(&repo, &["rev-parse", "HEAD"]).unwrap()
+        };
+        let c1 = commit(&["model.toml"]);
+        let c2 = commit(&["themes/t/theme/tip.png", "themes/t/theme/art.txt"]);
+        let c3 = commit(&["model.toml"]);
+        let c4 = commit(&["model.toml"]);
+        let c5 = commit(&["model.toml"]);
+        let c6 = commit(&["model.toml"]);
+        let home = t.path().join("home");
+        fs::create_dir_all(home.join("mechanics").join("g")).unwrap();
+        let row = |m: &str, c: Option<&String>, closed: u64| {
+            let mut r = json!({"mechanic": m, "status": "done", "closed_ms": closed,
+                "note": "Landed on your YES."});
+            if let Some(c) = c {
+                r["landed"] = json!({"card": format!("card-{m}"), "commit": c});
+            }
+            r
+        };
+        let mut picture = row("theme-pic", Some(&c2), 2);
+        picture["measure_needed"] =
+            json!("a theme picture has no scoreboard line: it is done when its card lands");
+        let mut past = row("fixed-later", Some(&c3), 3);
+        past["target"] = json!("level 1 sprites at least 10 of 10");
+        past["waits_on"] = json!("g/later-fix");
+        // A commit's short name as a note gives it, with a digit and a
+        // letter in it (the note's all-digit words are no commit's).
+        let short = |c: &str| -> String {
+            let n = (7..=c.len())
+                .find(|&n| {
+                    let s = &c[..n];
+                    s.chars().any(|x| x.is_ascii_digit())
+                        && s.chars().any(|x| x.is_ascii_alphabetic())
+                })
+                .unwrap_or(c.len());
+            c[..n].to_owned()
+        };
+        let mut held = row("waited-in-base", Some(&c5), 5);
+        held["waits_on"] = json!("plain-fix");
+        // A note that names a commit its base holds, and its own commit.
+        held["note"] = json!(format!(
+            "Its wait is over: plain-fix landed ({}). Landed as {}.",
+            short(&c1),
+            short(&c5)
+        ));
+        let mut card = row("waited-on-a-card", Some(&c6), 6);
+        card["waits_on"] = json!("g/never-landed");
+        // Its wait gone, its note names the later fix it closed on.
+        let mut closed = row("closed-on-a-later-fix", Some(&c1), 8);
+        closed["note"] = json!(format!(
+            "Its split at frame 419 was later-fix's, fixed by {}.",
+            short(&c4)
+        ));
+        let archive = vec![
+            row("plain-fix", Some(&c1), 1),
+            picture,
+            past,
+            row("later-fix", Some(&c4), 4),
+            held,
+            card,
+            row("never-landed", None, 7),
+            closed,
+        ];
+        fs::write(
+            crate::mechanic::archive::archive_file(&home, "g"),
+            serde_json::to_string_pretty(&archive).unwrap(),
+        )
+        .unwrap();
+        let got: BTreeSet<String> = candidates(&home, None, Some(&repo))
+            .iter()
+            .filter_map(|c| c["row"].as_str().map(str::to_owned))
+            .collect();
+        let want: BTreeSet<String> = ["plain-fix", "later-fix", "waited-in-base"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect();
+        assert_eq!(got, want);
     }
 }

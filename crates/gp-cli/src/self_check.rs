@@ -529,7 +529,7 @@ struct Use {
 /// The page's files gp reads at run time from a checkout, or from the
 /// bundle unpacked: each must be there and open.
 const PAGE_FILES: [&str; 6] = [
-    "mechanic/index.html",
+    "mechanic/screen.html",
     "mechanic/start.html",
     "editor/dist/index.html",
     "scripts/web/page/preview.js",

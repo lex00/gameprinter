@@ -196,6 +196,24 @@ when = [{ counter = "attract_screen", cmp = "==", value = 2 }]
 
 A theme names a string's cells `text-SLOT`, after its slot.
 
+## Colour cycles
+
+A board game flashes or fades a colour by walking a list of steps in its ROM: wait so many frames, write a colour into a colour slot, go on to the next step, until a zero. `cycles` (feature `level.board.cycles`) names such lists, each where it starts in a `rows` slot:
+
+```toml
+[levels.main.present.board]
+palette = "colors"
+tiles = "tiles"
+screen = "stage"
+cycles = [{ steps = { slot = "lights", row = 0 } }, { steps = { slot = "lights", row = 1 } }]
+```
+
+| Key | Meaning |
+|---|---|
+| `steps` | Required: where the list starts, a `rows` slot's row read from `column` three bytes a step (the frames it waits, the colour slot it writes, the colour) up to a zero frames byte or the row's end |
+
+The model draws the level's colours without them. `gp theme kit GAME --rom ROM` lists each cycle's steps in the kit's local part (`board_cycles` in local.json), from the person's own lift, so a theme's flashes can keep the board's time.
+
 ## An entity's board sprite
 
 ```toml

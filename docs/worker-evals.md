@@ -20,7 +20,15 @@ This reads every game's archive in the home and writes `$GP_HOME/work/loop/repla
 | `page` | A tools row whose landed commit changed a file under `editor/`, `scripts/web/` or `site/`, or any `.js`, `.css` or `.html` |
 | `model` | A game's row |
 
-A task keeps the row's name, its target or what would measure it, and the words it was first filed with (`asked`, the person's own, else `what` or `plain`). It never keeps the row's last note, which says what landed. A row with no measure of its own gets "the gate's dry run passes on the change". A row whose commit the checkout no longer has is left out.
+A task keeps the row's name, its target or what would measure it, and the words it was first filed with (`asked`, the person's own, else `what` or `plain`). It never keeps the row's last note, which says what landed. A row with no measure of its own gets "the gate's dry run passes on the change". A row whose commit the checkout no longer has is left out, and so are rows a trial can't do again from their base:
+
+- a game's row with no target whose landing put a picture into a theme (`GAME/themes/.../*.png`): an image model made the picture and the person's look on its card judged it, so no worker makes it again and no gate says it passes;
+- a row whose note names a commit of its repo, other than its own, that its base lacks: it closed on a later fix (get-ready-screen's "fixed by e5e06ef");
+- a row that waited on another (`waits_on`) whose landing its base lacks, or that never landed. A row waited on in the other repo counts as there: a trial runs that repo at today's tip.
+
+A trouble row is left out as well (a `trouble-` row, or one with a `trouble` field, as the loop files them): its measure is a `gp loop health` line read from today's home and GitHub, which a trial can't put back as it was, so its worker finds the trouble cleared and rightly changes nothing.
+
+Of the 11 trials of replay `baseline-01403e91` that made no patch, 5 were trouble rows and 6 were rows of the three kinds listed.
 
 Keep the set fixed while two sides are compared. `gp loop replay` with nothing else lists it.
 
@@ -34,11 +42,11 @@ gp loop replay --all --trials 2 --label before
 Each trial:
 
 1. A scratch home is made under `$GP_HOME/work/loop/replay/runs/GAME-ROW/STAMP-N/home`, with the task's row in its quest log as next. The worker's cards go there, where no runner answers them. Its page is marked served by the replay's own process, so a call that needs the person's yes waits on a card and is never run on the worker's word.
-2. A worktree of the task's base commit is added, detached, beside it.
+2. The trial's tree is cloned beside it: one branch made at the task's base, sharing the repo's objects, so nothing that landed after the base is in it. Its pictures in Git LFS are checked out from the repo's own LFS store (the tree's `lfs.storage`, as a worktree shares it), with nothing fetched, so a theme row's worker reads the real PNGs and not their pointers. A real picture is no change of the worker's, and one it makes is stored where the gate's dry run finds it.
 3. A worker starts there with today's brief, tools, environment and limits, as the runner would start it (`brief`, `claude_args` and `worker_env` of the runner), on the agent command `--agent` names (else `$GP_CLIP_AGENT`, else `claude`), for at most an hour.
 4. Everything in its tree against the base, its own commits and what it left uncommitted, is written as a patch. An empty patch fails the trial.
 5. The gate's dry run judges the patch: `gp tool gate --dry-run` for a tools row, `gp model gate GAME --dry-run` for a game's, onto a branch `replay/STEP` made at the base. This is the real gate, so it waits its turn for the gate's lock behind the loop's own landings.
-6. The worktree, the branch, the worker's cargo target (the scratch home's `work/target`, 3 to 4 GB) and its module builds (`work/module-build`) are removed, and the worker's record says done: its pid is the replay's own process, which goes on to the next trial. The brief, the log, the patch and the rest of the scratch home stay in the trial's folder. `gp loop clean` and gp serve's hourly sweep remove the builds a trial left (an older gp's trials kept theirs: 114 GB on 2026-11-27) once its tree is gone or no worker there holds its step: an older gp's trial records say working for as long as the replay that ran them runs.
+6. The tree, the branch, the worker's cargo target (the scratch home's `work/target`, 3 to 4 GB) and its module builds (`work/module-build`) are removed, and the worker's record says done: its pid is the replay's own process, which goes on to the next trial. The brief, the log, the patch and the rest of the scratch home stay in the trial's folder. `gp loop clean` and gp serve's hourly sweep remove the builds a trial left (an older gp's trials kept theirs: 114 GB on 2026-11-27) once its tree is gone or no worker there holds its step: an older gp's trial records say working for as long as the replay that ran them runs.
 
 Nothing lands. One line per trial goes to `$GP_HOME/work/loop/replay/results.jsonl`: the label, the task, pass or why not, how the run ended, and the run's turns, cost and refusals from its log's result line.
 
@@ -72,7 +80,11 @@ For a named change to the brief, the tools or the model:
 
 | Change | Label | Tasks | Trials | Pass rate | Pass every trial | Turns | Cost | Refusals |
 |---|---|---|---|---|---|---|---|---|
-| (no replay has been run yet) | | | | | | | | |
+| none: the first baseline, on the build at 01403e91 (2026-11-27) | `baseline-01403e91` | 30 | 60 | 27 of 60, 45.0% | 11 of 30, 36.7% | 65.87 | $2.28 | 3.25 |
+
+The baseline is `gp loop replay --all --trials 2 --label baseline-01403e91`. By kind, tool trials passed 13 of 20, page trials 8 of 20 and model trials 6 of 20. Of its 33 failures, 11 ended with no patch (6 model, 5 tool). Of the rest, 7 failed `just check`, 5 failed only `cargo fmt`, 1 did not build and 1 failed `cargo test`. The model gate refused 8 for its own rules: a spec digest the module doesn't compile to (3), corpus clips changed without being named (2), a file outside the game (2) and the ROM-blocking hook (1).
+
+The 11 trials that left no patch all ended with a result line in 10 to 37 turns, with at most 4 refused calls each, and none of them was cut off. No worker gave up or was stopped by a refusal: each was given too little by the replay. Five were trouble rows, and the trouble had already cleared on the live home and GitHub, where `gp loop health` reads it, so each worker read the health line, found the measure met and closed the row with no change (tapper-trouble-the-home-s-disk-has-gb-free-under-gb-gp-8546ab/1795753219343-1, tapper-trouble-github-s-check-web-fails-on-main-at-run-0e911a/1795753219343-1 and tapper-trouble-github-s-check-web-fails-on-main-at-run-0e911a/1795753219343-2, tapper-trouble-the-home-s-disk-has-gb-free-under-gb-gp-7e400a/1795753219343-1 and tapper-trouble-the-home-s-disk-has-gb-free-under-gb-gp-7e400a/1795753219343-2). The other trial of 8546ab made a patch and passed. Two were the get-ready screen, a row that a person's look finishes: with no clip or score in the scratch home showing anything wrong, both workers put the row to the person as a look (tapper-get-ready-screen/1795753219343-1, tapper-get-ready-screen/1795753219343-2). Four were theme rows whose work stood on something the base commit and the scratch home don't have: a card that hadn't landed, the person's own copy of the theme, a tools row of the real quest log, or the theme's pictures, which a trial's tree has as Git LFS pointers (tapper-theme-trophies-at-the-dancers/1795753219343-1, tapper-theme-trophies-at-the-dancers/1795753219343-2, tapper-theme-tip-money/1795753219343-2, tapper-theme-font-at-sign-and-credits/1795753219343-1). Each of these is the replay's fault, and two tools rows of tapper's quest log are for it: replay-set-skips-cleared-trouble-rows and replay-theme-rows-get-what-they-need. The folders are under `$GP_HOME/work/loop/replay/runs`.
 
 The first experiment waiting for a run: a worker's MCP server lists three tools in place of 33 (issue 54). Its before side needs a gp from before that change.
 

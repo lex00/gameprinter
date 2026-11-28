@@ -11,7 +11,7 @@
 //!
 //! | Route | What |
 //! |---|---|
-//! | `GET /`, `/app.js`, `/nesplayer.js`, `/style.css` | The page |
+//! | `GET /` (and `/index.html`, the older page's address), `/screen.js`, `/screen.css`, `/nesplayer.js` | The page |
 //! | `GET /gp_play.wasm`, `/rom` | The player and the ROM |
 //! | `GET /gp_controls.wasm`, `/controls.js`, `/shell-keys.js` | The controls the page and the screen page read their keys and gamepads through (docs/controls.md): the module beside the player, or `$GP_CONTROLS_WASM`, and the public page's scripts |
 //! | `GET /api/session` | The open session's state ([`Session::state`]) |
@@ -66,10 +66,10 @@ pub(crate) struct Start<'a> {
 /// for hours.
 const MAX_BODY: usize = 16 << 20;
 
-/// The repo holding the page (`mechanic/index.html`): the working folder or
+/// The repo holding the page (`mechanic/screen.html`): the working folder or
 /// one above it, else the checkout gp was built from.
 pub(crate) fn repo_root() -> Result<PathBuf> {
-    crate::repo::find_repo(|d| d.join("mechanic/index.html").is_file()).ok_or_else(|| {
+    crate::repo::find_repo(|d| d.join("mechanic/screen.html").is_file()).ok_or_else(|| {
         anyhow!("no mechanic/ page found: run gp mechanic start inside the gameprinter repo")
     })
 }
@@ -1044,15 +1044,11 @@ fn handle(s: &Server, req: &Request) -> Result<Response> {
     match (req.method.as_str(), req.path.as_str()) {
         // The screen page is the one page (the owner, 2026-11-26: "get rid
         // of the older one"): gp serve's /mechanic/GAME/, and its root,
-        // open it. The older page stays at /index.html until it goes.
-        ("GET" | "HEAD", "/") => page("screen.html", "text/html; charset=utf-8"),
-        ("GET" | "HEAD", "/index.html") => page("index.html", "text/html; charset=utf-8"),
-        ("GET" | "HEAD", "/app.js") => page("app.js", "text/javascript; charset=utf-8"),
-        ("GET" | "HEAD", "/rebuild-card.js") => {
-            page("rebuild-card.js", "text/javascript; charset=utf-8")
-        }
+        // open it. The older page is gone, and its address, /index.html,
+        // a link kept from before, opens the screen page too.
+        ("GET" | "HEAD", "/" | "/index.html") => page("screen.html", "text/html; charset=utf-8"),
         ("GET" | "HEAD", "/nesplayer.js") => page("nesplayer.js", "text/javascript; charset=utf-8"),
-        // app.js and screen.js import it: the wait for the model's frame.
+        // screen.js imports it: the wait for the model's frame.
         ("GET" | "HEAD", "/model-load.js") => {
             page("model-load.js", "text/javascript; charset=utf-8")
         }
@@ -1074,10 +1070,10 @@ fn handle(s: &Server, req: &Request) -> Result<Response> {
         // one screen, which the agent drives (gp_mcp::screen).
         ("GET" | "HEAD", "/screen.html") => page("screen.html", "text/html; charset=utf-8"),
         ("GET" | "HEAD", "/screen.js") => page("screen.js", "text/javascript; charset=utf-8"),
-        // app.js and screen.js read the controls as the public page does:
+        // screen.js reads the controls as the public page does:
         // controls.js (which imports the shell's key table) on
-        // gp_controls.wasm (docs/controls.md). Without these routes their
-        // scripts don't load at all and the pages stay on LOADING.
+        // gp_controls.wasm (docs/controls.md). Without these routes its
+        // script doesn't load at all and the page stays on LOADING.
         ("GET" | "HEAD", "/controls.js" | "/shell-keys.js") => {
             let dir = crate::repo::page_files(&s.repo, "scripts/web/page");
             Ok(Response::bytes(
@@ -1109,9 +1105,6 @@ fn handle(s: &Server, req: &Request) -> Result<Response> {
         }
         ("GET" | "HEAD", "/api/screen/clip") => screen_clip(s, req),
         ("GET" | "HEAD", "/api/screen/work-clip") => screen_work_clip(s, req),
-        ("GET" | "HEAD", "/shell.js") => page("shell.js", "text/javascript; charset=utf-8"),
-        // The status line: where the port stands and the next step.
-        ("GET" | "HEAD", "/next.js") => page("next.js", "text/javascript; charset=utf-8"),
         // A picture the agent proposes for the person's theme (issue #4).
         ("GET" | "HEAD", "/picture-card.js") => {
             page("picture-card.js", "text/javascript; charset=utf-8")
@@ -1128,28 +1121,9 @@ fn handle(s: &Server, req: &Request) -> Result<Response> {
         ("GET" | "HEAD", "/sprite-card.js") => {
             page("sprite-card.js", "text/javascript; charset=utf-8")
         }
-        // The old inspector's views on the page (mechanic/details/).
-        ("GET" | "HEAD", p) if part_in(p, "/details/").is_some() => {
-            let (name, kind) = part_in(p, "/details/").unwrap_or_default();
-            match fs::read(s.page.join("details").join(name)) {
-                Ok(b) => Ok(Response::bytes(kind, b)),
-                Err(_) => Ok(Response::error(404, "not here")),
-            }
-        }
-        // REFINE's parts (the background work's views), when they're there.
-        ("GET" | "HEAD", p) if part_name(p).is_some() => {
-            let (name, kind) = part_name(p).unwrap_or_default();
-            match fs::read(s.page.join("refine").join(name)) {
-                Ok(b) => Ok(Response::bytes(kind, b)),
-                Err(_) => Ok(Response::error(404, "not here")),
-            }
-        }
         ("GET" | "HEAD", "/api/themes") => Ok(Response::json(&themes(s))),
-        // THEMES's own routes and the pane's files (crate::theme_serve).
-        (_, p)
-            if (p.starts_with("/api/themes/") || p.starts_with("/themes/"))
-                && s.rebuild.is_some() =>
-        {
+        // THEMES's own routes (crate::theme_serve).
+        (_, p) if p.starts_with("/api/themes/") && s.rebuild.is_some() => {
             let r = s
                 .rebuild
                 .as_ref()
@@ -1159,7 +1133,6 @@ fn handle(s: &Server, req: &Request) -> Result<Response> {
                 paths: &s.paths,
                 game: &s.game,
                 dir: &r,
-                page: &s.page,
             };
             crate::theme_serve::route(&at, req)
                 .unwrap_or_else(|| Ok(Response::error(404, "not found")))
@@ -1668,7 +1641,7 @@ fn handle(s: &Server, req: &Request) -> Result<Response> {
         // An arcade model sounds through the board's own sound CPU, which
         // the rebuild's frame runs from the player (the same build as
         // /gp_play.wasm), the sets gp knows and the session's ROM, which
-        // the page hands it (`__gpRom`, mechanic/app.js).
+        // the page hands it (`__gpRom`, mechanic/screen.js).
         ("GET" | "HEAD", "/rebuild/gp_arcade_play.wasm") if s.platform == Platform::Arcade => {
             match fs::read(&s.wasm) {
                 Ok(b) => Ok(Response::bytes("application/wasm", b)),
@@ -1841,30 +1814,6 @@ fn level_key(file: &Path) -> Option<(u16, std::collections::HashMap<u8, String>)
         names.insert(v, name.to_owned());
     }
     Some((addr, names))
-}
-
-/// A file of REFINE's parts: `/refine/NAME.js` or `.css`, a plain name.
-fn part_name(p: &str) -> Option<(&str, &'static str)> {
-    part_in(p, "/refine/")
-}
-
-/// A file of a folder of the page's parts: `PREFIX` and a plain name,
-/// `.js` or `.css`.
-fn part_in<'a>(p: &'a str, prefix: &str) -> Option<(&'a str, &'static str)> {
-    let name = p.strip_prefix(prefix)?;
-    let ok = !name.is_empty()
-        && name
-            .bytes()
-            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-' || b == b'.')
-        && !name.starts_with('.');
-    let kind = if name.ends_with(".js") {
-        "text/javascript; charset=utf-8"
-    } else if name.ends_with(".css") {
-        "text/css; charset=utf-8"
-    } else {
-        return None;
-    };
-    ok.then_some((name, kind))
 }
 
 /// THEMES's view: the content packages the person's registry
@@ -2341,9 +2290,7 @@ mod tests {
         let repo = d.join("repo");
         fs::create_dir_all(repo.join("mechanic")).unwrap();
         for f in [
-            "index.html",
             "screen.html",
-            "app.js",
             "nesplayer.js",
             "style.css",
             "refine.html",
@@ -2454,8 +2401,8 @@ mod tests {
 
     /// The page's files, the ROM, and the player's absence said plainly as
     /// JSON (the page shows the message instead of compiling it). The
-    /// root is the screen page; the older page is at /index.html until it
-    /// goes (docs/mechanic-page.md).
+    /// root is the screen page, and so is the older page's address,
+    /// /index.html, whose page is gone (docs/mechanic-page.md).
     #[test]
     fn the_page_the_rom_and_a_missing_player() {
         let d = tempfile::tempdir().unwrap();
@@ -2464,8 +2411,8 @@ mod tests {
         assert_eq!((s, kind.as_str()), (200, "text/html; charset=utf-8"));
         assert_eq!(body, "the page's screen.html");
         assert_eq!(get(&srv, "/screen.html").1, "the page's screen.html");
-        assert_eq!(get(&srv, "/index.html").1, "the page's index.html");
-        assert_eq!(get(&srv, "/app.js").1, "the page's app.js");
+        assert_eq!(get(&srv, "/index.html").1, "the page's screen.html");
+        assert_eq!(call(&srv, "GET", "/app.js", None).0, 404);
         let (s, kind, _) = call(&srv, "GET", "/rom", None);
         assert_eq!((s, kind.as_str()), (200, "application/octet-stream"));
         let (s, kind, body) = call(&srv, "GET", "/gp_play.wasm", None);
@@ -3016,23 +2963,6 @@ mod tests {
         assert!(out.contains(r#""mechanic":"walk""#), "{out}");
     }
 
-    /// The page's input table (mechanic/actions.test.mjs): nothing acts
-    /// while a clip is sending, and a second press can't hand off twice.
-    /// Skipped where there is no node.
-    #[test]
-    fn the_page_does_nothing_twice() {
-        let test = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../mechanic/actions.test.mjs");
-        match std::process::Command::new("node").arg(&test).output() {
-            Ok(o) => assert!(
-                o.status.success(),
-                "{}{}",
-                String::from_utf8_lossy(&o.stdout),
-                String::from_utf8_lossy(&o.stderr)
-            ),
-            Err(_) => eprintln!("skipped: no node"),
-        }
-    }
-
     /// The screen page reads its controls as the public page does: the
     /// public page's controls.js and the shell's key table, and
     /// gp_controls.wasm from beside the player, or its absence in words.
@@ -3076,8 +3006,8 @@ mod tests {
         );
     }
 
-    /// The mechanic page's and the screen page's scripts parse as modules
-    /// and read the game's buttons through controls.js, with no gamepad
+    /// The screen page's script parses as a module and reads the game's
+    /// buttons through controls.js, with no gamepad
     /// code of their own, and the controls' test loads controls.js and the
     /// shell's key table (its cases run on the module where
     /// `$GP_CONTROLS_WASM` names one; the page's release check does).
@@ -3086,7 +3016,8 @@ mod tests {
     fn the_pages_scripts_load_on_the_shared_controls() {
         use std::io::Write as _;
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-        for page in ["app.js", "screen.js"] {
+        {
+            let page = "screen.js";
             let text = fs::read_to_string(root.join("mechanic").join(page)).unwrap();
             assert!(
                 text.contains("import { openControls } from \"./controls.js\";"),
@@ -3162,7 +3093,7 @@ mod tests {
         }
     }
 
-    /// The page's scripts each have a route: a module app.js or screen.js
+    /// The page's scripts each have a route: a module screen.js
     /// imports that the server doesn't give stops the page's script whole.
     #[test]
     fn the_page_serves_the_model_wait() {
@@ -3221,12 +3152,9 @@ mod tests {
     /// 2026-11-26: "get rid of the older one"): the older page,
     /// mechanic/index.html and mechanic/app.js, is gone, the server serves
     /// no route for it, scripts/web/check-mechanic.mjs drives only the
-    /// screen page, and no doc names the older page's files. Ignored until
-    /// the patch that removes the page, which takes the ignore off:
-    /// `cargo test -p gp-cli --bin gp older_mechanic_page_is_gone -- --ignored`
-    /// lists what is left of the older page, and passes once none is.
+    /// screen page, and no doc names the older page's files. A failure
+    /// lists what came back of the older page.
     #[test]
-    #[ignore = "passes once the older mechanic page is gone; its removal takes this off"]
     fn older_mechanic_page_is_gone() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let mut left = Vec::new();
@@ -3281,6 +3209,55 @@ mod tests {
         assert!(
             left.is_empty(),
             "the older page isn't gone:\n{}",
+            left.join("\n")
+        );
+    }
+
+    /// What scripts/web/check-mechanic.mjs checked on the older page, it
+    /// checks on the screen page, each by name: for every one, the check
+    /// calls `older("NAME", ...)`, which drives the screen page through it
+    /// or says the screen page doesn't have it, and nothing in the check
+    /// still waits on row page-check-on-the-screen-page (its skip lines
+    /// say they do). That row's measure; a failure lists what is left.
+    #[test]
+    fn page_check_checks_the_older_pages_list_on_the_screen_page() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let check = fs::read_to_string(root.join("scripts/web/check-mechanic.mjs")).unwrap();
+        let mut left = Vec::new();
+        if !check.contains("function older(") {
+            left.push("check-mechanic.mjs has no older() to run or name them".to_string());
+        }
+        for name in [
+            "a clip recorded and handed off",
+            "gp mechanic say",
+            "gp mechanic demo",
+            "REVIEW REBUILD",
+            "FREE PLAY",
+            "the yes cards",
+            "the agent's log",
+            "the picture proposal cards",
+            "the sound proposal cards",
+            "the sprite proposal cards",
+            "What is this?",
+            "the old editor's features",
+            "the 360 px layout",
+            "the no-player message",
+            "the arcade run",
+            "the ROM set picker",
+        ] {
+            if !check.contains(&format!("older(\"{name}\"")) {
+                left.push(format!("no older(\"{name}\", ...) in check-mechanic.mjs"));
+            }
+        }
+        if check.contains("page-check-on-the-screen-page") {
+            left.push(
+                "check-mechanic.mjs still leaves something to row page-check-on-the-screen-page"
+                    .to_string(),
+            );
+        }
+        assert!(
+            left.is_empty(),
+            "the page check doesn't check the older page's list on the screen page:\n{}",
             left.join("\n")
         );
     }

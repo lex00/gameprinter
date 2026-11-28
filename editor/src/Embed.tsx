@@ -1,8 +1,7 @@
-// One of the editor's views inside gp serve's one page (the mechanic page
-// at /mechanic/GAME/, mechanic/details/): /index.html?embed=VIEW&run=GAME
-// draws that view alone, with no header of its own, in the page's colors
-// (styles.css, `.embed`). The page shows it in its REFINE tab or its
-// Details drawer, so the person stays on one page.
+// One of the editor's views, drawn alone: /index.html?embed=VIEW&run=GAME
+// draws that view with no header of its own, in the page's colors
+// (styles.css, `.embed`). The older mechanic page showed it in its REFINE
+// tab and its Details drawer; the screen page doesn't frame it.
 //
 // - `game`: a recording of the game measured against the rebuilt game
 //   (GameView.tsx): both games at the same moment, the lockstep panel

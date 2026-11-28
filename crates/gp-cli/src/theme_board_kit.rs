@@ -287,7 +287,88 @@ pub(crate) fn local_of(
         v.sort_by_key(|f| code_of(f));
         v.dedup();
     }
+    local.board_cycles = cycles_of(m, lifted)?;
     Ok(local)
+}
+
+/// One of the board's colour cycles, as the local part lists it: the
+/// level whose look names it, where its list is in the lift, and its steps
+/// in order.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub(crate) struct Cycle {
+    pub level: String,
+    /// The `rows` slot, row and column the list starts at.
+    pub slot: String,
+    pub row: u32,
+    pub column: u32,
+    pub steps: Vec<CycleStep>,
+}
+
+/// A step of a colour cycle: the frames it waits, the colour slot it
+/// writes and the colour.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub(crate) struct CycleStep {
+    pub frames: u32,
+    pub slot: u32,
+    pub colour: u32,
+}
+
+/// The steps of a list from byte `column` of `row`: three bytes a step,
+/// up to a zero frames byte or the row's end (a step cut short by the
+/// row's end isn't one).
+fn steps_of(row: &[u32], column: u32) -> Vec<CycleStep> {
+    row.get(column as usize..)
+        .unwrap_or_default()
+        .as_chunks::<3>()
+        .0
+        .iter()
+        .take_while(|s| s[0] != 0)
+        .map(|s| CycleStep {
+            frames: s[0],
+            slot: s[1],
+            colour: s[2],
+        })
+        .collect()
+}
+
+/// Every colour cycle the model's levels' board looks name, in level
+/// order, each list once (the first level naming it), read from the lift.
+fn cycles_of(m: &Model, lifted: &Path) -> Result<Vec<Cycle>> {
+    let mut rows: BTreeMap<&str, Vec<Vec<u32>>> = BTreeMap::new();
+    let mut out: Vec<Cycle> = Vec::new();
+    for (name, l) in &m.levels {
+        let Some(b) = l.core.present.as_ref().and_then(|p| p.board.as_ref()) else {
+            continue;
+        };
+        for c in &b.cycles {
+            let s = &c.steps;
+            if out
+                .iter()
+                .any(|o| (o.slot.as_str(), o.row, o.column) == (s.slot.as_str(), s.row, s.column))
+            {
+                continue;
+            }
+            if !rows.contains_key(s.slot.as_str()) {
+                let r = crate::theme_kit::read_rows(lifted, m, &s.slot)?;
+                rows.insert(s.slot.as_str(), r);
+            }
+            let row = rows[s.slot.as_str()].get(s.row as usize).ok_or_else(|| {
+                anyhow!(
+                    "levels.{name}.present.board.cycles: `{}` has no row {}",
+                    s.slot,
+                    s.row
+                )
+            })?;
+            out.push(Cycle {
+                level: name.clone(),
+                slot: s.slot.clone(),
+                row: s.row,
+                column: s.column,
+                steps: steps_of(row, s.column),
+            });
+        }
+    }
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -464,6 +545,204 @@ high = { slot = "codes", column = 1 }
         assert!(
             problems.iter().any(|p| p.contains("[art.frames]")),
             "{problems:?}"
+        );
+    }
+
+    /// A made-up arcade lift for the local part: 1024 blank tiles but tile
+    /// 1, four sprites of one value each, a screen of tile 1, a palette
+    /// whose entry n is n, and `lights`, two rows of colour-cycle steps
+    /// (frames to wait, colour slot, colour), each list ending at a zero
+    /// byte. No game's bytes.
+    fn board_lift(dir: &Path) {
+        let map = "schema = 1\nplatform = \"arcade\"\nsource = \"cab\"\nsets = [\"cab\"]\n\n\
+                   [[asset]]\nname = \"tiles\"\nformat = \"mcr-tiles\"\nregion = \"gfx1\"\ncount = 1024\nper_row = 32\n\n\
+                   [[asset]]\nname = \"sprites\"\nformat = \"mcr-sprites\"\nregion = \"gfx2\"\ncount = 4\nper_row = 4\n\n\
+                   [[asset]]\nname = \"stage\"\nformat = \"mcr-screen\"\nregion = \"maincpu\"\noffset = 0\n\n\
+                   [[asset]]\nname = \"colors\"\nformat = \"mcr-palette\"\nregion = \"maincpu\"\noffset = 0\n\n\
+                   [[asset]]\nname = \"lights\"\nformat = \"byte-rows\"\nregion = \"maincpu\"\noffset = 0\ncount = 2\nwidth = 10\n";
+        std::fs::write(dir.join("assets.toml"), map).unwrap();
+        let png = |w: u32, h: u32, px: &[u8]| {
+            let mut out = Vec::new();
+            let mut e = png::Encoder::new(&mut out, w, h);
+            e.set_color(png::ColorType::Indexed);
+            e.set_depth(png::BitDepth::Eight);
+            e.set_palette((0..=255u8).flat_map(|i| [i; 3]).collect::<Vec<_>>());
+            let mut wr = e.write_header().unwrap();
+            wr.write_image_data(px).unwrap();
+            wr.finish().unwrap();
+            out
+        };
+        let (tw, th) = (32 * 8, 32 * 8);
+        let mut t = vec![0u8; (tw * th) as usize];
+        for y in 0..8 {
+            for x in 8..16 {
+                t[y * tw as usize + x] = 5;
+            }
+        }
+        std::fs::write(dir.join("tiles.png"), png(tw, th, &t)).unwrap();
+        let (sw, sh) = (4 * 32, 32);
+        let s: Vec<u8> = (0..sw * sh)
+            .map(|i| [5, 3, 3, 2][(i % sw / 32) as usize])
+            .collect();
+        std::fs::write(dir.join("sprites.png"), png(sw, sh, &s)).unwrap();
+        let row = vec!["0x1001"; 32].join(", ");
+        let rows = vec![format!("[{row}]"); 30].join(",\n");
+        std::fs::write(dir.join("stage.toml"), format!("rows = [{rows}]\n")).unwrap();
+        let colors: Vec<String> = (0..64).map(|n| n.to_string()).collect();
+        std::fs::write(
+            dir.join("colors.toml"),
+            format!("colors = [{}]\n", colors.join(", ")),
+        )
+        .unwrap();
+        // Two lists: three steps, then one; the bytes after a list's zero
+        // aren't its steps.
+        std::fs::write(
+            dir.join("lights.toml"),
+            "rows = [[8, 33, 63, 4, 33, 7, 12, 34, 28, 0], [16, 48, 21, 0, 9, 9, 9, 0, 0, 0]]\n",
+        )
+        .unwrap();
+    }
+
+    /// The made-up board's model, its level's look naming the colour
+    /// cycles (`cycles`) when `cycles` is given.
+    fn board_model(cycles: &str) -> String {
+        format!(
+            r#"
+[model]
+schema = "0.4"
+name = "cab"
+title = "Cab"
+description = "A made-up arcade game"
+source = "cab"
+view = "side"
+frame_rate = "30"
+systems = ["rules", "entity_states", "counters", "spawn", "platformer.player", "platformer.enemies", "platformer.contact", "exits", "camera"]
+start_level = "main"
+
+[model.extensions]
+platformer = "0.4"
+
+[input]
+device = "arcade"
+
+[input.actions]
+left = "left"
+
+[assets.tiles]
+kind = "board-tiles"
+role = "graphics"
+[assets.tiles.from]
+source = "cab"
+asset = "tiles"
+
+[assets.sprites]
+kind = "board-sprites"
+role = "graphics"
+[assets.sprites.from]
+source = "cab"
+asset = "sprites"
+
+[assets.stage]
+kind = "board-screen"
+role = "layout"
+[assets.stage.from]
+source = "cab"
+asset = "stage"
+
+[assets.colors]
+kind = "board-palette"
+role = "palettes"
+[assets.colors.from]
+source = "cab"
+asset = "colors"
+
+[assets.lights]
+kind = "rows"
+role = "palettes"
+[assets.lights.from]
+source = "cab"
+asset = "lights"
+
+[entities.player]
+role = "player"
+size = [16, 16]
+hitbox = {{ x = 0, y = 0, w = 16, h = 16 }}
+
+[entities.player.board_sprite]
+slot = "sprites"
+picture = {{ number = 2 }}
+
+[levels.main]
+description = "A screen"
+empty = true
+size = [32, 30]
+tile_size = 16
+
+[levels.main.present.board]
+palette = "colors"
+tiles = "tiles"
+screen = "stage"
+{cycles}
+"#
+        )
+    }
+
+    /// The row theme-kit-board-colour-cycles's measure: the local
+    /// part of a board-drawn game's kit lists its board's colour cycles,
+    /// each list's steps in order with the frames each waits, the colour
+    /// slot it writes and the colour, read up to the list's zero byte, so a
+    /// theme's flashes can keep the board's time with no script reading
+    /// the ROM (a theme maker's script read three such lists of
+    /// a game's space room). The model names them in
+    /// `levels.*.present.board.cycles` (feature `level.board.cycles`).
+    #[test]
+    fn the_local_part_lists_the_boards_colour_cycles() {
+        let d = tempfile::tempdir().unwrap();
+        board_lift(d.path());
+        // The made-up board's local part builds with no cycles named, and
+        // lists none.
+        let plain = Model::parse(&board_model("")).unwrap();
+        let kit = crate::theme_kit::kit_of(&plain, "cab");
+        let local = local_of(&plain, &kit, &BTreeMap::new(), d.path()).unwrap();
+        let json = serde_json::to_value(&local).unwrap();
+        assert!(
+            json.get("board_cycles")
+                .is_none_or(|c| c.as_array().is_some_and(Vec::is_empty)),
+            "{json}"
+        );
+        // Its look names two lists of steps, each a row of `lights`.
+        let m = Model::parse(&board_model(
+            r#"cycles = [{ steps = { slot = "lights", row = 0 } }, { steps = { slot = "lights", row = 1 } }]"#,
+        ))
+        .unwrap_or_else(|e| panic!("the model can't name a board's colour cycles: {e}"));
+        let kit = crate::theme_kit::kit_of(&m, "cab");
+        let local = local_of(&m, &kit, &BTreeMap::new(), d.path()).unwrap();
+        let json = serde_json::to_value(&local).unwrap();
+        let lists = json
+            .get("board_cycles")
+            .and_then(|c| c.as_array())
+            .unwrap_or_else(|| panic!("the local part lists no board_cycles: {json}"));
+        let steps: Vec<Vec<[u64; 3]>> = lists
+            .iter()
+            .map(|l| {
+                l["steps"]
+                    .as_array()
+                    .unwrap_or_else(|| panic!("a cycle with no steps: {l}"))
+                    .iter()
+                    .map(|s| {
+                        ["frames", "slot", "colour"]
+                            .map(|k| s[k].as_u64().unwrap_or_else(|| panic!("a step's {k}: {s}")))
+                    })
+                    .collect()
+            })
+            .collect();
+        assert_eq!(
+            steps,
+            [
+                vec![[8, 33, 63], [4, 33, 7], [12, 34, 28]],
+                vec![[16, 48, 21]],
+            ],
+            "{json}"
         );
     }
 }

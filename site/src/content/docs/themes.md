@@ -176,6 +176,14 @@ gp theme look cells . --game tapper --screen screen_saloon --not void bar keg
 
 `--beside CLASS` lists every tile directly left or right of the class's cells in the same row, each with the side the class is on in the tile's own picture as the board draws it unmirrored: a bar's end cap mirrored on the screen's left end has the bar on its own left, as the right end's cap does. A cell the board mirrors is marked `<` in the places (`r4c10<`, row 4, column 10). `--only-in C0,R0,C1,R1` takes a box of cells, its top left cell's column and row and then its bottom right one's, as `#+ room_front` does, and lists the tiles that stand in it and nowhere else on the screen, with their places from the box's top left cell: the tiles a class needs to take one of four like tunnels and not the other three. `--not CLASS...` lists the tiles of the cells none of those classes takes, the most often first, with where they stand: what is left to rule.
 
+To find the frames a clip draws a sprite on and where it is drawn, ask the clip:
+
+```sh
+gp theme look where --game tapper --clip tapper.l1.001 4d --near 48
+```
+
+It plays the corpus clip and prints each code's stretches of frames, with its x and y on the first frame of each. With `--near N` it also gives every code drawn within N pixels of it, with the offsets it is most often drawn at. Three hex digits (`04d`) name that code alone; two (`4d`) name every code with that low byte, as a theme's names write it (`sprite-mug-4d`). Name no code and it lists every code the clip draws with a count of the times it shows. Each line also gives the code's sizes and the rows it is drawn on. `--frames A-B` keeps to those frames, and `--each` with `--frames A-B/STEP` prints every STEP-th frame's codes and places. `--moving` gives the stretches where the codes keep moving across a row (all the codes named taken as one picture). `--count CODE` counts that code beside each one on every frame. The clip's sprite list is kept under `$GP_HOME/work/theme-where`; `--sprites FILE` reads one again without playing.
+
 ### Start it
 
 ```sh
