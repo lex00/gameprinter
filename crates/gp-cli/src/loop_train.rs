@@ -355,6 +355,17 @@ pub(crate) enum Fate {
     Back(String),
     /// A dry run: it applies and would be gated by this gate.
     WouldGate(String),
+    /// Kept in line with its hand-in, with why: its stack's patch was
+    /// empty, so no gate was called.
+    Held(String),
+}
+
+/// What a train did: each row's fate in the order they came, and the
+/// lines that say what happened to whole stacks (why a gate failed them
+/// first, a stack held).
+pub(crate) struct Trained {
+    pub fates: Vec<(HandIn, Fate)>,
+    pub said: Vec<String>,
 }
 
 /// A stack on a scratch worktree of the tip.
@@ -522,11 +533,23 @@ fn apply_one(tree: &Path, h: &HandIn, snap: &mut String) -> std::result::Result<
     }
 }
 
-/// Stacks `items` in order on a fresh scratch worktree `tree` of `repo`'s
-/// tip.
+/// The tip of the branch the gate lands `repo`'s patches on (its branch,
+/// or main when it is detached, as crate::gate::onto_branch picks), not
+/// `repo`'s HEAD: a published gp is built in the tool gate's own tree,
+/// a detached worktree whose HEAD each gate run moves to the commit it
+/// tried. Stacked on that HEAD, a retry after a failed gate found the
+/// stack in it already and handed the gate an empty patch (row
+/// train-stack-patch-comes-out-empty).
+fn tip_of(repo: &Path) -> Result<String> {
+    let onto = crate::gate::onto_branch(None, repo, false)?;
+    git(repo, &["rev-parse", &onto])
+}
+
+/// Stacks `items` in order on a fresh scratch worktree `tree` of the tip
+/// `repo`'s gate lands on ([`tip_of`]).
 fn stack(repo: &Path, tree: &Path, items: &[HandIn]) -> Result<Stack> {
     remove_tree(repo, tree);
-    let tip = git(repo, &["rev-parse", "HEAD"])?;
+    let tip = tip_of(repo)?;
     if let Some(p) = tree.parent() {
         fs::create_dir_all(p)?;
     }
@@ -572,10 +595,34 @@ fn fmt_stack(tree: &Path) {
     }
 }
 
-/// The stack as one patch and its message, written beside the hand-ins.
-fn as_batch_files(dir: &Path, group: &Group, s: &Stack) -> Result<(PathBuf, String)> {
+/// What the stack changes on its tip, as one patch.
+fn stack_diff(s: &Stack) -> Result<String> {
     git(&s.tree, &["add", "-A"])?;
-    let diff = git(&s.tree, &["diff", "--binary", "--cached", &s.tip])?;
+    git(&s.tree, &["diff", "--binary", "--cached", &s.tip])
+}
+
+/// Why a stack whose patches all went on makes no change on the tip: the
+/// gate isn't called with an empty patch, and its rows are held in line.
+fn empty_words(group: &Group, s: &Stack) -> String {
+    format!(
+        "the stack of {} makes no change on the tip {}, and {} is not called with an empty patch: its work may be on the tip already",
+        s.kept
+            .iter()
+            .map(HandIn::name)
+            .collect::<Vec<_>>()
+            .join(", "),
+        &s.tip[..s.tip.len().min(8)],
+        group.words()
+    )
+}
+
+/// The stack as one patch and its message, written beside the hand-ins;
+/// None when the patch is empty.
+fn as_batch_files(dir: &Path, group: &Group, s: &Stack) -> Result<Option<(PathBuf, String)>> {
+    let diff = stack_diff(s)?;
+    if diff.trim().is_empty() {
+        return Ok(None);
+    }
     let file = dir.join(format!("stack-{}.patch", group.slug()));
     fs::write(&file, format!("{diff}\n"))?;
     let message = if s.kept.len() == 1 {
@@ -592,7 +639,7 @@ fn as_batch_files(dir: &Path, group: &Group, s: &Stack) -> Result<(PathBuf, Stri
         }
         m
     };
-    Ok((file, message))
+    Ok(Some((file, message)))
 }
 
 fn removes_of(items: &[HandIn]) -> Vec<String> {
@@ -609,6 +656,8 @@ fn removes_of(items: &[HandIn]) -> Vec<String> {
 /// the page ([`page_files`]) and `just check-web` is on, the tool gate
 /// runs dry first, then `just check-web` on the stack, then (unless
 /// `dry_run`) the tool gate lands it: a failure of either is the gate's.
+/// The gate's answer is None when the stack's patch is empty: no gate is
+/// called then.
 fn gate_items(
     dir: &Path,
     group: &Group,
@@ -617,13 +666,15 @@ fn gate_items(
     items: &[HandIn],
     dry_run: bool,
     checks: &mut Checks,
-) -> Result<(Stack, std::result::Result<String, String>)> {
+) -> Result<(Stack, Option<std::result::Result<String, String>>)> {
     let s = stack(repo, tree, items)?;
     if s.kept.is_empty() {
-        return Ok((s, Err("nothing applies".into())));
+        return Ok((s, Some(Err("nothing applies".into()))));
     }
     fmt_stack(&s.tree);
-    let (file, message) = as_batch_files(dir, group, &s)?;
+    let Some((file, message)) = as_batch_files(dir, group, &s)? else {
+        return Ok((s, None));
+    };
     let removes = removes_of(&s.kept);
     let b = Batch {
         group,
@@ -641,7 +692,7 @@ fn gate_items(
     };
     if page.is_empty() {
         let r = (checks.gate)(&b);
-        return Ok((s, r));
+        return Ok((s, Some(r)));
     }
     if !checks.check_web {
         eprintln!(
@@ -649,7 +700,7 @@ fn gate_items(
             some_files(&page)
         );
         let r = (checks.gate)(&b);
-        return Ok((s, r));
+        return Ok((s, Some(r)));
     }
     let dry = Batch {
         dry_run: true,
@@ -669,7 +720,21 @@ fn gate_items(
         })?;
         if dry_run { Ok(pass) } else { (checks.gate)(&b) }
     });
-    Ok((s, r))
+    Ok((s, Some(r)))
+}
+
+/// Holds every row of `todo` in line with `why`: its hand-in stays for the
+/// next train.
+fn hold(
+    fates: &mut Vec<(HandIn, Fate)>,
+    said: &mut Vec<String>,
+    todo: &mut Vec<HandIn>,
+    why: String,
+) {
+    said.push(format!("{why}; its rows stay in line with their hand-ins"));
+    for h in todo.drain(..) {
+        fates.push((h, Fate::Held(why.clone())));
+    }
 }
 
 /// The train for one gate's hand-ins: each row's fate, in their order.
@@ -680,14 +745,19 @@ fn run_group(
     items: &[HandIn],
     dry_run: bool,
     checks: &mut Checks,
+    said: &mut Vec<String>,
 ) -> Result<Vec<(HandIn, Fate)>> {
     let tree = dir.join(format!("stack-{}", group.slug()));
     let mut fates: Vec<(HandIn, Fate)> = Vec::new();
     let mut todo = items.to_vec();
     if dry_run {
-        let s = stack(repo, &tree, &todo)?;
-        for (h, why) in s.dropped {
+        let mut s = stack(repo, &tree, &todo)?;
+        for (h, why) in s.dropped.drain(..) {
             fates.push((h, Fate::Back(why)));
+        }
+        if !s.kept.is_empty() && stack_diff(&s)?.trim().is_empty() {
+            let why = empty_words(group, &s);
+            hold(&mut fates, said, &mut s.kept, why);
         }
         for h in s.kept {
             let page = if *group == Group::Tools {
@@ -714,8 +784,9 @@ fn run_group(
         return Ok(fates);
     }
     let mut tried_again = false;
-    loop {
-        let (s, mut r) = gate_items(dir, group, repo, &tree, &todo, false, checks)?;
+    'train: loop {
+        let (s, r) = gate_items(dir, group, repo, &tree, &todo, false, checks)?;
+        let empty = r.is_none().then(|| empty_words(group, &s));
         for (h, why) in s.dropped {
             fates.push((h, Fate::Back(why)));
         }
@@ -723,10 +794,32 @@ fn run_group(
         if todo.is_empty() {
             break;
         }
+        let Some(mut r) = r else {
+            hold(&mut fates, said, &mut todo, empty.unwrap_or_default());
+            break;
+        };
+        // Each row's fate gives only the last words it got: why the
+        // whole stack failed is said once in the train's last lines.
+        if let Err(w) = &r {
+            said.push(format!(
+                "{} failed the stack of {}: {w}",
+                group.words(),
+                todo.iter().map(HandIn::name).collect::<Vec<_>>().join(", ")
+            ));
+        }
         // A failure is tried once more, as a flaky check may pass.
         if r.is_err() && !tried_again {
             tried_again = true;
-            r = gate_items(dir, group, repo, &tree, &todo, false, checks)?.1;
+            let (s, again) = gate_items(dir, group, repo, &tree, &todo, false, checks)?;
+            let Some(again) = again else {
+                hold(&mut fates, said, &mut todo, empty_words(group, &s));
+                break;
+            };
+            said.push(match &again {
+                Ok(_) => "tried once more, it passed".to_owned(),
+                Err(w) => format!("tried once more, it failed again: {w}"),
+            });
+            r = again;
         }
         match r {
             Ok(c) => {
@@ -744,11 +837,17 @@ fn run_group(
                 let (mut good, mut end, mut why) = (0, todo.len(), words);
                 while end - good > 1 {
                     let mid = good + (end - good) / 2;
-                    match gate_items(dir, group, repo, &tree, &todo[..mid], true, checks)?.1 {
-                        Ok(_) => good = mid,
-                        Err(w) => {
+                    let (s, half) =
+                        gate_items(dir, group, repo, &tree, &todo[..mid], true, checks)?;
+                    match half {
+                        Some(Ok(_)) => good = mid,
+                        Some(Err(w)) => {
                             end = mid;
                             why = w;
+                        }
+                        None => {
+                            hold(&mut fates, said, &mut todo, empty_words(group, &s));
+                            break 'train;
                         }
                     }
                 }
@@ -768,6 +867,35 @@ pub(crate) struct Repos {
     pub games: Option<PathBuf>,
 }
 
+/// The lock a train holds on its folder for its whole run, dry or not, so
+/// two trains never share a scratch worktree; Err saying so when another
+/// train holds it. It is tried for a second first: a lock just let go
+/// stays held while a child forked in that moment hasn't exec'd yet, and a
+/// train that holds it runs for minutes.
+fn lock_train(dir: &Path) -> Result<fs::File> {
+    fs::create_dir_all(dir)?;
+    let file = dir.join("train.lock");
+    let f = fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&file)
+        .with_context(|| format!("opening {}", file.display()))?;
+    let mut tries = 0;
+    while tries < 20 && f.try_lock().is_err() {
+        tries += 1;
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    if tries == 20 {
+        bail!(
+            "another gp loop train is running on {} (it holds {}): this one did nothing; run it again once that one ends",
+            dir.display(),
+            file.display()
+        );
+    }
+    Ok(f)
+}
+
 /// `gp loop train`: every hand-in's fate, the rows set to match (unless
 /// `dry_run`), in the order they came.
 pub(crate) fn train(
@@ -775,8 +903,10 @@ pub(crate) fn train(
     repos: &Repos,
     dry_run: bool,
     checks: &mut Checks,
-) -> Result<Vec<(HandIn, Fate)>> {
+) -> Result<Trained> {
     let dir = train_dir(&paths.home);
+    let _lock = lock_train(&dir)?;
+    let mut said = Vec::new();
     let all = pending(&paths.home);
     let mut groups: Vec<Group> = all.iter().map(Group::of).collect();
     groups.sort();
@@ -794,7 +924,9 @@ pub(crate) fn train(
             }
             continue;
         };
-        fates.extend(run_group(&dir, g, repo, &items, dry_run, checks)?);
+        fates.extend(run_group(
+            &dir, g, repo, &items, dry_run, checks, &mut said,
+        )?);
     }
     // In the order they came.
     fates.sort_by(|a, b| (a.0.at_ms, &a.0.id).cmp(&(b.0.at_ms, &b.0.id)));
@@ -803,14 +935,26 @@ pub(crate) fn train(
             settle(paths, &dir, h, f)?;
         }
     }
-    Ok(fates)
+    Ok(Trained { fates, said })
 }
 
-/// Sets a row as the train left it and files its hand-in away.
+/// Sets a row as the train left it and files its hand-in away; a held
+/// row stays in line with its hand-in where it was.
 fn settle(paths: &gp_evidence::Paths, dir: &Path, h: &HandIn, f: &Fate) -> Result<()> {
     let set = set_row(paths, &h.game, &h.row, |o| {
-        o.remove("train");
+        if !matches!(f, Fate::Held(_)) {
+            o.remove("train");
+        }
         match f {
+            Fate::Held(why) => {
+                o.insert("status".into(), json!("in line"));
+                o.insert(
+                    "note".into(),
+                    json!(format!(
+                        "gp loop train held it: {why}. Its hand-in is kept for the next train."
+                    )),
+                );
+            }
             Fate::Landed(c) => {
                 o.insert("status".into(), json!("done"));
                 o.insert("commit".into(), json!(c));
@@ -836,6 +980,9 @@ fn settle(paths: &gp_evidence::Paths, dir: &Path, h: &HandIn, f: &Fate) -> Resul
     });
     if let Err(e) = set {
         eprintln!("gp loop train: {}: {e}", h.name());
+    }
+    if matches!(f, Fate::Held(_) | Fate::WouldGate(_)) {
+        return Ok(());
     }
     let done = dir.join("done");
     fs::create_dir_all(&done)?;
@@ -900,7 +1047,8 @@ pub(crate) fn real_gate(b: &Batch) -> std::result::Result<String, String> {
     if b.dry_run {
         return Ok("passed".into());
     }
-    let branch = git(b.repo, &["rev-parse", "--abbrev-ref", "HEAD"]).unwrap_or("HEAD".into());
+    // The branch it landed on, not the gate tree's HEAD (see tip_of).
+    let branch = crate::gate::onto_branch(None, b.repo, false).unwrap_or_else(|_| "HEAD".into());
     git(b.repo, &["rev-parse", "--short", &branch]).map_err(|e| e.to_string())
 }
 
@@ -957,6 +1105,7 @@ fn fate_line(h: &HandIn, f: &Fate) -> String {
         Fate::Landed(c) => format!("{}  landed in {c}", h.name()),
         Fate::Back(why) => format!("{}  back to next: {why}", h.name()),
         Fate::WouldGate(g) => format!("{}  applies; {g} would gate it", h.name()),
+        Fate::Held(why) => format!("{}  held in line: {why}", h.name()),
     }
 }
 
@@ -988,7 +1137,7 @@ pub(crate) fn run_train(
     }
     let dir = train_dir(&paths.home);
     let mut web = |tree: &Path| real_check_web(&dir, tree);
-    let fates = train(
+    let Trained { fates, said } = train(
         paths,
         &repos,
         dry_run,
@@ -999,6 +1148,7 @@ pub(crate) fn run_train(
         },
     )?;
     let mut lines: Vec<String> = fates.iter().map(|(h, f)| fate_line(h, f)).collect();
+    lines.extend(said.iter().cloned());
     if !check_web {
         lines.push(
             "just check-web is not run (--no-check-web): a tools patch that changes the page lands on the tool gate alone".into(),
@@ -1011,6 +1161,7 @@ pub(crate) fn run_train(
                 Fate::Landed(c) => ("landed", c),
                 Fate::Back(w) => ("back", w),
                 Fate::WouldGate(g) => ("would gate", g),
+                Fate::Held(w) => ("held", w),
             };
             json!({"game": h.game, "row": h.row, "repo": h.repo, "fate": fate, "words": words})
         })
@@ -1024,7 +1175,7 @@ pub(crate) fn run_train(
         format!("{} handed-in patches:", fates.len())
     };
     Ok(Outcome::ok(
-        json!({"rows": rows, "dry_run": dry_run, "check_web": check_web}),
+        json!({"rows": rows, "said": said, "dry_run": dry_run, "check_web": check_web}),
         format!("{head}\n{}", lines.join("\n")),
     ))
 }
@@ -1120,6 +1271,16 @@ mod tests {
         dry_run: bool,
         gate: &mut Gate,
     ) -> Result<Vec<(HandIn, Fate)>> {
+        train_said(paths, repos, dry_run, gate).map(|t| t.fates)
+    }
+
+    /// [`train_t`] with the train's last lines too.
+    fn train_said(
+        paths: &gp_evidence::Paths,
+        repos: &Repos,
+        dry_run: bool,
+        gate: &mut Gate,
+    ) -> Result<Trained> {
         let mut web = |_: &Path| Ok(());
         train(
             paths,
@@ -1222,7 +1383,8 @@ mod tests {
                 check_web: true,
             },
         )
-        .unwrap();
+        .unwrap()
+        .fates;
         assert_eq!(web_runs, 0);
         assert_eq!(fates[0].1, Fate::WouldGate("the tool gate".into()));
         assert_eq!(
@@ -1241,7 +1403,8 @@ mod tests {
                 check_web: false,
             },
         )
-        .unwrap();
+        .unwrap()
+        .fates;
         assert!(
             matches!(&fates[1].1, Fate::WouldGate(w) if w.contains("just check-web is not run: --no-check-web")),
             "{fates:?}"
@@ -1275,7 +1438,8 @@ mod tests {
                 check_web: true,
             },
         )
-        .unwrap();
+        .unwrap()
+        .fates;
         let calls = calls.into_inner();
         // The stack: dry pass, check-web fails, tried once more the same.
         assert_eq!(
@@ -1574,5 +1738,155 @@ mod tests {
         let t = row(&paths, "three");
         assert_eq!(t["status"], "next");
         assert!(t["note"].as_str().unwrap().contains("three broke it"));
+    }
+
+    fn commit_all(tree: &Path, message: &str) {
+        git(tree, &["add", "-A"]).unwrap();
+        git(
+            tree,
+            &[
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@localhost",
+                "-c",
+                "commit.gpgsign=false",
+                "commit",
+                "-q",
+                "-m",
+                message,
+            ],
+        )
+        .unwrap();
+    }
+
+    /// Row train-stack-patch-comes-out-empty: the train runs from a
+    /// published gp, whose checkout is the tool gate's own tree, a detached
+    /// worktree of main whose HEAD the gate moves to the commit it tried.
+    /// A failing first gate's retry is handed the same patch text as the
+    /// first call (stacked on main's tip, not that HEAD), and the train's
+    /// last lines say why the first gate failed.
+    #[test]
+    fn a_failed_gate_s_retry_gets_the_same_patch() {
+        let d = tempfile::tempdir().unwrap();
+        let (paths, repo) = rig(d.path());
+        for r in ["one", "two", "three"] {
+            let p = patch_of(d.path(), &repo, r, &[(&format!("{r}.txt"), r)]);
+            hand(&paths, r, &p);
+        }
+        let gate_tree = d.path().join("gate-tree");
+        git(
+            &repo,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "--detach",
+                &gate_tree.to_string_lossy(),
+            ],
+        )
+        .unwrap();
+        let mut texts: Vec<String> = Vec::new();
+        let trained = train_said(&paths, &repos(&gate_tree), false, &mut |b: &Batch| {
+            texts.push(fs::read_to_string(b.patch).unwrap());
+            if texts.len() > 1 {
+                return Ok("abc1234".into());
+            }
+            // The gate's trial: the stack committed in its tree, then a
+            // check that fails.
+            git(&gate_tree, &["apply", &b.patch.to_string_lossy()]).unwrap();
+            commit_all(&gate_tree, "tried");
+            Err("FAIL (clippy): one lint".into())
+        })
+        .unwrap();
+        assert_eq!(texts.len(), 2, "the stack and its retry");
+        assert!(texts[0].contains("one.txt"), "{}", texts[0]);
+        assert_eq!(texts[1], texts[0], "the retry is handed the same patch");
+        assert!(
+            trained
+                .fates
+                .iter()
+                .all(|(_, f)| f == &Fate::Landed("abc1234".into())),
+            "{:?}",
+            trained.fates
+        );
+        assert_eq!(
+            trained.said,
+            [
+                "the tool gate failed the stack of rooftop/one, rooftop/two, rooftop/three: FAIL (clippy): one lint",
+                "tried once more, it passed",
+            ]
+        );
+    }
+
+    /// A stack whose patches all go on but change nothing on the tip (its
+    /// work landed already) calls no gate: its rows stay in line with
+    /// their hand-ins in place, and the train says why. A dry run says
+    /// the same.
+    #[test]
+    fn an_empty_stack_calls_no_gate_and_stays_in_line() {
+        let d = tempfile::tempdir().unwrap();
+        let (paths, repo) = rig(d.path());
+        let body = "A\nb\nc\nd\ne\nf\n";
+        let p = patch_of(d.path(), &repo, "one", &[("list.txt", body)]);
+        hand(&paths, "one", &p);
+        // The same change lands on main some other way.
+        fs::write(repo.join("list.txt"), body).unwrap();
+        commit_all(&repo, "by hand");
+        for dry in [true, false] {
+            let trained = train_said(&paths, &repos(&repo), dry, &mut |_: &Batch| {
+                panic!("a gate was called with an empty stack")
+            })
+            .unwrap();
+            assert!(
+                matches!(&trained.fates[0].1, Fate::Held(w) if w.contains("makes no change on the tip")),
+                "{:?}",
+                trained.fates
+            );
+            assert_eq!(trained.said.len(), 1, "{:?}", trained.said);
+            assert!(trained.said[0].contains("its rows stay in line"));
+            assert_eq!(pending(&paths.home).len(), 1, "the hand-in is kept");
+            let r = row(&paths, "one");
+            assert_eq!(r["status"], "in line");
+            assert!(r["train"].is_object(), "{r}");
+        }
+        assert!(
+            row(&paths, "one")["note"]
+                .as_str()
+                .unwrap()
+                .contains("gp loop train held it")
+        );
+    }
+
+    /// While one train holds the train's folder, a second (dry or not)
+    /// says so and does nothing: no gate, no scratch worktree, the rows
+    /// and hand-ins as they were.
+    #[test]
+    fn a_second_train_is_refused_while_one_runs() {
+        let d = tempfile::tempdir().unwrap();
+        let (paths, repo) = rig(d.path());
+        let p = patch_of(d.path(), &repo, "one", &[("1.txt", "one")]);
+        hand(&paths, "one", &p);
+        let dir = train_dir(&paths.home);
+        let held = lock_train(&dir).unwrap();
+        for dry in [true, false] {
+            let e = train_t(&paths, &repos(&repo), dry, &mut |_: &Batch| {
+                panic!("a gate was called beside another train")
+            })
+            .expect_err("refused");
+            assert!(
+                e.to_string().contains("another gp loop train is running"),
+                "{e}"
+            );
+            assert!(!dir.join("stack-tools").exists());
+            assert_eq!(pending(&paths.home).len(), 1);
+            assert_eq!(row(&paths, "one")["status"], "in line");
+        }
+        drop(held);
+        let fates = train_t(&paths, &repos(&repo), false, &mut |_: &Batch| {
+            Ok("abc1234".into())
+        })
+        .unwrap();
+        assert_eq!(fates[0].1, Fate::Landed("abc1234".into()));
     }
 }
