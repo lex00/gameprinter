@@ -2,6 +2,30 @@
 
 Each release of gp has a section here, `## gp VERSION` (a date may follow), and its GitHub release's notes are that section. A release is refused before it is cut when its section is missing ([docs/release.md](docs/release.md)). Add the next one in a commit to main before `just release`.
 
+## gp 0.1.9
+
+The loop gates workers' patches together. A worker on a row marked for the train builds the whole of its work, tests it, and ends with `gp loop hand-in`. `gp loop train` then stacks the handed-in patches on the tip, drops one that does not apply, runs one tool gate and one model gate a game, and on a failure finds the patch at fault by halves and lands the rest. `gp loop train --dry-run` shows the order and gates nothing.
+
+The quest log is locked. Every change to it goes through one function that holds a lock beside the file and writes through a temp file and a rename, so two writers at once lose no row, and a quest log that does not parse is reported and kept in place of being emptied. Cards and worker records are changed the same way, so a yes is claimed once.
+
+The runner has its last limits. A step whose worker fails three tries files a trouble row and waits on it. `gp loop set --day-spend` caps a day's spending and `--max-load` holds new workers on a loaded machine; `gp loop health` says when either holds the runner. The runner stops a worker that pushes, runs a gate from its shell, cites another step or edits the games checkout. The guard on steering files no longer holds a patch that only adds a permission for a new command. `gp loop health` keeps a failed GitHub run's log and names the step and tests that failed.
+
+The tool knows no game. The recipes that checked a ported game against its ROM, and the public page's release check and deploy, moved to the games repo. gameprinter's tests read no ROM and no games checkout, and two tests hold them to it. An arcade game's own checks are a command, `gp oracle board`, run from the game's folder. The old format names in asset maps are gone (`smb-area-objects` and the rest: use the `nes-...-v1` names), and `gp gaps` takes a game's listing from its own checks.toml (`[gaps] listing`).
+
+`gp testroms` has a `z80` suite: ZEXDOC and ZEXALL on the arcade board's Z80, through a small CP/M harness. Both pass.
+
+`gp picture --clip SESSION:N` scans a clip just recorded in a session. The screen page has SPRITE RUNS on a corpus clip: the frames where a character is missing or extra, each a click from its first frame, with the missing ones boxed on the original.
+
+`gp game share` takes `--registry`, `--namespace`, `--source` and `--page`, and writes a registry and a page that play the game from an https address, so a game with its own pictures has a share link that opens on someone else's computer ([docs/host-your-own.md](docs/host-your-own.md)).
+
+Moss Hop's level is a data file in its template, read and edited by `gp level` with no ROM and no assembler.
+
+Theme work has more commands. `gp theme look where` lists where a clip draws each picture, `gp theme look cells` answers three questions about a room's tiles, `gp theme look cut` cuts one returned picture out of its backdrop to a picture's size, and `gp theme look play --shots` takes `--frames` and `--strip`. A board's colour cycles are in the theme kit. A game's package leaves out `themes/NAME-src`, the folder that holds how a theme was made.
+
+Also: the older mechanic page is removed, and `gp serve` has only the screen page; a scoreboard line can be marked as a test line (`confirm = false`); a clip a probe made is imported as generated; `just check-web` checks the public page with no ROM; the build has 56 fewer crates; a design for scripted scenes is in [docs/scripted-scenes.md](docs/scripted-scenes.md), with nothing of it built yet.
+
+Windows builds are still to come.
+
 ## gp 0.1.8
 
 Themes can do more. A room piece can change as the game plays (`room_react`), drift or slide across the screen and come round again (`room_react_drift`, `room_scroll`), and be staggered by placement or by row. A piece can be drawn under an entity's bodies (`under`), a `pic`, `timed` or `also` line can hold on named screens only (`on SCREEN`), an `also` picture can be limited to a span of frames, and a counter can be left off the screen (`counter_off`). `room_mask` lays a piece larger than a cell, a room rule ending `pick=NAME` picks the same place across rooms, and a mirrored body's `also` picture is mirrored with it. `gp theme look take` brings pictures from a theme copy into a games checkout, and `gp serve`'s screen offers the game's own themes.

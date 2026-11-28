@@ -19,9 +19,11 @@ fn repo() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
 
-/// The PATH the test runs gp with: the system's own folders, where no
-/// cc65 lives.
-const PATH: &str = "/usr/bin:/bin:/usr/sbin:/sbin";
+/// The PATH the test runs gp with: one folder that isn't there, so no
+/// program at all is found on it, cc65's included. The system's own
+/// folders won't do: a Linux machine with cc65 installed has ca65 in
+/// /usr/bin (GitHub's check failed on that on 2026-11-27).
+const PATH: &str = "/gp-level-data-test/no-such-folder";
 
 fn gp(home: &Path, person: &Path, args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_gp"))

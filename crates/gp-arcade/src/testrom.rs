@@ -307,7 +307,8 @@ pub fn known_made_up_set(system: &str) -> Vec<(String, Vec<u8>)> {
 ///
 /// The interrupt handler (0200) sets the frame flag E001, counts frames in
 /// E003-E004 (0325), feeds the watchdog (0240) and, every 8th frame, writes
-/// the frame count's next bits to sound latch 0 (0260).
+/// the frame count's next bits to sound latch 0 (0260), after a wait that
+/// puts the write 1.30 ms into the frame.
 ///
 /// State 0, attract (0300), calls ten object routines (0400, then 0600,
 /// 0610 .. 0690, each counting in E100 + its number); a coin, or the
@@ -386,13 +387,17 @@ pub const GAME_MAIN: &[(u16, &[u8])] = &[
     ),
     // 0240: out ($e0),a; ret
     (0x0240, &[0xd3, 0xe0, 0xc9]),
-    // 0260: ld a,($e003); and 7; ret nz; ld a,($e003); rrca x3; and $0f;
-    //       out ($1c),a; ret
+    // 0260: ld a,($e003); and 7; ret nz; ld bc,239; 0269: dec bc;
+    //       ld a,b; or c; jr nz,$0269; nop x3; ld a,($e003); rrca x3;
+    //       and $0f; out ($1c),a; ret
+    // The wait (26 cycles a turn, 6231 in all at 5 MHz) puts the write
+    // 1.30 ms into the frame, where gp-arcade-play's REQUEST_AT times a
+    // model's requests.
     (
         0x0260,
         &[
-            0x3a, 0x03, 0xe0, 0xe6, 0x07, 0xc0, 0x3a, 0x03, 0xe0, 0x0f, 0x0f, 0x0f, 0xe6, 0x0f,
-            0xd3, 0x1c, 0xc9,
+            0x3a, 0x03, 0xe0, 0xe6, 0x07, 0xc0, 0x01, 0xef, 0x00, 0x0b, 0x78, 0xb1, 0x20, 0xfb,
+            0x00, 0x00, 0x00, 0x3a, 0x03, 0xe0, 0x0f, 0x0f, 0x0f, 0xe6, 0x0f, 0xd3, 0x1c, 0xc9,
         ],
     ),
     // 0300: call $0400; ld a,($e010); and 1; jr z,$0311; ld a,($e003);
@@ -465,16 +470,18 @@ pub const GAME_MAIN: &[(u16, &[u8])] = &[
 
 /// The made-up game's sound program, as code at each address: the reset
 /// (0000) sets the stack and sets up the AYs (0050: AY 0's tone A and both
-/// chips' ports, as [`SOUND`] does), then waits in IM 1. Its interrupt
+/// chips' ports, as [`SOUND`] does), then waits in IM 1 on a `halt` (so it
+/// takes the interrupt within 2 microseconds, and reads the latch at times
+/// clear of the main program's writes at 1.30 ms). Its interrupt
 /// (0038, the SSIO's timer) clears the timer, reads latch 0 into sound RAM
 /// 8000 (0070) and writes its low half to AY 0's tone A volume (0090), so
 /// a latch byte is heard at the interrupt after it is written.
 pub const GAME_SOUND: &[(u16, &[u8])] = &[
-    // 0000: ld sp,$8400; call $0050; im 1; ei; 0009: jr $0009
+    // 0000: ld sp,$8400; call $0050; im 1; ei; 0009: halt; jr $0009
     (
         0x0000,
         &[
-            0x31, 0x00, 0x84, 0xcd, 0x50, 0x00, 0xed, 0x56, 0xfb, 0x18, 0xfe,
+            0x31, 0x00, 0x84, 0xcd, 0x50, 0x00, 0xed, 0x56, 0xfb, 0x76, 0x18, 0xfd,
         ],
     ),
     // 0038: push af; ld a,($e000); call $0070; call $0090; pop af; ei; ret

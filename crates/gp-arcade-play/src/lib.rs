@@ -546,6 +546,41 @@ mod tests {
         assert!(alone.frame(&[0; 3]).is_err());
     }
 
+    /// A model's requests, the latch and the byte alone, timed by
+    /// [`REQUEST_AT`]: the board alone fed the whole machine's latch
+    /// writes so makes its sound on every frame of a made-up game
+    /// (gp_arcade::testrom::made_up_game, whose interrupt writes latch 0
+    /// every 8th frame at the time [`REQUEST_AT`] stands for, give or take
+    /// 2 microseconds, and whose sound program reads it only in its own
+    /// interrupt; with a made-up PROM so the board sounds).
+    #[test]
+    fn requests_without_their_times_sound_as_the_whole_machine() {
+        let zip = gp_arcade::testrom::known_made_up_game("madeupsound");
+        let mut rom = Romset::from_zip(&zip).unwrap();
+        rom.ssio_prom = Some(vec![0xAA; 32]);
+        let mut whole = Player::from_romset(&rom);
+        whole.set_audio(true);
+        whole.set_latch_log(true);
+        let mut alone = SoundPlayer::from_romset(&rom);
+        let (mut asked, mut loud) = (0, 0);
+        for f in 1..=1100 {
+            let start = whole.time();
+            whole.step(0, false).unwrap();
+            let records = whole.take_latches(start);
+            let requests: Vec<(u8, u8)> =
+                records.chunks(LATCH_RECORD).map(|r| (r[8], r[9])).collect();
+            asked += requests.len();
+            alone.requests(&requests).unwrap();
+            assert_eq!(alone.audio(), whole.audio(), "frame {f}");
+            loud += whole.audio().iter().filter(|v| v.abs() > 0.01).count();
+        }
+        assert!(asked > 100 && loud > 0, "{asked} requests, {loud} loud");
+        assert_eq!(
+            request_records(&[(1, 0x38), (0, 0x80)]).len(),
+            2 * LATCH_RECORD
+        );
+    }
+
     /// Played with a coin and a start, the log replays to the same picture
     /// on every frame, and a save restores to the same digest (a made-up
     /// set that reads its inputs every frame).
