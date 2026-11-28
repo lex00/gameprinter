@@ -166,6 +166,16 @@ gp theme look cells . --game tapper --screen screen_saloon
 
 It prints the screen's 32 by 30 cells from your romset. Each cell reads `TILE.BANK` (the tile code in hex and the colour bank) and then the first letter of the class your rules put it in, or `.` for none. Each class's count follows the grid. Tile codes are the surest test: a counter top uses a few tiles of its own, and so does a door or a sign. Like the sheet, it comes from your ROM's game: keep it off any repo.
 
+Three questions it answers after the grid, each for one screen:
+
+```sh
+gp theme look cells . --game tapper --screen screen_saloon --beside bar
+gp theme look cells . --game tapper --screen screen_saloon --only-in 0,4,8,12
+gp theme look cells . --game tapper --screen screen_saloon --not void bar keg
+```
+
+`--beside CLASS` lists every tile directly left or right of the class's cells in the same row, each with the side the class is on in the tile's own picture as the board draws it unmirrored: a bar's end cap mirrored on the screen's left end has the bar on its own left, as the right end's cap does. A cell the board mirrors is marked `<` in the places (`r4c10<`, row 4, column 10). `--only-in C0,R0,C1,R1` takes a box of cells, its top left cell's column and row and then its bottom right one's, as `#+ room_front` does, and lists the tiles that stand in it and nowhere else on the screen, with their places from the box's top left cell: the tiles a class needs to take one of four like tunnels and not the other three. `--not CLASS...` lists the tiles of the cells none of those classes takes, the most often first, with where they stand: what is left to rule.
+
 ### Start it
 
 ```sh

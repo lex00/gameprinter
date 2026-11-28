@@ -27,6 +27,7 @@ use serde_json::{Value, json};
 use crate::Outcome;
 use crate::theme_kit::{ArtSlot, Kit};
 
+mod cells;
 mod sound;
 
 #[derive(Subcommand)]
@@ -53,7 +54,10 @@ pub enum LookCmd {
     /// screen's 32 by 30 cells from your own romset, each with its tile code
     /// in hex and its colour bank, and the class its rules put it in (the
     /// class's first letter, `.` for none), with the classes' letters
-    /// listed. For writing `#+ room_cells` tests; printed only, never
+    /// listed. After the grid, on asking: the tiles directly left or right
+    /// of a class's cells (--beside), the tiles a box of the screen has and
+    /// the rest lacks (--only-in), and the tiles none of some classes take
+    /// (--not). For writing `#+ room_cells` tests; printed only, never
     /// written to a repo.
     Cells {
         /// The theme's folder (holding package.toml and theme/), or its
@@ -69,6 +73,21 @@ pub enum LookCmd {
         /// accepts).
         #[arg(long)]
         rom: Option<PathBuf>,
+        /// A class of the screen's room rules, by name: list every tile
+        /// directly left or right of its cells in the same row, with the
+        /// side the class is on in the tile's own unmirrored picture.
+        #[arg(long, value_name = "CLASS")]
+        beside: Option<String>,
+        /// A box of cells, C0,R0,C1,R1 (its top left cell's column and row,
+        /// then its bottom right one's, as `#+ room_front` gives them): list
+        /// the tiles that stand in it and nowhere else on the screen, so a
+        /// class can take that part and not its likes.
+        #[arg(long, value_name = "BOX")]
+        only_in: Option<String>,
+        /// Classes of the screen's room rules, by name: list the tiles of
+        /// the cells none of them takes, how often and where.
+        #[arg(long = "not", value_name = "CLASS", num_args = 1..)]
+        not: Vec<String>,
     },
     /// Start a large-art theme for a game in a new folder: package.toml,
     /// theme/look.txt, theme/art.txt with one line per picture the game's kit
@@ -189,7 +208,21 @@ pub(crate) fn run(cmd: &LookCmd, paths: &Paths) -> Result<Outcome> {
             game,
             screen,
             rom,
-        } => cells(dir, game, screen, rom.as_deref(), paths),
+            beside,
+            only_in,
+            not,
+        } => cells(
+            dir,
+            game,
+            screen,
+            rom.as_deref(),
+            &Asked {
+                beside: beside.as_deref(),
+                only_in: only_in.as_deref(),
+                not,
+            },
+            paths,
+        ),
         LookCmd::New {
             dir,
             game,
@@ -788,6 +821,13 @@ pub(crate) fn check(
     Ok(out)
 }
 
+/// What `gp theme look cells` was asked beside its grid.
+struct Asked<'a> {
+    beside: Option<&'a str>,
+    only_in: Option<&'a str>,
+    not: &'a [String],
+}
+
 /// `gp theme look cells`: a screen's cells and the classes the theme's
 /// room rules put them in.
 fn cells(
@@ -795,6 +835,7 @@ fn cells(
     game_arg: &Path,
     screen: &str,
     rom: Option<&Path>,
+    asked: &Asked,
     paths: &Paths,
 ) -> Result<Outcome> {
     let game = game_of(game_arg)?;
@@ -858,7 +899,49 @@ fn cells(
             );
         }
     }
-    Ok(Outcome::ok(json!({ "screen": screen }), text))
+    // A class by its name in the screen's room rules.
+    let class_of = |name: &str, flag: &str| -> Result<&Vec<bool>> {
+        let (Some(r), Some(c)) = (room, &classes) else {
+            bail!(
+                "{flag} {name}: no `#+ room` line of the theme names {screen}, so it has no classes"
+            );
+        };
+        let k = r
+            .classes
+            .iter()
+            .position(|cl| cl.name == name)
+            .ok_or_else(|| {
+                let names: Vec<&str> = r.classes.iter().map(|cl| cl.name.as_str()).collect();
+                anyhow!(
+                    "{flag} {name}: the room of {screen} has no class {name}; its classes are {}",
+                    names.join(", ")
+                )
+            })?;
+        Ok(&c[k])
+    };
+    let mut out = json!({ "screen": screen });
+    if let Some(name) = asked.beside {
+        let v = cells::beside(&cells, class_of(name, "--beside")?);
+        text.push_str(&cells::beside_text(name, &v));
+        out["beside"] = json!({"class": name, "tiles": cells::beside_json(&v)});
+    }
+    if let Some(s) = asked.only_in {
+        let bx = cells::parse_box(s, &cells)?;
+        let v = cells::only_in(&cells, bx);
+        text.push_str(&cells::only_in_text(bx, &v));
+        out["only_in"] = json!({"box": bx, "tiles": cells::only_in_json(&v)});
+    }
+    if !asked.not.is_empty() {
+        let marks = asked
+            .not
+            .iter()
+            .map(|n| class_of(n, "--not").map(Vec::as_slice))
+            .collect::<Result<Vec<&[bool]>>>()?;
+        let v = cells::untaken(&cells, &marks);
+        text.push_str(&cells::untaken_text(asked.not, &v));
+        out["not"] = json!({"classes": asked.not, "tiles": cells::untaken_json(&v)});
+    }
+    Ok(Outcome::ok(out, text))
 }
 
 /// The check on a theme folder with the game's build (or why there is
